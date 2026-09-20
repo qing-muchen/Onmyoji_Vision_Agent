@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 编辑器 / IDE
+.idea/
+.vscode/
+*.swp
+
+# 日志输出
+logs/*
+!logs/.gitkeep
+
+# 截图数据集与模型权重（体积大，不入库）
+dataset/*
+!dataset/.gitkeep
+models/*
+!models/.gitkeep
+
+# 本地配置覆盖
+configs/config.local.yaml
+
+# Demo 运行产物（含真实屏幕内容，不入库）
+examples/sample_frame.png
+
+# Agent 工具与本地临时目录
+.reasonix/
+.tmp/
+pytest-cache-files-*/
+
+# 操作系统
+Thumbs.db
+Desktop.ini
+.DS_Store

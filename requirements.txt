@@ -1,0 +1,19 @@
+# Onmyoji Vision Agent - 运行时依赖
+# 仅包含 Phase 0 基础框架所需依赖；YOLO / PyTorch / LLM 相关依赖在后续阶段按需引入。
+# 安装：python -m pip install -r requirements.txt
+
+# --- 图像与数值 ---
+opencv-python>=4.9,<5
+numpy>=1.26,<3
+pillow>=10.2
+
+# --- 屏幕采集 ---
+mss>=9.0
+dxcam>=0.0.5; sys_platform == "win32"
+
+# --- 输入控制 ---
+pyautogui>=0.9.54
+
+# --- 配置系统 ---
+pydantic>=2.6,<3
+PyYAML>=6.0

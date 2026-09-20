@@ -1,0 +1,53 @@
+# Onmyoji Vision Agent 基础配置
+#
+# 约定：
+#   1. 所有运行期参数集中在此文件，源码中不得硬编码业务配置。
+#   2. 相对路径（如 logging.dir）一律相对于项目根目录解析。
+#   3. 可通过环境变量覆盖任意字段，格式为 OVA_<段>__<字段>，
+#      例如 OVA_LOGGING__LEVEL=DEBUG、OVA_CAPTURE__FPS=30。
+
+app:
+  name: "Onmyoji Vision Agent"
+  version: "0.1.0"
+  env: "dev" # dev | test | prod
+
+capture:
+  # 屏幕采集参数，Phase 1 由 Vision Engine 消费
+  backend: "auto" # auto | dxcam | mss
+  fps: 10
+  monitor_index: 1
+  # 采集区域 [left, top, width, height]；null 表示整个显示器
+  region: null
+  # 超过该毫秒数的帧视为过期帧
+  max_frame_age_ms: 100
+
+window:
+  # 目标游戏窗口定位参数，Phase 1 由 Window Manager 消费
+  match_mode: "contains" # exact | contains | regex
+  title: "阴阳师"
+  title_keywords:
+    - "阴阳师"
+    - "Onmyoji"
+  # 仅截取窗口客户区
+  client_only: true
+  # 前台控制总开关：采集前自动把目标窗口置为前台
+  # （屏幕区域采集的前提；false 时只校验前台、不抢占用户当前窗口）
+  auto_focus: true
+  # 窗口绑定成功时是否立即置为前台（需 auto_focus 同时为 true）
+  activate_on_start: false
+
+calibration:
+  # 视觉模型/模板使用的参考分辨率；运行时按窗口客户区尺寸动态映射坐标
+  reference_resolution: [1920, 1080]
+
+logging:
+  level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  dir: "logs"
+  filename: "agent.log"
+  console: true
+  file: true
+  # 单文件上限 5 MiB，最多保留 5 个滚动文件
+  max_bytes: 5242880
+  backup_count: 5
+  format: "%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s"
+  datefmt: "%Y-%m-%d %H:%M:%S"

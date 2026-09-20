@@ -1,0 +1,11 @@
+# 本项目使用 requirements.txt / requirements-dev.txt 管理依赖。
+# 此文件仅承载工具链配置（pytest），不声明构建后端。
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: 需要真实窗口/屏幕/交互式桌面会话的集成测试；可用 -m 'not integration' 跳过",
+]
