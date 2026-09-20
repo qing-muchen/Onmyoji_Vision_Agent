@@ -11,6 +11,7 @@ from src.core.config import (
     CaptureConfig,
     LogLevel,
     LoggingConfig,
+    StabilityConfig,
     WindowConfig,
     config_to_dict,
     load_config,
@@ -18,6 +19,7 @@ from src.core.config import (
 from src.core.exceptions import (
     CaptureError,
     ConfigError,
+    MissingTransformError,
     OnmyojiVisionError,
     WindowNotFoundError,
 )
@@ -40,10 +42,12 @@ __all__ = [
     "CoordinateTransform",
     "LogLevel",
     "LoggingConfig",
+    "MissingTransformError",
     "OnmyojiVisionError",
     "Point",
     "Rect",
     "Size",
+    "StabilityConfig",
     "WindowConfig",
     "WindowNotFoundError",
     "config_to_dict",

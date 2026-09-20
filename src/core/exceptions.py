@@ -20,3 +20,8 @@ class WindowNotFoundError(OnmyojiVisionError):
 
 class CaptureError(OnmyojiVisionError):
     """屏幕采集后端不可用或采集失败时抛出。"""
+
+
+class MissingTransformError(OnmyojiVisionError):
+    """需要对帧做坐标换算、但该帧未携带 ``coordinate_transform`` 时抛出。"""
+

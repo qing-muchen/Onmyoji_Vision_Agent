@@ -16,7 +16,14 @@ Phase 1 已打通 ``Window -> Calibration -> Frame`` 数据链路：窗口尺寸
 """
 
 from src.vision.calibration import CalibrationResolver, CalibrationResult
-from src.vision.capture import CaptureBackend, Frame, create_capture_backend
+from src.vision.capture import (
+    CaptureBackend,
+    Frame,
+    FrameBuffer,
+    FrameComparator,
+    FrameStabilityChecker,
+    create_capture_backend,
+)
 from src.vision.window import WindowInfo, WindowManager
 
 __all__ = [
@@ -24,6 +31,9 @@ __all__ = [
     "CalibrationResult",
     "CaptureBackend",
     "Frame",
+    "FrameBuffer",
+    "FrameComparator",
+    "FrameStabilityChecker",
     "WindowInfo",
     "WindowManager",
     "create_capture_backend",

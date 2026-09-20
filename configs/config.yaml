@@ -20,6 +20,15 @@ capture:
   region: null
   # 超过该毫秒数的帧视为过期帧
   max_frame_age_ms: 100
+  # 帧缓冲容量：保存最近多少帧（越大越稳，但占用内存约为 N x 单帧大小）
+  buffer_size: 10
+  # 画面稳定性判断：只判断"画面是否停止变化"，不解读画面内容
+  stability:
+    enabled: true
+    # 参与判断的最少帧数（至少 2 帧才能比较）
+    minimum_frames: 3
+    # 相邻帧的平均相似度达到该值即视为稳定（0-1）
+    similarity_threshold: 0.98
 
 window:
   # 目标游戏窗口定位参数，Phase 1 由 Window Manager 消费

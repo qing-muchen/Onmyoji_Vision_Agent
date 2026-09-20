@@ -5,12 +5,17 @@
 * :class:`~src.vision.capture.models.Frame` —— 视觉引擎的统一输入（BGR 图像 + 时间戳 + 坐标映射）；
 * :class:`~src.vision.capture.base.CaptureBackend` —— 后端抽象接口（start / stop / get_frame）；
 * :func:`~src.vision.capture.factory.create_capture_backend` —— 按配置创建后端并自动回退；
+* :class:`~src.vision.capture.buffer.FrameBuffer` —— 最近若干帧的环形缓冲；
+* :class:`~src.vision.capture.comparator.FrameComparator` —— 帧相似度比较（灰度 MAE）；
+* :class:`~src.vision.capture.stability.FrameStabilityChecker` —— 画面稳定性判断；
 * :mod:`~src.vision.capture.monitors` —— 显示器几何查询。
 
-本层不做任何图像识别，只负责"拿到正确的像素"。
+本层不做任何图像识别，只负责"拿到正确的像素"与"判断画面是否稳定"。
 """
 
 from src.vision.capture.base import CaptureBackend
+from src.vision.capture.buffer import FrameBuffer
+from src.vision.capture.comparator import FrameComparator
 from src.vision.capture.dxcam_capture import DxcamCapture
 from src.vision.capture.dxcam_capture import is_available as is_dxcam_available
 from src.vision.capture.factory import (
@@ -28,12 +33,16 @@ from src.vision.capture.monitors import (
 )
 from src.vision.capture.mss_capture import MssCapture
 from src.vision.capture.mss_capture import is_available as is_mss_available
+from src.vision.capture.stability import FrameStabilityChecker
 
 __all__ = [
     "BACKEND_PRIORITY",
     "CaptureBackend",
     "DxcamCapture",
     "Frame",
+    "FrameBuffer",
+    "FrameComparator",
+    "FrameStabilityChecker",
     "MssCapture",
     "candidate_backends",
     "create_capture_backend",

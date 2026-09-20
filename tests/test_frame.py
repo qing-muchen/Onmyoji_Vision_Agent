@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from src.core.exceptions import MissingTransformError
 from src.core.geometry import CoordinateTransform, Point, Size
 from src.vision.capture.models import Frame
 
@@ -91,3 +92,24 @@ def test_describe_mentions_source_and_age() -> None:
 
     assert "64x48" in text
     assert "dxcam" in text
+
+
+def test_to_reference_and_to_current_use_frame_transform() -> None:
+    """Frame 提供统一的坐标换算入口，避免调用方重复处理 transform。"""
+    transform = CoordinateTransform.from_sizes(
+        Size(width=1920, height=1080), Size(width=960, height=540)
+    )
+    frame = Frame.create(make_image(960, 540), source="dxcam", coordinate_transform=transform)
+
+    assert frame.to_reference(Point(480, 270)).to_int_tuple() == (960, 540)
+    assert frame.to_current(Point(960, 540)).to_int_tuple() == (480, 270)
+
+
+def test_coordinate_conversion_requires_transform() -> None:
+    """缺少坐标映射时换算应显式报错，而不是静默给出错误坐标。"""
+    frame = Frame.create(make_image(), source="mss")
+
+    with pytest.raises(MissingTransformError):
+        frame.to_reference(Point(1, 1))
+    with pytest.raises(MissingTransformError):
+        frame.to_current(Point(1, 1))

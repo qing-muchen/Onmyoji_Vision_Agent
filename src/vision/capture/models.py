@@ -7,7 +7,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.core.geometry import CoordinateTransform, Size
+from src.core.exceptions import MissingTransformError
+from src.core.geometry import CoordinateTransform, Point, Size
 
 __all__ = ["Frame"]
 
@@ -114,6 +115,51 @@ class Frame:
     def size(self) -> Size:
         """帧尺寸。"""
         return Size(width=self.width, height=self.height)
+
+    def to_reference(self, point: Point) -> Point:
+        """把当前（窗口）坐标系下的点换算为参考分辨率坐标。
+
+        Args:
+            point: 当前窗口坐标系中的点。
+
+        Returns:
+            参考坐标系中的点。
+
+        Raises:
+            MissingTransformError: 该帧未携带 ``coordinate_transform``。
+        """
+        return self._require_transform().current_to_reference(point)
+
+    def to_current(self, point: Point) -> Point:
+        """把参考分辨率下的点换算为当前（窗口）坐标。
+
+        视觉模型的输出基于参考分辨率，必须经此方法映射后才能用于裁剪或点击。
+
+        Args:
+            point: 参考坐标系中的点。
+
+        Returns:
+            当前窗口坐标系中的点。
+
+        Raises:
+            MissingTransformError: 该帧未携带 ``coordinate_transform``。
+        """
+        return self._require_transform().reference_to_current(point)
+
+    def _require_transform(self) -> CoordinateTransform:
+        """返回该帧携带的坐标映射。
+
+        Returns:
+            该帧的 :class:`~src.core.geometry.CoordinateTransform`。
+
+        Raises:
+            MissingTransformError: 该帧未携带 ``coordinate_transform``。
+        """
+        if self.coordinate_transform is None:
+            raise MissingTransformError(
+                f"帧（source={self.source!r}）未携带 coordinate_transform，无法换算坐标"
+            )
+        return self.coordinate_transform
 
     def age_ms(self, *, now: float | None = None) -> float:
         """返回该帧距今的毫秒数。

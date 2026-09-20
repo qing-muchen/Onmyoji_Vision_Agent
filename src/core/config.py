@@ -34,6 +34,14 @@ RESOLUTION_LENGTH: int = 2
 DEFAULT_REFERENCE_RESOLUTION: tuple[int, int] = (1920, 1080)
 #: 默认日志滚动上限（5 MiB）
 DEFAULT_LOG_MAX_BYTES: int = 5 * 1024 * 1024
+#: 默认帧缓冲容量（保存最近多少帧）
+DEFAULT_BUFFER_SIZE: int = 10
+#: 稳定性判断所需的最少帧数默认值
+DEFAULT_MINIMUM_STABLE_FRAMES: int = 3
+#: 默认的帧相似度阈值（达到该平均相似度即视为画面稳定）
+DEFAULT_SIMILARITY_THRESHOLD: float = 0.98
+#: 稳定性判断可用的最少帧数下限（至少需要一对帧才能比较）
+MINIMUM_COMPARABLE_FRAMES: int = 2
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 #: 允许的日志级别（与 :data:`LogLevel` 保持一致）
@@ -58,6 +66,17 @@ class AppMeta(StrictModel):
     env: Literal["dev", "test", "prod"] = "dev"
 
 
+class StabilityConfig(StrictModel):
+    """画面稳定性判断配置。
+
+    只描述"画面是否停止变化"，不解读画面内容（不判断界面、按钮、任务状态）。
+    """
+
+    enabled: bool = True
+    minimum_frames: int = Field(default=DEFAULT_MINIMUM_STABLE_FRAMES, ge=MINIMUM_COMPARABLE_FRAMES)
+    similarity_threshold: float = Field(default=DEFAULT_SIMILARITY_THRESHOLD, gt=0.0, le=1.0)
+
+
 class CaptureConfig(StrictModel):
     """屏幕采集配置。"""
 
@@ -66,6 +85,8 @@ class CaptureConfig(StrictModel):
     monitor_index: int = Field(default=1, ge=0)
     region: Region | None = None
     max_frame_age_ms: int = Field(default=100, ge=1)
+    buffer_size: int = Field(default=DEFAULT_BUFFER_SIZE, ge=1)
+    stability: StabilityConfig = Field(default_factory=StabilityConfig)
 
     @field_validator("region")
     @classmethod

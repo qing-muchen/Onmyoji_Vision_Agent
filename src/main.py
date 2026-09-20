@@ -140,7 +140,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.show_config:
         logger.info("生效配置:\n%s", json.dumps(config_to_dict(config), ensure_ascii=False, indent=2))
 
-    logger.info("Phase 1 视觉输入链路就绪：vision.window / vision.calibration / vision.capture 可用。")
+    logger.info("视觉输入链路就绪：vision.window / vision.calibration / vision.capture 可用。")
+    logger.info("帧流水线就绪：FrameBuffer / FrameComparator / FrameStabilityChecker 可用。")
     logger.info("等待后续阶段实现：vision.detector / vision.ocr / action / state / task。")
     shutdown_logging()
     return EXIT_OK
