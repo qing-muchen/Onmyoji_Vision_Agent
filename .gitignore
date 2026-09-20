@@ -22,9 +22,13 @@ env/
 logs/*
 !logs/.gitkeep
 
-# 截图数据集与模型权重（体积大，不入库）
-dataset/*
+# 截图数据集：图片体积大，一律不入库
+# 仅入库目录结构（.gitkeep）、说明（README.md）与校验脚本（tools/check_dataset.py）
+dataset/**/*.png
+dataset/**/*.jpg
+dataset/**/*.jpeg
 !dataset/.gitkeep
+!dataset/README.md
 models/*
 !models/.gitkeep
 
