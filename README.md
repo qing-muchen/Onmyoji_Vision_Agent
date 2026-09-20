@@ -30,8 +30,17 @@
 8. `FrameStabilityChecker` —— 判断"画面是否停止变化"（相邻帧平均相似度达到阈值）；
 9. `Frame.to_reference()` / `Frame.to_current()` —— 统一坐标换算入口，避免调用方重复处理 transform。
 
-**尚未实现**：Vision Detection、模板匹配、OCR、YOLO、鼠标/键盘控制、状态机、任务系统、
-自动挂机逻辑与任何 AI 模型。
+**Phase 2.0 — Dataset Organization（已完成）**：数据集目录与命名标准化
+（`dataset/README.md` + `tools/check_dataset.py` 校验脚本；图片不入库）。
+
+**Phase 2.1 — Template Detector Foundation（已完成）**：基于 OpenCV 模板匹配的视觉检测：
+
+10. `TemplateLoader` —— 从 `dataset/templates/` 加载模板并解析元数据（命名或结构不合规直接报错）；
+11. `TemplateMatcher` —— 单模板多尺度匹配（`cv2.matchTemplate`，默认 `TM_CCOEFF_NORMED`）；
+12. `TemplateDetector` —— 实现 `Detector` 接口，输出**参考分辨率坐标系**下的 `DetectionResult`。
+
+**尚未实现**：OCR、YOLO / 深度学习模型与训练、鼠标点击、键盘输入、状态机、任务系统、
+自动挂机逻辑与任何游戏内容理解（界面/按钮语义判断）。
 
 ## 目录结构
 
@@ -42,8 +51,9 @@ Onmyoji_Vision_Agent/
 ├── dataset/                      # 截图/标注数据集（内容不入库）
 ├── docs/                         # 设计文档
 ├── examples/
-│   ├── capture_demo.py           # 采集链路 Demo（Foreground -> Capture）
-│   └── frame_pipeline_demo.py    # 帧流水线 Demo（Capture -> Buffer -> Stability）
+│   ├── capture_demo.py               # 采集链路 Demo（Foreground -> Capture）
+│   ├── frame_pipeline_demo.py        # 帧流水线 Demo（Capture -> Buffer -> Stability）
+│   └── template_detector_demo.py     # 模板检测 Demo（Frame -> Detector -> Result）
 ├── logs/                         # 运行日志输出目录
 ├── models/                       # 模型权重（内容不入库）
 ├── src/
@@ -68,7 +78,15 @@ Onmyoji_Vision_Agent/
 │   │   │   ├── buffer.py         #     FrameBuffer（最近 N 帧）
 │   │   │   ├── comparator.py     #     FrameComparator（灰度 MAE 相似度）
 │   │   │   └── stability.py      #     FrameStabilityChecker（画面稳定性）
-│   │   ├── detector/             #   目标检测与模板匹配（后续阶段）
+│   │   ├── detector/             #   视觉检测（Phase 2.1）
+│   │   │   ├── base.py           #     Detector 抽象接口
+│   │   │   ├── models.py         #     TemplateInfo（模板元数据 + 图像）
+│   │   │   ├── result.py         #     DetectionResult（检测结果）
+│   │   │   └── template/         #     模板匹配实现
+│   │   │       ├── loader.py     #       TemplateLoader（dataset/templates）
+│   │   │       ├── preprocess.py #       灰度化 / 缩放
+│   │   │       ├── matcher.py    #       TemplateMatcher（多尺度匹配）
+│   │   │       └── detector.py   #       TemplateDetector（编排 + 坐标转换）
 │   │   └── ocr/                  #   文字识别（后续阶段）
 │   ├── action/                   # 输入控制层
 │   ├── state/                    # 状态管理层
@@ -129,6 +147,7 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `app` | 应用名称、版本、运行环境 |
 | `capture` | 采集后端、帧率、显示器索引、采集区域、帧缓冲容量、稳定性判断 |
 | `calibration` | 参考分辨率（视觉模型/模板基于的逻辑分辨率） |
+| `detector` | 检测器配置（模板匹配方法、阈值、多尺度比例） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
 | `logging` | 日志级别、目录、滚动策略与格式 |
 
@@ -143,6 +162,10 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `capture.stability.minimum_frames` | `3` | 参与判断的最少帧数（至少 2） |
 | `capture.stability.similarity_threshold` | `0.98` | 平均相似度阈值，达到即视为稳定 |
 | `window.auto_focus` | `true` | 采集前是否自动把目标窗口置于前台 |
+| `detector.template.method` | `TM_CCOEFF_NORMED` | 仅支持归一化方法（保证置信度落在 0-1） |
+| `detector.template.threshold` | `0.85` | 低于该置信度的命中被丢弃 |
+| `detector.template.multi_scale` | `true` | 是否按 `scales` 逐档缩放模板后再匹配 |
+| `detector.template.scales` | `[0.8 … 1.2]` | 多尺度搜索比例（默认覆盖 ±20%） |
 
 环境变量可覆盖任意字段，格式为 `OVA_<段>__<字段>`：
 
@@ -269,6 +292,97 @@ if latest is not None and checker.is_stable(buffer.recent(checker.minimum_frames
     current_point = latest.to_current(Point(960, 540))
 ```
 
+## 模板检测（Frame → DetectionResult）
+
+```text
+Frame(image, coordinate_transform)
+        │  TemplateMatcher.prepare()：整帧只做一次灰度化
+        ▼
+TemplateMatcher.match(gray_frame, template)    # 单模板多尺度匹配
+        │  按 detector.template.scales 逐档缩放模板 -> cv2.matchTemplate
+        │  取置信度最高的一档 -> 与 threshold 比较（未达阈值丢弃）
+        ▼
+TemplateDetector.detect(frame)                 # 对模板集合逐个匹配
+        │  current 坐标 -> reference 坐标（CoordinateTransform.current_rect_to_reference）
+        ▼
+list[DetectionResult]（按 confidence 降序）
+```
+
+### Detector 职责
+
+`src/vision/detector` 只负责"在帧里找到指定 UI 元素的位置"，**不做任何交互**
+（无鼠标、无键盘、无游戏流程）：
+
+| 组件 | 文件 | 职责 |
+| --- | --- | --- |
+| `Detector` | `base.py` | 抽象接口：`detect(frame) -> list[DetectionResult]`；输入必须是 `Frame`（携带时间戳与坐标映射），**不接受裸 numpy 图像** |
+| `TemplateDetector` | `template/detector.py` | 实现类：编排"加载模板 → 逐模板匹配 → 坐标转换 → 结果排序" |
+| `TemplateMatcher` | `template/matcher.py` | 单模板多尺度匹配（`cv2.matchTemplate`） |
+| `TemplateLoader` | `template/loader.py` | 从 `dataset/templates` 加载模板并解析元数据 |
+| `TemplateInfo` / `DetectionResult` | `models.py` / `result.py` | 输入模型（模板）与输出模型（检测结果） |
+
+依赖方向：`core` → `capture` → `detector`（本层不依赖 `action` / `task` / `state`）。
+
+### Dataset 加载方式
+
+```text
+dataset/templates/<category>/<element_name>/<element_type>_<element_name>_skinNNN_sceneNNN.png
+        │  例如 dataset/templates/buttons/explore/button_explore_skin001_scene001.png
+        ▼
+TemplateInfo(template_id, element_type, element_name, skin, scene, category, path, image)
+```
+
+* 文件名解析失败、目录层级不符、文件名中的元素名与目录不一致 → `TemplateParseError`（**不猜测**）；
+* 目录不存在或图像无法解码 → `TemplateLoadError`；
+* `TemplateLoader.load(category=…, element_type=…, element_name=…)` 支持过滤，
+  只检测某一类元素时可显著减少匹配次数。
+
+### 多尺度与分辨率
+
+游戏窗口尺寸不固定，模板与实际画面之间的比例差异由 `detector.template.scales` 覆盖
+（默认 0.8/0.9/1.0/1.1/1.2，即 ±20%）；`multi_scale=false` 时只按 1.0 匹配。
+命中区域统一经 `CoordinateTransform.current_rect_to_reference()` 转换到**参考分辨率坐标系**
+（默认 1920x1080），调用方无需关心当前窗口尺寸。
+
+### DetectionResult 格式
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `element_name` | `str` | UI 元素名称，例如 `explore` |
+| `category` | `str` | 元素类别（模板目录类别），例如 `buttons` |
+| `confidence` | `float` | 匹配置信度，`0 <= confidence <= 1`（越界即报错） |
+| `rect` | `Rect` | 命中区域，**参考分辨率坐标系**（复用 `src/core/geometry.py` 的 `Rect`，不新增坐标结构） |
+| `template_id` | `str` | 命中的模板 ID，例如 `button_explore_skin001_scene001` |
+
+便捷接口：`result.element_key`（`buttons/explore`）、`result.describe()`；
+`TemplateDetector.best_per_element(results)` 可按元素去重，只保留置信度最高的一条。
+
+```python
+from src.core import load_config
+from src.vision.detector import TemplateDetector
+
+config = load_config()
+detector = TemplateDetector.from_dataset(config.detector.template, element_name="explore")
+
+with create_capture_backend(config.capture, window=window, transform=transform) as backend:
+    frame = backend.get_frame()
+
+for result in detector.detect(frame):
+    print(result.describe())   # buttons/explore confidence=0.8912 rect=(1041, 284, 151x142) template=...
+```
+
+命令行验证：
+
+```powershell
+# 实时采集（需要游戏窗口；否则回退整屏）
+python examples/template_detector_demo.py
+
+# 离线图片（用数据集里的真实截图验证检测能力）
+python examples/template_detector_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
+```
+
+两种模式都会把检测框、元素名称与置信度绘制到 `examples/detection_result.png`。
+
 ## 代码规范
 
 1. 全部公共函数/方法使用类型注解并编写 docstring（Google 风格）。
@@ -283,7 +397,10 @@ if latest is not None and checker.is_stable(buffer.recent(checker.minimum_frames
 - **Phase 1（已完成）**：Visual Input Foundation —— 窗口检测、分辨率校准、坐标转换、屏幕采集。
 - **Phase 1.1（已完成）**：Window Foreground Control —— 采集前激活目标窗口并校验前台。
 - **Phase 1.2（已完成）**：Frame Pipeline Stabilization —— 帧缓冲、相似度比较、稳定性判断。
-- Phase 2：Detector / OCR —— 模板匹配、元素检测与文字识别（`src/vision/detector`、`src/vision/ocr`）。
+- **Phase 2.0（已完成）**：Dataset Organization —— 数据集结构与命名标准化、校验脚本。
+- **Phase 2.1（已完成）**：Template Detector Foundation —— 模板匹配检测器。
+- Phase 2.2：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
+- Phase 2.3：OCR —— 界面文字读取（`src/vision/ocr`）。
 - Phase 3：State Machine —— 界面状态建模与转移（`src/state`）。
 - Phase 4：Action Engine —— 受控的键鼠输入与安全约束（`src/action`，坐标一律经 `CoordinateTransform` 映射）。
 - Phase 5：Task System —— 任务编排、重试与中断处理（`src/task`）。

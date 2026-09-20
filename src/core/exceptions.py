@@ -25,3 +25,15 @@ class CaptureError(OnmyojiVisionError):
 class MissingTransformError(OnmyojiVisionError):
     """需要对帧做坐标换算、但该帧未携带 ``coordinate_transform`` 时抛出。"""
 
+
+class TemplateError(OnmyojiVisionError):
+    """模板数据集相关错误的基类。"""
+
+
+class TemplateParseError(TemplateError):
+    """模板文件名或目录结构无法解析时抛出（不做任何猜测）。"""
+
+
+class TemplateLoadError(TemplateError):
+    """模板目录不存在或模板图像无法读取时抛出。"""
+

@@ -49,6 +49,22 @@ calibration:
   # 视觉模型/模板使用的参考分辨率；运行时按窗口客户区尺寸动态映射坐标
   reference_resolution: [1920, 1080]
 
+detector:
+  # 模板匹配检测器（Phase 2.1）
+  template:
+    # 仅支持归一化方法，保证置信度可映射到 0-1
+    method: "TM_CCOEFF_NORMED" # TM_CCOEFF_NORMED | TM_CCORR_NORMED | TM_SQDIFF_NORMED
+    # 置信度阈值：低于该值的结果不输出
+    threshold: 0.85
+    # 窗口尺寸不固定，需要多尺度搜索覆盖模板与实际画面的比例差异
+    multi_scale: true
+    scales:
+      - 0.8
+      - 0.9
+      - 1.0
+      - 1.1
+      - 1.2
+
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL
   dir: "logs"

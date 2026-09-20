@@ -42,12 +42,20 @@ DEFAULT_MINIMUM_STABLE_FRAMES: int = 3
 DEFAULT_SIMILARITY_THRESHOLD: float = 0.98
 #: 稳定性判断可用的最少帧数下限（至少需要一对帧才能比较）
 MINIMUM_COMPARABLE_FRAMES: int = 2
+#: 默认的模板匹配置信度阈值
+DEFAULT_TEMPLATE_THRESHOLD: float = 0.85
+#: 默认的多尺度搜索比例（覆盖模板与实际画面之间约 ±20% 的比例差异）
+DEFAULT_TEMPLATE_SCALES: tuple[float, ...] = (0.8, 0.9, 1.0, 1.1, 1.2)
+#: 原尺寸比例（不做缩放）
+IDENTITY_SCALE: float = 1.0
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 #: 允许的日志级别（与 :data:`LogLevel` 保持一致）
 LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 CaptureBackend = Literal["auto", "dxcam", "mss"]
 WindowMatchMode = Literal["exact", "contains", "regex"]
+#: 允许的模板匹配方法（仅限归一化方法，保证分数可映射到 [0, 1]）
+TemplateMatchMethod = Literal["TM_CCOEFF_NORMED", "TM_CCORR_NORMED", "TM_SQDIFF_NORMED"]
 Region = tuple[int, int, int, int]
 Resolution = tuple[int, int]
 
@@ -168,6 +176,43 @@ class LoggingConfig(StrictModel):
         return value.upper() if isinstance(value, str) else value
 
 
+class TemplateDetectorConfig(StrictModel):
+    """模板匹配检测器配置。
+
+    ``multi_scale`` 用于应对"窗口尺寸不固定"：模板按 ``scales`` 中的比例逐档缩放后再匹配，
+    取置信度最高的一档；关闭时只使用 1.0 比例。
+    """
+
+    method: TemplateMatchMethod = "TM_CCOEFF_NORMED"
+    threshold: float = Field(default=DEFAULT_TEMPLATE_THRESHOLD, gt=0.0, le=1.0)
+    multi_scale: bool = True
+    scales: list[float] = Field(default_factory=lambda: list(DEFAULT_TEMPLATE_SCALES))
+
+    @field_validator("scales")
+    @classmethod
+    def _validate_scales(cls, value: list[float]) -> list[float]:
+        """校验尺度列表：不能为空，且每项必须为正数。"""
+        if not value:
+            raise ValueError("scales 不能为空（关闭多尺度时可只填 1.0）")
+        for scale in value:
+            if scale <= 0:
+                raise ValueError(f"scales 必须为正数: {scale}")
+        return value
+
+    @property
+    def effective_scales(self) -> tuple[float, ...]:
+        """实际参与搜索的比例序列（关闭多尺度时只保留 1.0）。"""
+        if not self.multi_scale:
+            return (IDENTITY_SCALE,)
+        return tuple(self.scales)
+
+
+class DetectorConfig(StrictModel):
+    """视觉检测层配置。"""
+
+    template: TemplateDetectorConfig = Field(default_factory=TemplateDetectorConfig)
+
+
 class AppConfig(StrictModel):
     """应用总配置，聚合所有子模块配置。"""
 
@@ -177,6 +222,7 @@ class AppConfig(StrictModel):
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     window: WindowConfig = Field(default_factory=WindowConfig)
+    detector: DetectorConfig = Field(default_factory=DetectorConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     def log_dir(self) -> Path:
