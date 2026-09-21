@@ -39,6 +39,7 @@ configs/config.local.yaml
 examples/sample_frame.png
 examples/detection_result.png
 examples/ocr_result.png
+examples/detector_debug_result.png
 
 # Agent 工具与本地临时目录
 .reasonix/

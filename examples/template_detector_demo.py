@@ -4,6 +4,7 @@
 
     python examples/template_detector_demo.py
     python examples/template_detector_demo.py --element-name explore --log-level DEBUG
+    python examples/template_detector_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png --debug
 
 流程：
 
@@ -13,6 +14,9 @@
 4. 从 ``dataset/templates`` 加载模板；
 5. 执行模板检测，输出参考分辨率坐标系下的结果；
 6. 在截图上绘制检测框、元素名称与置信度并保存可视化图片。
+
+``--debug`` 时改用 Phase 2.1.1 的融合链路（模板 + OCR -> 融合），并打印
+"Template Matches / OCR Matches / Fusion Result" 三段调试信息（含最高候选）。
 
 本 Demo 只做视觉识别，**不做任何点击、键盘或游戏逻辑**。
 """
@@ -37,6 +41,8 @@ from capture_demo import (  # noqa: E402 - 需要先修正 sys.path
     ensure_target_foreground,
     screen_fallback_window,
 )
+from detector_pipeline import build_pipeline, run_pipeline  # noqa: E402 - 需要先修正 sys.path
+from detector_report import annotate_pipeline, print_debug_report  # noqa: E402 - 需要先修正 sys.path
 
 from src.core.config import AppConfig, load_config  # noqa: E402
 from src.core.exceptions import ConfigError, OnmyojiVisionError  # noqa: E402
@@ -105,6 +111,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-keyword", action="append", default=None, metavar="KEYWORD")
     parser.add_argument("--require-window", action="store_true", help="找不到目标窗口时直接失败")
     parser.add_argument("--require-foreground", action="store_true", help="未能置于前台时直接失败")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="改用融合链路（模板 + OCR）并输出 Template / OCR / Fusion 三段调试信息",
+    )
+    parser.add_argument("--require-ocr", action="store_true", help="--debug 时 OCR 不可用则直接失败")
     parser.add_argument("--log-level", default=None, help="覆盖配置中的日志级别")
     return parser
 
@@ -332,10 +344,28 @@ def run(args: argparse.Namespace, config: AppConfig) -> int:
     logger.info("分辨率校准: %s", calibration.describe())
     logger.info("待检测帧: %s", frame.describe())
 
+    output_path = resolve_output_path(args.output)
+
+    if args.debug:
+        pipeline = build_pipeline(
+            config,
+            template_detector=detector,
+            require_ocr=args.require_ocr,
+        )
+        run_pipeline(pipeline, frame)
+        save_image(annotate_pipeline(frame, pipeline), output_path)
+        logger.info("已保存可视化结果: %s", output_path)
+        print_debug_report(
+            pipeline,
+            window_title=window.title,
+            frame=frame,
+            output_path=output_path,
+        )
+        return EXIT_OK
+
     results = detector.detect(frame)
     logger.info("模板检测完成：命中 %d 项", len(results))
 
-    output_path = resolve_output_path(args.output)
     save_image(annotate(frame, results), output_path)
     logger.info("已保存可视化结果: %s", output_path)
 

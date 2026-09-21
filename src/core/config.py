@@ -60,6 +60,14 @@ DEFAULT_OCR_SCALE: float = 2.0
 DEFAULT_OCR_THRESHOLD: int = 128
 #: 默认的 OCR 识别语言（简体中文 + 英文）
 DEFAULT_OCR_LANGUAGE: str = "chi_sim+eng"
+#: 默认的融合权重：模板（视觉定位来源）
+DEFAULT_FUSION_TEMPLATE_WEIGHT: float = 0.6
+#: 默认的融合权重：OCR（语义来源）
+DEFAULT_FUSION_OCR_WEIGHT: float = 0.4
+#: 判定"同一目标"的 IoU 阈值（超过该值且元素相同才合并）
+DEFAULT_FUSION_IOU_THRESHOLD: float = 0.3
+#: 只有 OCR 命中时的置信度折价（缺少视觉定位，降权但不丢弃）
+DEFAULT_OCR_ONLY_FACTOR: float = 0.9
 #: 二值化阈值的合法范围
 GRAYSCALE_MAX_VALUE: int = 255
 
@@ -223,10 +231,72 @@ class TemplateDetectorConfig(StrictModel):
         return tuple(self.scales)
 
 
+class OCRTextTarget(StrictModel):
+    """OCR 文字目标：把"固定文字"映射到 UI 元素语义。
+
+    探索按钮这类 UI 元素的外观随皮肤/活动变化极大，但文字固定，因此用文字作为
+    **语义锚点**：OCR 命中该文字即认为对应元素出现。
+
+    Attributes:
+        text: 目标文字，例如 ``探索``。
+        element_name: 该文字对应的元素名称，例如 ``explore``。
+        category: 元素类别（与模板目录类别一致），例如 ``buttons``。
+    """
+
+    text: str
+    element_name: str
+    category: str
+
+    @field_validator("text", "element_name", "category")
+    @classmethod
+    def _validate_not_blank(cls, value: str) -> str:
+        """校验字段非空（空白文字无法作为匹配目标）。"""
+        if not value.strip():
+            raise ValueError("OCR 文字目标的 text / element_name / category 均不能为空")
+        return value
+
+
+class OCRTextDetectorConfig(StrictModel):
+    """OCR 辅助检测配置（Phase 2.1.1）。
+
+    只声明"哪些文字对应哪个元素"，不含任何坐标或阈值：具体识别质量由
+    ``ocr`` 段的 Provider 与预处理参数决定。
+    """
+
+    targets: list[OCRTextTarget] = Field(default_factory=list)
+
+
+class DetectorFusionConfig(StrictModel):
+    """检测结果融合配置（Phase 2.1.1）。
+
+    融合把两个来源合成为一条 ``DetectionResult``：
+
+    * 模板是**视觉定位来源**（``template_weight``）；
+    * OCR 是**语义来源**（``ocr_weight``）；
+    * 仅当元素相同且 ``IoU > iou_threshold`` 时视为同一个目标并合并；
+    * 只有 OCR 命中时按 ``ocr_only_factor`` 折价（缺少视觉定位，可信度略降但不丢弃）。
+
+    Attributes:
+        enabled: 融合总开关；关闭时 ``DetectorFusion`` 只回传模板结果。
+        template_weight: 融合时模板分数的权重。
+        ocr_weight: 融合时 OCR 分数的权重。
+        iou_threshold: 判定"同一个目标"的 IoU 下限（严格大于才合并）。
+        ocr_only_factor: 仅有 OCR 命中时的置信度折扣系数。
+    """
+
+    enabled: bool = True
+    template_weight: float = Field(default=DEFAULT_FUSION_TEMPLATE_WEIGHT, gt=0.0, le=1.0)
+    ocr_weight: float = Field(default=DEFAULT_FUSION_OCR_WEIGHT, gt=0.0, le=1.0)
+    iou_threshold: float = Field(default=DEFAULT_FUSION_IOU_THRESHOLD, gt=0.0, le=1.0)
+    ocr_only_factor: float = Field(default=DEFAULT_OCR_ONLY_FACTOR, gt=0.0, le=1.0)
+
+
 class DetectorConfig(StrictModel):
     """视觉检测层配置。"""
 
     template: TemplateDetectorConfig = Field(default_factory=TemplateDetectorConfig)
+    ocr: OCRTextDetectorConfig = Field(default_factory=OCRTextDetectorConfig)
+    fusion: DetectorFusionConfig = Field(default_factory=DetectorFusionConfig)
 
 
 class SceneMatcherConfig(StrictModel):

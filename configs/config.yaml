@@ -64,6 +64,24 @@ detector:
       - 1.0
       - 1.1
       - 1.2
+  # OCR 辅助检测（Phase 2.1.1）：用固定文字作为 UI 元素的语义锚点
+  ocr:
+    # 文字 -> 元素映射；外观随皮肤/活动剧烈变化但文字固定的元素走这条路
+    targets:
+      - text: "探索"
+        element_name: "explore"
+        category: "buttons"
+  # 结果融合（Phase 2.1.1）：模板（视觉定位）+ OCR（语义）-> 单一结果
+  fusion:
+    enabled: true
+    # 模板是视觉定位来源，权重更高
+    template_weight: 0.6
+    # OCR 是语义来源，权重略低
+    ocr_weight: 0.4
+    # 元素相同且 IoU 严格大于该值才视为同一个目标（合并区域取并集）
+    iou_threshold: 0.3
+    # 只有 OCR 命中时的置信度折价（缺少视觉定位，不丢弃但降权）
+    ocr_only_factor: 0.9
 
 scene:
   # 场景识别（Phase 2.2）：整图判断"当前在哪里"，不涉及坐标

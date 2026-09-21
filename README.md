@@ -53,8 +53,19 @@
 18. `OCRPreprocessor` —— 灰度化 / 放大 / 二值化（参数来自配置）；
 19. `TextResult` —— `text / confidence / rect(reference) / language / provider`。
 
+**Phase 2.1.1 — OCR Assisted Detection（已完成）**：增强 Detector，让"外观多变、文字固定"的
+UI 元素也能稳定定位（纯像素模板匹配对此类元素不可靠）：
+
+20. `OCRTextDetector` —— 复用 `src/vision/ocr`，把 `探索` 这类固定文字映射为
+    `DetectionResult`（`buttons/explore`），**不复制任何 OCR 代码**；
+21. `DetectorFusion` —— 模板（视觉定位）+ OCR（语义）结果融合：元素相同且 `IoU > 0.3`
+    时按 `0.6 / 0.4` 加权合并并取区域并集；只有 OCR 命中时按 `0.9` 折价，只有模板命中时保持原置信度；
+22. `detector.ocr.targets` / `detector.fusion` 配置段 —— 文字目标、权重、IoU 阈值与折价系数**全部配置驱动**；
+23. `examples/detector_debug_demo.py` —— 真实验证 Demo（红 = 最终结果、蓝 = OCR、绿 = 模板）。
+
 **尚未实现**：YOLO / 深度学习模型与训练、鼠标点击、键盘输入、状态机、任务系统、
-自动挂机逻辑，以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"）。
+自动挂机逻辑，以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，
+Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
 ## 目录结构
 
@@ -67,7 +78,9 @@ Onmyoji_Vision_Agent/
 ├── examples/
 │   ├── capture_demo.py               # 采集链路 Demo（Foreground -> Capture）
 │   ├── frame_pipeline_demo.py        # 帧流水线 Demo（Capture -> Buffer -> Stability）
-│   ├── template_detector_demo.py     # 模板检测 Demo（Frame -> Detector -> Result）
+│   ├── template_detector_demo.py     # 模板检测 Demo（Frame -> Detector -> Result，--debug 走融合链路）
+│   ├── detector_pipeline.py          # 检测链路公共装配与调试绘制（Demo 共用）
+│   ├── detector_debug_demo.py        # 检测调试 Demo（Template + OCR -> Fusion，含可视化）
 │   ├── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
 │   └── ocr_demo.py                   # OCR Demo（Frame -> TextResult）
 ├── logs/                         # 运行日志输出目录
@@ -94,10 +107,14 @@ Onmyoji_Vision_Agent/
 │   │   │   ├── buffer.py         #     FrameBuffer（最近 N 帧）
 │   │   │   ├── comparator.py     #     FrameComparator（灰度 MAE 相似度）
 │   │   │   └── stability.py      #     FrameStabilityChecker（画面稳定性）
-│   │   ├── detector/             #   视觉检测（Phase 2.1）
+│   │   ├── detector/             #   视觉检测（Phase 2.1 / 2.1.1）
 │   │   │   ├── base.py           #     Detector 抽象接口
 │   │   │   ├── models.py         #     TemplateInfo（模板元数据 + 图像）
 │   │   │   ├── result.py         #     DetectionResult（检测结果）
+│   │   │   ├── geometry.py       #     IoU 与矩形并集（融合专用度量）
+│   │   │   ├── fusion.py         #     DetectorFusion（模板 + OCR 结果融合）
+│   │   │   ├── ocr/              #     OCR 辅助检测（Phase 2.1.1）
+│   │   │   │   └── detector.py   #       OCRTextDetector（文字 -> 元素）
 │   │   │   └── template/         #     模板匹配实现
 │   │   │       ├── loader.py     #       TemplateLoader（dataset/templates）
 │   │   │       ├── preprocess.py #       灰度化 / 缩放
@@ -166,6 +183,12 @@ python examples/capture_demo.py
 
 # 6. Demo：帧流水线（采集 -> 缓冲 -> 相似度 -> 稳定性）
 python examples/frame_pipeline_demo.py --duration 2.0
+
+# 7. Demo：模板检测（--debug 走"模板 + OCR -> 融合"链路并打印三段调试信息）
+python examples/template_detector_demo.py --debug
+
+# 8. Demo：检测调试（红=最终结果 / 蓝=OCR / 绿=模板，输出 examples/detector_debug_result.png）
+python examples/detector_debug_demo.py
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -180,7 +203,7 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `app` | 应用名称、版本、运行环境 |
 | `capture` | 采集后端、帧率、显示器索引、采集区域、帧缓冲容量、稳定性判断 |
 | `calibration` | 参考分辨率（视觉模型/模板基于的逻辑分辨率） |
-| `detector` | 检测器配置（模板匹配方法、阈值、多尺度比例） |
+| `detector` | 检测器配置（模板匹配方法、阈值、多尺度比例；OCR 文字目标；融合权重与 IoU 阈值） |
 | `scene` | 场景识别配置（置信度阈值、统一缩放尺寸） |
 | `ocr` | OCR 配置（Provider 名称与语言、预处理放大倍数与二值化阈值） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
@@ -201,6 +224,11 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `detector.template.threshold` | `0.85` | 低于该置信度的命中被丢弃 |
 | `detector.template.multi_scale` | `true` | 是否按 `scales` 逐档缩放模板后再匹配 |
 | `detector.template.scales` | `[0.8 … 1.2]` | 多尺度搜索比例（默认覆盖 ±20%） |
+| `detector.ocr.targets` | `探索 -> buttons/explore` | 文字 -> UI 元素映射（OCR 辅助检测的语义锚点） |
+| `detector.fusion.enabled` | `true` | 融合总开关；关闭后只输出模板结果 |
+| `detector.fusion.template_weight` / `ocr_weight` | `0.6` / `0.4` | 重叠融合时的加权系数（模板为视觉定位来源） |
+| `detector.fusion.iou_threshold` | `0.3` | 元素相同且 IoU 严格大于该值才判定为同一目标 |
+| `detector.fusion.ocr_only_factor` | `0.9` | 只有 OCR 命中时的置信度折价系数 |
 | `scene.matcher.threshold` | `0.85` | 低于该相似度的场景不输出 |
 | `scene.matcher.resize_width` / `resize_height` | `640` / `360` | 比较前统一缩放到的尺寸 |
 | `ocr.provider.name` | `tesseract` | OCR 引擎（后续可扩展 paddle / easyocr / windows） |
@@ -362,7 +390,8 @@ list[DetectionResult]（按 confidence 降序）
 | `TemplateLoader` | `template/loader.py` | 从 `dataset/templates` 加载模板并解析元数据 |
 | `TemplateInfo` / `DetectionResult` | `models.py` / `result.py` | 输入模型（模板）与输出模型（检测结果） |
 
-依赖方向：`core` → `capture` → `detector`（本层不依赖 `action` / `task` / `state`）。
+依赖方向：`core` → `capture` → `ocr` / `detector`（Phase 2.1.1 起 `detector` 依赖 `ocr`，
+反向禁止；本层不依赖 `action` / `task` / `state`）。
 
 ### Dataset 加载方式
 
@@ -423,6 +452,157 @@ python examples/template_detector_demo.py --image dataset/scenes/yard/skin_001/s
 ```
 
 两种模式都会把检测框、元素名称与置信度绘制到 `examples/detection_result.png`。
+加 `--debug` 会改用 Phase 2.1.1 的融合链路并打印三段调试信息（见下一节）。
+
+## OCR 辅助检测与结果融合（Phase 2.1.1）
+
+### 为什么需要：Template Detection 的局限
+
+探索按钮是典型的 **UI 语义元素**：文字固定为 `探索`，但外观随皮肤 / 活动主题剧烈变化
+（灯笼、圆球、兔子、活动挂饰，配色与背景各不相同）。
+
+纯 `cv2.matchTemplate` 像素匹配的固有限制：
+
+| 限制 | 表现 |
+| --- | --- |
+| 只认识"见过的像素" | 模板库没覆盖的皮肤/活动主题直接漏检 |
+| 对整体风格敏感 | 背景光效、半透明遮罩、动态装饰都会拉低 `TM_CCOEFF_NORMED` 分数 |
+| 阈值两难 | 调低会误命中外观相似的装饰元素，调高则新皮肤失效 |
+
+因此模板不能作为**唯一**检测来源——但它依然是**定位最精确**的来源，需要与语义来源互补。
+
+### OCR Assisted Detection 原理
+
+```text
+Frame
+      ↓  OCREngine.recognize(frame)（复用 src/vision/ocr，不复制任何 OCR 代码）
+list[TextResult]（reference 坐标）
+      ↓  与 detector.ocr.targets 声明的文字比对（忽略空白差异）
+list[DetectionResult]（category / element_name 来自配置，rect 直接复用 TextResult.rect）
+```
+
+* `OCRTextDetector` 只做"文字 → 元素"的映射，**不解读文字含义、不做决策**；
+* `rect` 直接复用 `TextResult.rect`（已是 reference 坐标），**不做二次坐标变换**；
+* OCR 结果的 `template_id` 用 `ocr:<文字>` 形式标注来源，便于调试与回溯；
+* 未配置 `detector.ocr.targets` 时不调用 OCR（避免无意义开销）。
+
+### Fusion Strategy
+
+```text
+Frame
+      ↓  DetectorFusion.detect(frame)
+TemplateDetector（视觉定位：precision 高、recall 低）  +  OCRTextDetector（语义：recall 高、边界粗）
+      ↓  Score Fusion
+list[DetectionResult]
+```
+
+评分与合并规则（权重、阈值全部来自 `detector.fusion` 配置）：
+
+| 情形 | confidence | rect |
+| --- | --- | --- |
+| 两者重叠（**元素相同**且 `IoU > iou_threshold`） | `0.6 x template + 0.4 x ocr` | 两者**并集**（同时覆盖视觉区域与文字区域） |
+| 只有 OCR | `ocr x 0.9` | OCR 区域（缺少视觉定位，降权但不丢弃） |
+| 只有 Template | 保持原 confidence | 模板区域（语义可靠度未知，不做惩罚） |
+
+补充约定：
+
+* **元素键必须相同**（例如都为 `buttons/explore`）才会合并——宁可输出两条独立结果，
+  也不把不同元素错误地并成一个目标；
+* 一条 OCR 结果只与 `IoU` 最大的模板结果配对，其余模板结果原样保留；
+* 融合结果的 `element_name` / `category` 取 **OCR**（语义来源），`template_id` 取 **模板**
+  （视觉定位来源），因此结果可同时解释"它是什么"与"是哪张模板命中的"；
+* `detector.fusion.enabled=false` 或未接入 OCR 检测器（例如本机未安装 Tesseract）时，
+  `DetectorFusion` 退化为只输出模板结果。
+
+### Debug 输出与真实验证
+
+```powershell
+# 离线图片（用数据集里的真实截图验证）
+python examples/template_detector_demo.py --debug --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
+
+# 真实窗口（找不到阴阳师窗口时回退整屏；生成 examples/detector_debug_result.png）
+python examples/detector_debug_demo.py
+python examples/detector_debug_demo.py --require-window --require-foreground --require-ocr
+```
+
+`--debug` / `detector_debug_demo.py` 的输出格式如下（`OCR Source` 为 `tesseract` 时的
+**期望形态**；本机未安装 Tesseract，因此该段为格式示意而非实测数据，实测输出见下）：
+
+```text
+Detector Debug
+
+Window:
+<整屏回退：未找到目标窗口>
+
+Resolution:
+1704x960
+
+OCR Source:
+tesseract
+
+Template Matches: (1)
+button_explore_skin001_scene001
+confidence=0.8912
+rect=(1041, 284, 151x142)
+
+OCR Matches: (1)
+探索
+confidence=0.9500
+rect=(1035, 276, 162x154)
+
+Fusion Result:
+element:
+buttons/explore
+confidence:
+0.9147
+rect:
+(1035, 276, 162x154)
+template:
+button_explore_skin001_scene001
+candidates:
+1
+```
+
+`examples/detector_debug_result.png` 的绘制约定：**红框 = 最终 DetectionResult**、
+**蓝框 = OCR 结果**、**绿框 = Template 结果**；融合发生时红框为蓝绿两框的并集。
+
+本机实测（`dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png`，
+1704x960，`OCR Source: unavailable（未安装 Tesseract，红框为模板命中）`）：
+
+```text
+Template Matches: (1)
+button_explore_skin001_scene001
+confidence=0.8912
+rect=(1041, 284, 151x142)
+
+OCR Matches: (0)
+none
+
+Fusion Result:
+element:
+buttons/explore
+confidence:
+0.8912
+rect:
+(1041, 284, 151x142)
+```
+
+* 红框准确覆盖**灯笼造型、竖排"探索"文字**的探索按钮（可用 `examples/detector_debug_result.png` 直观核对）；
+* 未安装 Tesseract 时链路**自动降级为只输出模板结果**（红框仍画在模板命中处），
+  Demo 以退出码 0 结束并在 `OCR Source` 与日志中说明原因，加 `--require-ocr` 可改为直接失败；
+* 安装 Tesseract-OCR 与 `chi_sim` + `eng` 语言包后，同一条命令即可得到带 OCR 的完整三段输出。
+
+### OCR 分支的构成
+
+| 组件 | 文件 | 职责 |
+| --- | --- | --- |
+| `OCRTextDetector` | `detector/ocr/detector.py` | 复用 `OCREngine`，把目标文字映射为 `DetectionResult` |
+| `DetectorFusion` | `detector/fusion.py` | 融合模板与 OCR 结果（加权评分、IoU 合并、单来源退化） |
+| `rect_iou` / `rect_union` / `intersection_area` | `detector/geometry.py` | 融合专用几何度量（坐标换算仍统一走 `core/geometry.py`） |
+| `OCRTextTarget` / `OCRTextDetectorConfig` / `DetectorFusionConfig` | `core/config.py` | 文字目标与融合参数的配置模型 |
+
+依赖方向：`core` → `capture` → `ocr` / `detector`；`detector` 可以依赖 `ocr`，
+**`ocr` 不允许依赖 `detector`**（避免语义层反向绑定检测层）。
 
 ## 场景识别（Frame → SceneResult）
 
@@ -629,6 +809,7 @@ python examples/ocr_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_
 - **Phase 1.2（已完成）**：Frame Pipeline Stabilization —— 帧缓冲、相似度比较、稳定性判断。
 - **Phase 2.0（已完成）**：Dataset Organization —— 数据集结构与命名标准化、校验脚本。
 - **Phase 2.1（已完成）**：Template Detector Foundation —— 模板匹配检测器。
+- **Phase 2.1.1（已完成）**：OCR Assisted Detection —— OCR 辅助检测与模板/OCR 结果融合。
 - **Phase 2.2（已完成）**：Scene Classifier Foundation —— 整图场景识别与多模板投票。
 - **Phase 2.3（已完成）**：OCR Foundation —— Provider 架构的文字识别（默认 Tesseract）。
 - Phase 2.4：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
