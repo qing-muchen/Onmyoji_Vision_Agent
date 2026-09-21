@@ -2,11 +2,15 @@
 
 校验 ``dataset/`` 目录：
 
-1. 目录结构（``scenes/<scene_kind>/skin_XXX/scene_XXX/``、``templates/<group>/``）；
+1. 目录结构（``scenes/<scene_kind>/skin_XXX/scene_XXX/``、``templates/<group>/``、
+   ``states/<state_group>/``）；
 2. 图片命名（含"文件名编号与所在目录一致"）；
 3. PNG 文件是否有效（文件头签名 + 完整解码）；
 4. 是否存在重复编号；
 5. 是否存在无法解析的文件（输出 Unresolved Files List，等待人工确认）。
+
+说明：``states/`` 下的样本由人工标注（文件名含中文），因此**只校验目录结构与 PNG
+有效性**，不校验命名规范；该目录下出现的非 PNG 条目（如数据归档 ``*.zip``）记为提示。
 
 脚本只读取数据、不修改任何文件，可重复运行。
 
@@ -17,8 +21,8 @@
 
 退出码：``0`` = PASS，``1`` = FAIL。
 
-新增场景类型 / UI 元素类别时，请同步更新下方的 ``ALLOWED_SCENE_KINDS`` 与
-``ALLOWED_TEMPLATE_GROUPS`` 白名单。
+新增场景类型 / UI 元素类别 / 状态样本分组时，请同步更新下方的
+``ALLOWED_SCENE_KINDS``、``ALLOWED_TEMPLATE_GROUPS`` 与 ``ALLOWED_STATE_GROUPS`` 白名单。
 """
 
 from __future__ import annotations
@@ -46,8 +50,10 @@ SCENE_DIR_PATTERN = re.compile(r"^scene_\d{3}$")
 ALLOWED_SCENE_KINDS: tuple[str, ...] = ("yard",)
 #: 允许的模板分组（相对 ``templates/`` 的路径，新增 UI 元素类别时在此登记）
 ALLOWED_TEMPLATE_GROUPS: tuple[str, ...] = ("buttons/explore",)
+#: 允许的状态样本分组（相对 ``states/`` 的目录名，新增状态数据时在此登记）
+ALLOWED_STATE_GROUPS: tuple[str, ...] = ("transition_bottom", "non_transition_bottom")
 #: ``dataset/`` 根目录下允许出现的条目
-ALLOWED_ROOT_ENTRIES: tuple[str, ...] = (".gitkeep", "README.md", "scenes", "templates")
+ALLOWED_ROOT_ENTRIES: tuple[str, ...] = (".gitkeep", "README.md", "scenes", "templates", "states")
 #: 数据集目录内允许出现的非图片文件（占位与说明，不参与校验）
 ALLOWED_NON_PNG_FILES: tuple[str, ...] = (".gitkeep", "README.md")
 #: PNG 文件头签名
@@ -65,6 +71,7 @@ class ValidationReport:
     Attributes:
         scenes: 合法的场景图片数量。
         templates: 合法的模板图片数量。
+        state_samples: 各状态样本分组的合法图片数量（``分组名 -> 数量``）。
         skin_directories: 出现过的皮肤目录名集合。
         scene_directories: 出现过的场景目录相对路径集合。
         template_groups: 出现过的模板分组集合。
@@ -76,6 +83,7 @@ class ValidationReport:
 
     scenes: int = 0
     templates: int = 0
+    state_samples: dict[str, int] = field(default_factory=dict)
     skin_directories: set[str] = field(default_factory=set)
     scene_directories: set[str] = field(default_factory=set)
     template_groups: set[str] = field(default_factory=set)
@@ -264,6 +272,46 @@ def _validate_templates(root: Path, report: ValidationReport) -> None:
     _collect_non_png_files(root, "templates", report)
 
 
+def _validate_states(root: Path, report: ValidationReport) -> None:
+    """校验 ``states/`` 状态样本目录（宽松命名，只校验结构与 PNG 有效性）。
+
+    ``states/`` 下的样本由人工标注（文件名含中文），因此不做命名规范校验；
+    该目录下出现的非 PNG 条目（例如数据归档 ``*.zip``）记为提示而非错误。
+    """
+    if not root.is_dir():
+        report.warnings.append("states/ 不存在（尚未采集状态样本？）")
+        return
+
+    for entry in sorted(root.iterdir()):
+        if entry.is_dir():
+            if entry.name not in ALLOWED_STATE_GROUPS:
+                report.invalid.append(
+                    f"{entry.as_posix()}: 未知状态样本目录"
+                    f"（允许: {', '.join(ALLOWED_STATE_GROUPS)}）"
+                )
+            continue
+        if entry.name not in ALLOWED_NON_PNG_FILES:
+            report.warnings.append(f"{entry.as_posix()}: states 根目录下的非样本条目（已忽略）")
+
+    for group in ALLOWED_STATE_GROUPS:
+        directory = root / group
+        if not directory.is_dir():
+            report.warnings.append(f"states/{group} 不存在（尚未采集该组样本？）")
+            continue
+        count = 0
+        for path in sorted(directory.rglob("*.png")):
+            label = f"states/{path.relative_to(root).as_posix()}"
+            if path.parent != directory:
+                report.invalid.append(f"{label}: 状态样本目录下不应再包含子目录")
+                continue
+            error = check_png(path)
+            if error:
+                report.invalid.append(f"{label}: {error}")
+                continue
+            count += 1
+        report.state_samples[group] = count
+
+
 def _validate_root_entries(dataset_root: Path, report: ValidationReport) -> None:
     """检查 ``dataset/`` 根目录下是否有未登记的条目（例如旧结构残留）。"""
     for entry in sorted(dataset_root.iterdir()):
@@ -287,6 +335,7 @@ def validate(dataset_root: Path) -> ValidationReport:
     _validate_root_entries(dataset_root, report)
     _validate_scenes(dataset_root / "scenes", report)
     _validate_templates(dataset_root / "templates", report)
+    _validate_states(dataset_root / "states", report)
     return report
 
 
@@ -314,6 +363,13 @@ def print_report(dataset_root: Path, report: ValidationReport) -> None:
     print()
     print("Templates:")
     print(f"{report.templates} images ({len(report.template_groups)} groups)")
+    print()
+    print("States:")
+    if report.state_samples:
+        for group, count in report.state_samples.items():
+            print(f"{group}: {count} images")
+    else:
+        print("none")
     print()
 
     sections = (

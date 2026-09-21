@@ -106,6 +106,30 @@ ocr:
     # 二值化阈值（0-255）
     threshold: 128
 
+state:
+  # 游戏状态识别（Phase 3.0）：Frame -> StateResult（yard | transition | unknown）
+  # 只做视觉识别，不做状态转移、不触发任何交互
+  transition:
+    # 转场/加载插画内容多变，禁止整图比较，只使用底部固定条带
+    enabled: true
+    # 底部裁剪比例（条带高度 / 帧高度）；实测条带 58px / 完整帧 961px ≈ 0.06
+    crop_height_ratio: 0.06
+    # 条带统一缩放尺寸（吸收不同窗口尺寸的差异，约保持条带原始宽高比）
+    resize_width: 640
+    resize_height: 22
+    # 正样本相似度下限
+    threshold: 0.85
+    # 负样本间隔：要求"正样本最高分 - 负样本最高分"不低于该值
+    # （实测留一法：正样本 gap ≥ 0.049、负样本 gap ≤ 0.014，0.03 为区间中值）
+    negative_margin: 0.03
+    # 宽高比（宽/高）不低于该值时视为"输入本身已经是条带"，不再裁剪
+    # （条带样本约 29:1，完整帧约 1.8:1）
+    strip_aspect_ratio: 8.0
+  yard:
+    # 庭院识别复用场景识别能力；threshold 会覆盖 scene.matcher.threshold
+    enabled: true
+    threshold: 0.85
+
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL
   dir: "logs"

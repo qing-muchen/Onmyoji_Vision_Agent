@@ -27,6 +27,8 @@ logs/*
 dataset/**/*.png
 dataset/**/*.jpg
 dataset/**/*.jpeg
+# 数据归档（例如 non_transition_bottom.zip）同样不入库
+dataset/**/*.zip
 !dataset/.gitkeep
 !dataset/README.md
 models/*

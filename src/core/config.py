@@ -68,6 +68,19 @@ DEFAULT_FUSION_OCR_WEIGHT: float = 0.4
 DEFAULT_FUSION_IOU_THRESHOLD: float = 0.3
 #: 只有 OCR 命中时的置信度折价（缺少视觉定位，降权但不丢弃）
 DEFAULT_OCR_ONLY_FACTOR: float = 0.9
+#: 默认的转场底部裁剪比例（条带高度 / 帧高度；实测 58 / 961 ≈ 0.06）
+DEFAULT_TRANSITION_CROP_HEIGHT_RATIO: float = 0.06
+#: 转场条带统一缩放宽度（吸收不同帧尺寸的差异）
+DEFAULT_TRANSITION_RESIZE_WIDTH: int = 640
+#: 转场条带统一缩放高度（保持条带原始宽高比，约 1706:58 ≈ 29.4:1 → 640:22）
+DEFAULT_TRANSITION_RESIZE_HEIGHT: int = 22
+#: 默认的状态判定阈值（转场正样本相似度下限 / 庭院场景相似度下限）
+DEFAULT_STATE_THRESHOLD: float = 0.85
+#: 默认的负样本间隔：正样本最高分需比负样本最高分至少高出的量
+#: （实测留一法：正样本 gap ≥ 0.049，负样本 gap ≤ 0.014，取区间中值以保证泛化余量）
+DEFAULT_TRANSITION_NEGATIVE_MARGIN: float = 0.03
+#: 判定"输入本身就是底部条带"的宽高比下限（宽/高；条带约 29:1，完整帧约 1.8:1）
+DEFAULT_TRANSITION_STRIP_ASPECT_RATIO: float = 8.0
 #: 二值化阈值的合法范围
 GRAYSCALE_MAX_VALUE: int = 255
 
@@ -355,6 +368,57 @@ class OCRConfig(StrictModel):
     preprocess: OCRPreprocessConfig = Field(default_factory=OCRPreprocessConfig)
 
 
+class StateTransitionConfig(StrictModel):
+    """转场状态识别配置（Phase 3.0）。
+
+    转场插画随角色 / 活动主题剧烈变化，因此**只使用底部固定条带**识别：把帧底部按
+    ``crop_height_ratio`` 裁下来，统一缩放到 ``resize_width x resize_height`` 后与
+    ``dataset/states/transition_bottom`` 的正样本比较，并用
+    ``dataset/states/non_transition_bottom`` 的负样本做否决。
+
+    Attributes:
+        enabled: 是否启用转场识别。
+        crop_height_ratio: 底部裁剪比例（条带高度 / 帧高度）。
+        resize_width: 条带统一缩放宽度。
+        resize_height: 条带统一缩放高度。
+        threshold: 正样本相似度下限。
+        negative_margin: 负样本间隔（要求"正样本最高分 - 负样本最高分"不低于该值）。
+        strip_aspect_ratio: 宽高比（宽/高）不低于该值时，输入被视为**已经是条带**，
+            不再裁剪——正样本数据本身就是条带（约 29:1），而完整帧约 1.8:1。
+    """
+
+    enabled: bool = True
+    crop_height_ratio: float = Field(default=DEFAULT_TRANSITION_CROP_HEIGHT_RATIO, gt=0.0, le=1.0)
+    resize_width: int = Field(default=DEFAULT_TRANSITION_RESIZE_WIDTH, ge=8)
+    resize_height: int = Field(default=DEFAULT_TRANSITION_RESIZE_HEIGHT, ge=1)
+    threshold: float = Field(default=DEFAULT_STATE_THRESHOLD, gt=0.0, le=1.0)
+    negative_margin: float = Field(default=DEFAULT_TRANSITION_NEGATIVE_MARGIN, ge=0.0, le=1.0)
+    strip_aspect_ratio: float = Field(
+        default=DEFAULT_TRANSITION_STRIP_ASPECT_RATIO, gt=1.0, le=100.0
+    )
+
+
+class StateYardConfig(StrictModel):
+    """庭院状态识别配置（Phase 3.0）。
+
+    庭院识别复用场景识别能力（``scene`` 模块），本配置只声明开关与阈值。
+
+    Attributes:
+        enabled: 是否启用庭院识别。
+        threshold: 场景相似度下限（低于该值不算庭院）。
+    """
+
+    enabled: bool = True
+    threshold: float = Field(default=DEFAULT_STATE_THRESHOLD, gt=0.0, le=1.0)
+
+
+class StateConfig(StrictModel):
+    """游戏状态识别配置（Phase 3.0）。"""
+
+    transition: StateTransitionConfig = Field(default_factory=StateTransitionConfig)
+    yard: StateYardConfig = Field(default_factory=StateYardConfig)
+
+
 class AppConfig(StrictModel):
     """应用总配置，聚合所有子模块配置。"""
 
@@ -367,6 +431,7 @@ class AppConfig(StrictModel):
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
     scene: SceneConfig = Field(default_factory=SceneConfig)
     ocr: OCRConfig = Field(default_factory=OCRConfig)
+    state: StateConfig = Field(default_factory=StateConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     def log_dir(self) -> Path:

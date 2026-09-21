@@ -61,3 +61,15 @@ class OCRProviderUnavailableError(OCRError):
     而不是把缺失当成"画面上没有文字"。
     """
 
+
+class StateError(OnmyojiVisionError):
+    """游戏状态识别相关错误的基类。"""
+
+
+class StateDataError(StateError):
+    """状态样本数据缺失或无法读取时抛出（例如启用转场识别但没有正样本）。
+
+    与 :class:`OCRProviderUnavailableError` 同理：把"数据缺失"与"识别不出状态"
+    区分开，避免把缺失静默当成 UNKNOWN。
+    """
+

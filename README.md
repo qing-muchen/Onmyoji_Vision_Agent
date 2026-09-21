@@ -63,8 +63,21 @@ UI 元素也能稳定定位（纯像素模板匹配对此类元素不可靠）�
 22. `detector.ocr.targets` / `detector.fusion` 配置段 —— 文字目标、权重、IoU 阈值与折价系数**全部配置驱动**；
 23. `examples/detector_debug_demo.py` —— 真实验证 Demo（红 = 最终结果、蓝 = OCR、绿 = 模板）。
 
-**尚未实现**：YOLO / 深度学习模型与训练、鼠标点击、键盘输入、状态机、任务系统、
-自动挂机逻辑，以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，
+**Phase 3.0 — State Classification Foundation（已完成）**：把帧映射到游戏状态（三态）：
+
+24. `StateClassifier` —— 编排"转场（强特征，优先）→ 庭院 → unknown"，输出 `StateResult`
+    （`state_name / confidence / source / detail`，**不含坐标**）；
+25. `TransitionClassifier` —— 只使用**底部固定条带**识别转场（插画整图不可比）：
+    `TransitionBottomExtractor` 按 `state.transition.crop_height_ratio` 裁剪，
+    `TransitionBottomMatcher` 统一尺寸 + 灰度 + 归一化 MAE（**复用 scene 的相似度实现**，不复制代码）；
+26. **正负样本双侧判别** —— 要求 `positive >= threshold` **且**
+    `positive - negative >= negative_margin`，避免"普通界面底部也是深色 UI 栏"被误判为转场；
+27. `YardClassifier` —— 包装 `SceneClassifier`（判定阈值由 `state.yard.threshold` 决定），
+    不复制任何场景匹配代码。
+
+**尚未实现**：YOLO / 深度学习模型与训练、鼠标点击、键盘输入、**状态转移与状态机**
+（Phase 3.0 只回答"当前是什么状态"，不回答"接下来该做什么"——后者属于 `src/state`）、
+任务系统、自动挂机逻辑，以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，
 Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
 ## 目录结构
@@ -74,6 +87,7 @@ Onmyoji_Vision_Agent/
 ├── configs/
 │   └── config.yaml               # 唯一的运行期配置来源
 ├── dataset/                      # 截图/标注数据集（内容不入库）
+│                                 #   scenes/ 场景、templates/ UI 模板、states/ 状态样本
 ├── docs/                         # 设计文档
 ├── examples/
 │   ├── capture_demo.py               # 采集链路 Demo（Foreground -> Capture）
@@ -82,6 +96,7 @@ Onmyoji_Vision_Agent/
 │   ├── detector_pipeline.py          # 检测链路公共装配与调试绘制（Demo 共用）
 │   ├── detector_debug_demo.py        # 检测调试 Demo（Template + OCR -> Fusion，含可视化）
 │   ├── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
+│   ├── state_classifier_demo.py      # 状态识别 Demo（Frame -> StateResult）
 │   └── ocr_demo.py                   # OCR Demo（Frame -> TextResult）
 ├── logs/                         # 运行日志输出目录
 ├── models/                       # 模型权重（内容不入库）
@@ -128,15 +143,21 @@ Onmyoji_Vision_Agent/
 │   │   │   ├── preprocess.py     #     灰度化 / 统一尺寸缩放
 │   │   │   ├── matcher.py        #     SceneMatcher（整图相似度）
 │   │   │   └── classifier.py     #     SceneClassifier（多模板投票 + 阈值）
-│   │   └── ocr/                  #   文字识别（Phase 2.3）
-│   │       ├── base.py           #     BaseOCREngine 抽象接口
-│   │       ├── models.py         #     RawTextBlock（Provider 原始文本块）
-│   │       ├── result.py         #     TextResult（识别结果，reference 坐标）
-│   │       ├── engine.py         #     OCREngine（Frame -> 预处理 -> Provider -> 结果）
-│   │       ├── preprocess.py     #     灰度化 / 放大 / 二值化 + 坐标映射
-│   │       └── providers/        #     OCR Provider（base / tesseract）
+│   │   ├── ocr/                  #   文字识别（Phase 2.3）
+│   │   │   ├── base.py           #     BaseOCREngine 抽象接口
+│   │   │   ├── models.py         #     RawTextBlock（Provider 原始文本块）
+│   │   │   ├── result.py         #     TextResult（识别结果，reference 坐标）
+│   │   │   ├── engine.py         #     OCREngine（Frame -> 预处理 -> Provider -> 结果）
+│   │   │   ├── preprocess.py     #     灰度化 / 放大 / 二值化 + 坐标映射
+│   │   │   └── providers/        #     OCR Provider（base / tesseract）
+│   │   └── state/                #   游戏状态识别（Phase 3.0）
+│   │       ├── base.py           #     BaseStateClassifier 抽象接口
+│   │       ├── models.py         #     StateName / StateSource / StateResult
+│   │       ├── classifier.py     #     StateClassifier（transition -> yard -> unknown）
+│   │       ├── transition/       #     转场判定：dataset / extractor / matcher / classifier
+│   │       └── yard/             #     庭院判定：包装 SceneClassifier
 │   ├── action/                   # 输入控制层
-│   ├── state/                    # 状态管理层
+│   ├── state/                    # 状态管理层（未来 State Machine，Phase 3 后续）
 │   └── task/                     # 任务调度层
 ├── tests/                        # pytest 测试
 ├── requirements.txt              # 运行时依赖
@@ -189,6 +210,9 @@ python examples/template_detector_demo.py --debug
 
 # 8. Demo：检测调试（红=最终结果 / 蓝=OCR / 绿=模板，输出 examples/detector_debug_result.png）
 python examples/detector_debug_demo.py
+
+# 9. Demo：状态识别（庭院 / 转场 / 未知；--image 支持离线图片）
+python examples/state_classifier_demo.py --image dataset/states/transition_bottom/transition_bottom_003.png
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -206,6 +230,7 @@ python examples/detector_debug_demo.py
 | `detector` | 检测器配置（模板匹配方法、阈值、多尺度比例；OCR 文字目标；融合权重与 IoU 阈值） |
 | `scene` | 场景识别配置（置信度阈值、统一缩放尺寸） |
 | `ocr` | OCR 配置（Provider 名称与语言、预处理放大倍数与二值化阈值） |
+| `state` | 状态识别配置（转场底部裁剪比例、阈值与负样本间隔；庭院阈值） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
 | `logging` | 日志级别、目录、滚动策略与格式 |
 
@@ -235,6 +260,14 @@ python examples/detector_debug_demo.py
 | `ocr.provider.language` | `chi_sim+eng` | 识别语言（Tesseract 语言包，`+` 连接） |
 | `ocr.preprocess.scale` | `2` | OCR 前放大倍数（小字放大后识别率更高） |
 | `ocr.preprocess.threshold` | `128` | 二值化阈值（OpenCV 语义：**大于**阈值取 255） |
+| `state.transition.enabled` | `true` | 是否启用转场识别分支 |
+| `state.transition.crop_height_ratio` | `0.06` | 底部条带裁剪比例（实测条带 58px / 帧 961px） |
+| `state.transition.resize_width` / `resize_height` | `640` / `22` | 条带统一缩放尺寸（吸收窗口尺寸差异） |
+| `state.transition.threshold` | `0.85` | 正样本相似度下限 |
+| `state.transition.negative_margin` | `0.03` | 负样本间隔：正样本最高分需比负样本最高分至少高出的量 |
+| `state.transition.strip_aspect_ratio` | `8.0` | 宽高比不低于该值时视为"输入本身已是条带"，不再裁剪 |
+| `state.yard.enabled` | `true` | 是否启用庭院识别分支 |
+| `state.yard.threshold` | `0.85` | 庭院判定阈值（**覆盖** `scene.matcher.threshold`） |
 
 环境变量可覆盖任意字段，格式为 `OVA_<段>__<字段>`：
 
@@ -793,6 +826,138 @@ python examples/ocr_demo.py
 python examples/ocr_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
 ```
 
+## 游戏状态识别（Frame → StateResult）
+
+```text
+Frame
+        │  TransitionBottomExtractor（按 state.transition.crop_height_ratio 裁出底部条带）
+        ▼
+TransitionClassifier（正样本阈值 + 负样本否决）  ─┐  命中即返回 transition
+                                                  │
+YardClassifier（包装 SceneClassifier）           ─┘  命中即返回 yard
+        │  Fallback（两分支都未命中）
+        ▼
+StateResult(state_name / confidence / source / detail)
+```
+
+判定顺序是固定的：**转场 → 庭院 → unknown**。理由：转场底部条带是**专属强特征**，
+而场景识别是整图相似度、对"庭院风格插画"可能偏高；反过来条带匹配几乎不会对庭院界面
+（底部是普通 UI 栏）给高分。先判转场可避免"转场插画被误判为庭院"。
+
+### 为什么转场不能整图比较
+
+转场 / 加载插画随角色与活动主题剧变（整图无法用模板覆盖），但**底部固定条带**
+（深棕底纹 + 官网提示文字）在所有转场中一致，因此本阶段只比较该条带：
+
+| 组件 | 文件 | 职责 |
+| --- | --- | --- |
+| `TransitionSampleLoader` | `transition/dataset.py` | 加载 `dataset/states` 正/负样本（宽松命名，支持中文文件名与后续扩充） |
+| `TransitionBottomExtractor` | `transition/extractor.py` | 按比例裁底部；宽高比 ≥ `strip_aspect_ratio` 时视为"已是条带"不再裁剪 |
+| `TransitionBottomMatcher` | `transition/matcher.py` | 统一尺寸 + 灰度 + 归一化 MAE（**复用** scene 的 `normalized_similarity` / `resize_to`） |
+| `TransitionClassifier` | `transition/classifier.py` | 正样本阈值 + 负样本否决，输出 `TransitionMatch` |
+| `YardClassifier` | `yard/classifier.py` | 包装 `SceneClassifier`，阈值取 `state.yard.threshold` |
+| `StateClassifier` | `classifier.py` | 三态编排（`from_config` 装配、开关与降级） |
+
+算法选择理由：条带是**固定 UI**（位置固定，无需滑动搜索，故不用 `cv2.matchTemplate`）；
+MAE 计算确定、可解释、**零新依赖**（SSIM 需 scikit-image，直方图会丢失结构）。
+实测表明把条带统一到更大尺寸或改用彩色并不会改善区分度（见下方"实测"），
+因此保持轻量的 `640×22`。
+
+### 正负样本双侧判别
+
+```text
+positive_score = max 相似度(条带, 各 transition_bottom 样本)
+negative_score = max 相似度(条带, 各 non_transition_bottom 样本的底部条带)
+判定 transition ⟺ positive_score >= threshold  且  positive_score - negative_score >= negative_margin
+```
+
+**只判"像不像转场"不够**：阴阳师各界面底部普遍是深色 UI 栏，负样本的 `positive_score`
+可以高到 0.94；因此额外要求"必须比最像的非转场界面更像转场"。样本形态由数据决定，
+使用侧统一归一化：正样本（已裁剪条带）原样使用，负样本（完整截图）按同一比例裁出底部。
+
+### StateResult 格式
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `state_name` | `StateName` | `yard` / `transition` / `unknown` |
+| `confidence` | `float` | `0 <= confidence <= 1`（越界即报错）；`unknown` 时为 `0.0` |
+| `source` | `StateSource` | `scene_classifier` / `transition_bottom_match` / `fallback` |
+| `detail` | `str \| None` | 可读说明，例如 `matched template transition_bottom_003.png (positive=1.0000, negative=0.9454)` |
+
+便捷接口：`result.is_known`、`result.describe()`。**结果不含坐标**（与 `SceneResult` 一致）。
+
+```python
+from src.core import load_config
+from src.vision.state import StateClassifier
+
+config = load_config()
+classifier = StateClassifier.from_config(config)      # 需要 dataset/scenes 与 dataset/states
+result = classifier.classify(frame)
+print(result.describe())   # state=transition confidence=1.0000 source=transition_bottom_match ...
+```
+
+命令行验证（三条用例，真实数据）：
+
+```powershell
+# Case 1：庭院 → yard
+python examples/state_classifier_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
+
+# Case 2：转场条带 → transition
+python examples/state_classifier_demo.py --image dataset/states/transition_bottom/transition_bottom_003.png
+
+# Case 3：普通界面 → unknown
+python examples/state_classifier_demo.py --image dataset/states/non_transition_bottom/战斗准备阶段.png
+
+# 实时采集（需要游戏窗口；否则回退整屏）
+python examples/state_classifier_demo.py
+```
+
+实测结果（本机，Python 3.12.10，1704×960 / 1706×961 真实截图）：
+
+```text
+Case 1  state=yard        confidence=1.0000  source=scene_classifier
+Case 2  state=transition  confidence=1.0000  source=transition_bottom_match
+Case 3  state=unknown     confidence=0.0000  source=fallback
+        detail=transition positive=0.8959 negative=1.0000 threshold=0.85; yard below threshold 0.85
+```
+
+### 数据使用情况
+
+| 数据目录 | 数量 | 用途 |
+| --- | --- | --- |
+| `dataset/scenes/yard/` | 70 张（18 皮肤 × 35 场景目录） | 庭院判定（复用 `SceneClassifier`） |
+| `dataset/states/transition_bottom/` | 10 张（1704×58 ~ 1706×60） | 转场正样本（底部条带） |
+| `dataset/states/non_transition_bottom/` | 43 张（1706×961 ~ 1706×962 等） | 转场负样本（完整界面截图） |
+
+### 阈值是怎么定的（留一法实测）
+
+样本数量有限，因此用**留一法**（评估某张样本时把它从样本集中排除）估计泛化能力，
+避免"自己和自己比"得到的乐观分数：
+
+| 指标（`crop_height_ratio=0.06`） | 实测值 |
+| --- | --- |
+| 正样本 `positive_score`（vs 其余 9 张） | min `0.9914` / mean `0.9973` |
+| 正样本 gap（`positive - negative`） | **≥ `0.0492`** |
+| 负样本 gap（`positive - negative`） | **≤ `0.0142`** |
+| 负样本 `positive_score` | min `0.4431` / mean `0.7821` / max `0.9495` |
+
+两类在 gap 维度可分，分界落在 `(0.0142, 0.0492)`，因此 `negative_margin` 默认取中值
+**`0.03`**。`threshold` 保持 `0.85`（正样本分数有 ~0.14 余量）。
+另外实测 `crop_height_ratio` 取 `0.05 / 0.06 / 0.08` 都能分开（正样本 gap 分别 ≥ 0.045 / 0.049 / 0.055），
+`resize` 尺寸（320×11 ~ 2560×88）与灰度/彩色对分离度影响 < 0.001，故保持 `0.06` + `640×22`。
+
+### 当前限制
+
+* **只支持三态**：`yard` / `transition` / `unknown`；战斗、探索、商店等都归入 `unknown`，
+  尚无更细的界面分类；
+* **区分度有限**：正负样本的 gap 区间只有 `0.014 ~ 0.049`（因为各界面底部 UI 风格接近），
+  未见过的界面可能落进灰区。改进方向（**不在本阶段**）：对条带分区/加权匹配、
+  或引入语义证据（例如 OCR 读取底部"官网 yys.xyz"提示文字）；
+* **样本量小**：10 正 / 43 负，且全部来自本机同一分辨率；换分辨率/活动主题后需补充样本并重跑校准；
+* **Case 1 / Case 2 属"自比"**：demo 的离线用例输入图本身就在数据集里，分数偏乐观；
+  泛化能力只能由上面的留一法数据体现；
+* **未做状态转移**：本阶段不实现"状态持续多久""何时切换"，也不触发任何交互。
+
 ## 代码规范
 
 1. 全部公共函数/方法使用类型注解并编写 docstring（Google 风格）。
@@ -812,8 +977,10 @@ python examples/ocr_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_
 - **Phase 2.1.1（已完成）**：OCR Assisted Detection —— OCR 辅助检测与模板/OCR 结果融合。
 - **Phase 2.2（已完成）**：Scene Classifier Foundation —— 整图场景识别与多模板投票。
 - **Phase 2.3（已完成）**：OCR Foundation —— Provider 架构的文字识别（默认 Tesseract）。
+- **Phase 3.0（已完成）**：State Classification Foundation —— 三态状态识别
+  （庭院 / 转场 / 未知），转场只使用底部固定条带并结合正负样本双侧判别。
 - Phase 2.4：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
-- Phase 2.5：感知融合 —— 把 scene / detector / ocr 的结果组合成统一的界面描述（仍不做决策）。
+- Phase 2.5：感知融合 —— 把 scene / detector / ocr / state 的结果组合成统一的界面描述（仍不做决策）。
 - Phase 3：State Machine —— 界面状态建模与转移（`src/state`）。
 - Phase 4：Action Engine —— 受控的键鼠输入与安全约束（`src/action`，坐标一律经 `CoordinateTransform` 映射）。
 - Phase 5：Task System —— 任务编排、重试与中断处理（`src/task`）。
