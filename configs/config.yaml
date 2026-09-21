@@ -74,6 +74,20 @@ scene:
     resize_width: 640
     resize_height: 360
 
+ocr:
+  # OCR 识别（Phase 2.3）：读取屏幕文字；不解读文字含义、不做决策
+  provider:
+    # 识别引擎：tesseract（后续可扩展 paddle / easyocr / windows）
+    name: "tesseract"
+    # Tesseract 语言包，多语言用 + 连接
+    language: "chi_sim+eng"
+  preprocess:
+    # 预处理顺序：灰度化 -> 放大 -> 二值化
+    # 放大倍数（小字放大后识别率更高）
+    scale: 2
+    # 二值化阈值（0-255）
+    threshold: 128
+
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL
   dir: "logs"

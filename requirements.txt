@@ -7,6 +7,10 @@ opencv-python>=4.9,<5
 numpy>=1.26,<3
 pillow>=10.2
 
+# --- OCR ---
+# pytesseract 只是 Tesseract 的 Python 封装；Tesseract 可执行文件需另行安装
+pytesseract>=0.3.10
+
 # --- 屏幕采集 ---
 mss>=9.0
 dxcam>=0.0.5; sys_platform == "win32"

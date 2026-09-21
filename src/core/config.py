@@ -54,6 +54,14 @@ DEFAULT_SCENE_THRESHOLD: float = 0.85
 DEFAULT_SCENE_RESIZE_WIDTH: int = 640
 #: 场景匹配前的统一缩放高度
 DEFAULT_SCENE_RESIZE_HEIGHT: int = 360
+#: 默认的 OCR 预处理放大倍数（小字放大后识别率更高）
+DEFAULT_OCR_SCALE: float = 2.0
+#: 默认的 OCR 二值化阈值
+DEFAULT_OCR_THRESHOLD: int = 128
+#: 默认的 OCR 识别语言（简体中文 + 英文）
+DEFAULT_OCR_LANGUAGE: str = "chi_sim+eng"
+#: 二值化阈值的合法范围
+GRAYSCALE_MAX_VALUE: int = 255
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 #: 允许的日志级别（与 :data:`LogLevel` 保持一致）
@@ -62,6 +70,8 @@ CaptureBackend = Literal["auto", "dxcam", "mss"]
 WindowMatchMode = Literal["exact", "contains", "regex"]
 #: 允许的模板匹配方法（仅限归一化方法，保证分数可映射到 [0, 1]）
 TemplateMatchMethod = Literal["TM_CCOEFF_NORMED", "TM_CCORR_NORMED", "TM_SQDIFF_NORMED"]
+#: 允许的 OCR Provider（后续可扩展 paddle / easyocr / windows）
+OCRProviderName = Literal["tesseract"]
 Region = tuple[int, int, int, int]
 Resolution = tuple[int, int]
 
@@ -242,6 +252,39 @@ class SceneConfig(StrictModel):
     matcher: SceneMatcherConfig = Field(default_factory=SceneMatcherConfig)
 
 
+class OCRProviderConfig(StrictModel):
+    """OCR Provider 配置。
+
+    ``name`` 决定使用哪个识别引擎；业务层只依赖 :class:`OCRProvider` 接口，
+    因此替换引擎（paddle / easyocr / windows）只需改这里与新增一个 Provider。
+    """
+
+    name: OCRProviderName = "tesseract"
+    language: str = DEFAULT_OCR_LANGUAGE
+
+    @field_validator("language")
+    @classmethod
+    def _validate_language(cls, value: str) -> str:
+        """校验识别语言不能为空（Tesseract 用 ``+`` 连接多语言，例如 chi_sim+eng）。"""
+        if not value.strip():
+            raise ValueError("ocr.provider.language 不能为空")
+        return value
+
+
+class OCRPreprocessConfig(StrictModel):
+    """OCR 图像预处理配置（灰度化 -> 放大 -> 二值化）。"""
+
+    scale: float = Field(default=DEFAULT_OCR_SCALE, gt=0.0)
+    threshold: int = Field(default=DEFAULT_OCR_THRESHOLD, ge=0, le=GRAYSCALE_MAX_VALUE)
+
+
+class OCRConfig(StrictModel):
+    """OCR 配置。"""
+
+    provider: OCRProviderConfig = Field(default_factory=OCRProviderConfig)
+    preprocess: OCRPreprocessConfig = Field(default_factory=OCRPreprocessConfig)
+
+
 class AppConfig(StrictModel):
     """应用总配置，聚合所有子模块配置。"""
 
@@ -253,6 +296,7 @@ class AppConfig(StrictModel):
     window: WindowConfig = Field(default_factory=WindowConfig)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
     scene: SceneConfig = Field(default_factory=SceneConfig)
+    ocr: OCRConfig = Field(default_factory=OCRConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     def log_dir(self) -> Path:

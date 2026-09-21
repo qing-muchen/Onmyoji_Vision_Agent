@@ -46,8 +46,15 @@
 15. `SceneClassifier` —— 同一场景多张截图**取最高置信度**，输出 `SceneResult`
     （`scene_type / skin / scene_id / confidence / template_id`，**不含坐标**）。
 
-**尚未实现**：OCR、YOLO / 深度学习模型与训练、鼠标点击、键盘输入、状态机、任务系统、
-自动挂机逻辑与任何更进一步的游戏内容理解（界面语义判断、界面跳转）。
+**Phase 2.3 — OCR Foundation（已完成）**：读取屏幕文字（Provider 架构便于替换引擎）：
+
+16. `OCREngine` —— 编排 `Frame → 预处理 → Provider → TextResult`，并统一转换到参考分辨率坐标系；
+17. `OCRProvider` / `TesseractProvider` —— Provider 接口与 Tesseract 实现（默认 `chi_sim+eng`）；
+18. `OCRPreprocessor` —— 灰度化 / 放大 / 二值化（参数来自配置）；
+19. `TextResult` —— `text / confidence / rect(reference) / language / provider`。
+
+**尚未实现**：YOLO / 深度学习模型与训练、鼠标点击、键盘输入、状态机、任务系统、
+自动挂机逻辑，以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"）。
 
 ## 目录结构
 
@@ -61,7 +68,8 @@ Onmyoji_Vision_Agent/
 │   ├── capture_demo.py               # 采集链路 Demo（Foreground -> Capture）
 │   ├── frame_pipeline_demo.py        # 帧流水线 Demo（Capture -> Buffer -> Stability）
 │   ├── template_detector_demo.py     # 模板检测 Demo（Frame -> Detector -> Result）
-│   └── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
+│   ├── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
+│   └── ocr_demo.py                   # OCR Demo（Frame -> TextResult）
 ├── logs/                         # 运行日志输出目录
 ├── models/                       # 模型权重（内容不入库）
 ├── src/
@@ -103,7 +111,13 @@ Onmyoji_Vision_Agent/
 │   │   │   ├── preprocess.py     #     灰度化 / 统一尺寸缩放
 │   │   │   ├── matcher.py        #     SceneMatcher（整图相似度）
 │   │   │   └── classifier.py     #     SceneClassifier（多模板投票 + 阈值）
-│   │   └── ocr/                  #   文字识别（后续阶段）
+│   │   └── ocr/                  #   文字识别（Phase 2.3）
+│   │       ├── base.py           #     BaseOCREngine 抽象接口
+│   │       ├── models.py         #     RawTextBlock（Provider 原始文本块）
+│   │       ├── result.py         #     TextResult（识别结果，reference 坐标）
+│   │       ├── engine.py         #     OCREngine（Frame -> 预处理 -> Provider -> 结果）
+│   │       ├── preprocess.py     #     灰度化 / 放大 / 二值化 + 坐标映射
+│   │       └── providers/        #     OCR Provider（base / tesseract）
 │   ├── action/                   # 输入控制层
 │   ├── state/                    # 状态管理层
 │   └── task/                     # 任务调度层
@@ -125,6 +139,9 @@ from src.vision.detector import SomeDetector  # 待后续阶段实现
 
 - Python 3.11+（开发环境验证于 3.13）
 - Windows（`dxcam` 后端依赖 Windows Desktop Duplication API；跨平台场景可切换 `mss` 后端）
+- **OCR（可选）**：`pytesseract` 由 `requirements.txt` 安装，但 **Tesseract 可执行文件需另行安装**
+  （[tesseract-ocr](https://github.com/tesseract-ocr/tesseract)），并安装 `chi_sim` 与 `eng` 语言包。
+  未安装时 OCR 相关功能会抛出 `OCRProviderUnavailableError`（明确报错，不会静默返回空结果）。
 
 ## 快速开始
 
@@ -165,6 +182,7 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `calibration` | 参考分辨率（视觉模型/模板基于的逻辑分辨率） |
 | `detector` | 检测器配置（模板匹配方法、阈值、多尺度比例） |
 | `scene` | 场景识别配置（置信度阈值、统一缩放尺寸） |
+| `ocr` | OCR 配置（Provider 名称与语言、预处理放大倍数与二值化阈值） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
 | `logging` | 日志级别、目录、滚动策略与格式 |
 
@@ -185,6 +203,10 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `detector.template.scales` | `[0.8 … 1.2]` | 多尺度搜索比例（默认覆盖 ±20%） |
 | `scene.matcher.threshold` | `0.85` | 低于该相似度的场景不输出 |
 | `scene.matcher.resize_width` / `resize_height` | `640` / `360` | 比较前统一缩放到的尺寸 |
+| `ocr.provider.name` | `tesseract` | OCR 引擎（后续可扩展 paddle / easyocr / windows） |
+| `ocr.provider.language` | `chi_sim+eng` | 识别语言（Tesseract 语言包，`+` 连接） |
+| `ocr.preprocess.scale` | `2` | OCR 前放大倍数（小字放大后识别率更高） |
+| `ocr.preprocess.threshold` | `128` | 二值化阈值（OpenCV 语义：**大于**阈值取 255） |
 
 环境变量可覆盖任意字段，格式为 `OVA_<段>__<字段>`：
 
@@ -497,6 +519,100 @@ python examples/scene_classifier_demo.py
 python examples/scene_classifier_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
 ```
 
+## 文字识别（Frame → TextResult）
+
+```text
+Frame(image, coordinate_transform)
+        │  OCRPreprocessor.apply()：灰度化 -> 放大（scale）-> 二值化（threshold）
+        ▼
+OCRProvider.recognize(prepared_image)           # 具体引擎（默认 tesseract）
+        │  RawTextBlock(text, confidence, rect) —— 坐标位于【放大后的图像】坐标系
+        ▼
+OCREngine.recognize(frame)                      # 唯一做坐标转换的地方
+        │  rect / scale -> 帧坐标 -> CoordinateTransform.current_rect_to_reference()
+        ▼
+list[TextResult]（text / confidence / rect(reference) / language / provider）
+```
+
+### OCR 模块职责
+
+`src/vision/ocr` 只负责**把屏幕上的文字读出来**：不解读文字含义、不做判断与决策、
+不触发任何交互。
+
+| 组件 | 文件 | 职责 |
+| --- | --- | --- |
+| `BaseOCREngine` | `base.py` | 抽象接口：`recognize(frame) -> list[TextResult]`（输入必须是 `Frame`） |
+| `OCREngine` | `engine.py` | 流程编排 + **唯一的坐标转换点** + 结果排序 |
+| `OCRPreprocessor` | `preprocess.py` | 灰度化 / 放大 / 二值化，以及"放大图 → 帧坐标"的映射 |
+| `OCRProvider` | `providers/base.py` | Provider 接口：`recognize(image) -> list[RawTextBlock]` |
+| `TesseractProvider` | `providers/tesseract.py` | Tesseract 实现（`image_to_data` 逐词结果按行合并、中文空格清理） |
+| `TextResult` / `RawTextBlock` | `result.py` / `models.py` | 对外结果 / Provider 原始文本块 |
+
+### Provider 设计
+
+```text
+OCREngine  ──►  OCRProvider（接口）  ──►  TesseractProvider（实现）
+                                      └►  未来的 PaddleOCR / EasyOCR / Windows OCR
+```
+
+* 业务层只依赖 `OCRProvider` 接口，替换引擎时**不改动 Engine**：在
+  `providers/__init__.py` 的 `PROVIDER_REGISTRY` 注册新实现，并修改 `ocr.provider.name` 即可；
+* Provider 的输入是**裸图像**（它属于最底层，不应依赖 `Frame`），输出是 `RawTextBlock`，
+  坐标位于传入图像的坐标系——Provider **不知道** reference 坐标系的存在；
+* 引擎负责把 Provider 结果换算为 `TextResult`：先 `rect / scale` 还原到帧坐标，
+  再经 `CoordinateTransform.current_rect_to_reference()` 得到 reference 坐标。
+
+### 环境缺失的处理
+
+* `pytesseract` 未安装或 Tesseract 可执行文件不可用 → 抛 `OCRProviderUnavailableError`
+  （**明确异常**，而不是返回空结果——否则调用方会把"环境缺失"误判成"画面上没有文字"）；
+* `OCREngine.is_provider_available()` 提供不抛异常的可用性检查，便于调用方提前降级；
+* `examples/ocr_demo.py` 在引擎不可用时会打印安装提示并以失败码退出，不会崩溃。
+
+### TextResult 格式
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `text` | `str` | 识别出的文字（已去除首尾空白） |
+| `confidence` | `float` | 识别置信度，`0 <= confidence <= 1`（越界即报错） |
+| `rect` | `Rect` | 文字区域，**参考分辨率坐标系**（复用 `src/core/geometry.py` 的 `Rect`） |
+| `language` | `str` | 识别语言，例如 `chi_sim+eng` |
+| `provider` | `str` | 产生结果的引擎名，例如 `tesseract` |
+
+### 与 Detector / Scene 的关系
+
+三个模块同级、互不依赖，只是回答不同的问题：
+
+| 模块 | 回答的问题 | 结果模型 | 坐标 |
+| --- | --- | --- | --- |
+| `detector`（Phase 2.1） | UI 元素**在哪** | `DetectionResult` | reference 坐标（需要 transform） |
+| `scene`（Phase 2.2） | 当前**在哪里** | `SceneResult` | 无坐标（整图判断） |
+| `ocr`（Phase 2.3） | 画面上**写了什么** | `TextResult` | reference 坐标（需要 transform） |
+
+三者都由 `core` + `capture` 支撑，输出可以组合使用（例如"场景是庭院 + 文字是『探索』"），
+但**组合与决策属于后续阶段的编排层**，本阶段不实现。
+
+```python
+from src.core import load_config
+from src.vision.ocr import OCREngine
+
+config = load_config()
+engine = OCREngine.from_config(config.ocr)
+if engine.is_provider_available():
+    for result in engine.recognize(frame):
+        print(result.describe())   # '探索' confidence=0.9500 rect=(56, 28, 23x11) provider=tesseract
+```
+
+命令行验证：
+
+```powershell
+# 需要本机安装 Tesseract（未安装时会给出明确提示与安装指引）
+python examples/ocr_demo.py
+
+# 离线图片
+python examples/ocr_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
+```
+
 ## 代码规范
 
 1. 全部公共函数/方法使用类型注解并编写 docstring（Google 风格）。
@@ -514,8 +630,9 @@ python examples/scene_classifier_demo.py --image dataset/scenes/yard/skin_001/sc
 - **Phase 2.0（已完成）**：Dataset Organization —— 数据集结构与命名标准化、校验脚本。
 - **Phase 2.1（已完成）**：Template Detector Foundation —— 模板匹配检测器。
 - **Phase 2.2（已完成）**：Scene Classifier Foundation —— 整图场景识别与多模板投票。
-- Phase 2.3：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
-- Phase 2.4：OCR —— 界面文字读取（`src/vision/ocr`）。
+- **Phase 2.3（已完成）**：OCR Foundation —— Provider 架构的文字识别（默认 Tesseract）。
+- Phase 2.4：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
+- Phase 2.5：感知融合 —— 把 scene / detector / ocr 的结果组合成统一的界面描述（仍不做决策）。
 - Phase 3：State Machine —— 界面状态建模与转移（`src/state`）。
 - Phase 4：Action Engine —— 受控的键鼠输入与安全约束（`src/action`，坐标一律经 `CoordinateTransform` 映射）。
 - Phase 5：Task System —— 任务编排、重试与中断处理（`src/task`）。

@@ -49,3 +49,15 @@ class SceneTemplateError(SceneError):
 class SceneLoadError(SceneError):
     """场景数据集目录不存在或场景图像无法读取时抛出。"""
 
+
+class OCRError(OnmyojiVisionError):
+    """OCR 识别相关错误的基类。"""
+
+
+class OCRProviderUnavailableError(OCRError):
+    """OCR Provider 依赖的引擎不可用时抛出（例如系统未安装 Tesseract）。
+
+    该异常用于把"环境缺失"与"识别结果为空"区分开：调用方可以据此降级或提示用户，
+    而不是把缺失当成"画面上没有文字"。
+    """
+

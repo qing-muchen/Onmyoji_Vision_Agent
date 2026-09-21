@@ -38,6 +38,7 @@ configs/config.local.yaml
 # Demo 运行产物（含真实屏幕内容，不入库）
 examples/sample_frame.png
 examples/detection_result.png
+examples/ocr_result.png
 
 # Agent 工具与本地临时目录
 .reasonix/
