@@ -65,6 +65,15 @@ detector:
       - 1.1
       - 1.2
 
+scene:
+  # 场景识别（Phase 2.2）：整图判断"当前在哪里"，不涉及坐标
+  matcher:
+    # 置信度阈值：低于该值的场景不输出
+    threshold: 0.85
+    # 比较前把当前帧与场景模板统一缩放到该尺寸（降低窗口尺寸差异的影响）
+    resize_width: 640
+    resize_height: 360
+
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL
   dir: "logs"

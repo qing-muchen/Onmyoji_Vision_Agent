@@ -37,3 +37,15 @@ class TemplateParseError(TemplateError):
 class TemplateLoadError(TemplateError):
     """模板目录不存在或模板图像无法读取时抛出。"""
 
+
+class SceneError(OnmyojiVisionError):
+    """场景识别相关错误的基类。"""
+
+
+class SceneTemplateError(SceneError):
+    """场景模板文件名或目录结构无法解析时抛出（不做任何猜测）。"""
+
+
+class SceneLoadError(SceneError):
+    """场景数据集目录不存在或场景图像无法读取时抛出。"""
+

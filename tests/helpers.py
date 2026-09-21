@@ -1,6 +1,6 @@
-"""测试辅助工具：构造模板检测用的合成场景。
+"""测试辅助工具：构造检测/分类测试用的合成图像。
 
-这些函数不依赖真实游戏画面与真实数据集，供 matcher / detector 测试共用，
+这些函数不依赖真实游戏画面与真实数据集，供 matcher / detector / scene 测试共用，
 避免在每个测试文件中重复拼装图像。
 """
 
@@ -16,9 +16,12 @@ from src.vision.detector.template.preprocess import resize_image
 __all__ = [
     "DEFAULT_FRAME_SIZE",
     "DEFAULT_PASTE_POSITION",
+    "DEFAULT_SCENE_IMAGE_SIZE",
     "DEFAULT_TEMPLATE_SIZE",
     "Scene",
     "build_scene",
+    "build_scene_image",
+    "perturb_image",
 ]
 
 #: 默认帧尺寸 ``(width, height)``
@@ -27,6 +30,8 @@ DEFAULT_FRAME_SIZE: tuple[int, int] = (240, 180)
 DEFAULT_TEMPLATE_SIZE: tuple[int, int] = (40, 30)
 #: 默认模板贴入位置 ``(x, y)``
 DEFAULT_PASTE_POSITION: tuple[int, int] = (60, 45)
+#: 默认场景图尺寸 ``(width, height)``
+DEFAULT_SCENE_IMAGE_SIZE: tuple[int, int] = (320, 180)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,3 +85,74 @@ def build_scene(
         template_image=template,
         rect_in_frame=Rect(x=x, y=y, width=width, height=height),
     )
+
+
+def build_scene_image(
+    size: tuple[int, int] = DEFAULT_SCENE_IMAGE_SIZE,
+    *,
+    seed: int = 0,
+    blocks: int = 5,
+) -> np.ndarray:
+    """生成一张**有结构**的模拟游戏画面（渐变背景 + 随机色块 + 轻微噪声）。
+
+    注意：不能使用纯随机噪声图——场景比较会先把图像缩小到统一尺寸（``INTER_AREA`` 平均），
+    高频噪声会被平均掉，导致不同画面也显得高度相似。渐变与色块模拟了真实界面的
+    大尺度结构，缩放后依然保留差异。
+
+    Args:
+        size: 图像尺寸 ``(width, height)``。
+        seed: 随机种子。
+        blocks: 随机色块数量。
+
+    Returns:
+        BGR 图像。
+    """
+    rng = np.random.default_rng(seed)
+    width, height = size
+
+    background = np.linspace(0, 255, height, dtype=np.float32)[:, None]
+    background = np.repeat(background, width, axis=1)
+    image = np.stack([background * 0.6, background * 0.8, background], axis=2)
+
+    for _ in range(blocks):
+        block_width = int(rng.integers(max(2, width // 8), max(3, width // 3)))
+        block_height = int(rng.integers(max(2, height // 8), max(3, height // 3)))
+        left = int(rng.integers(0, max(1, width - block_width)))
+        top = int(rng.integers(0, max(1, height - block_height)))
+        image[top : top + block_height, left : left + block_width] = rng.integers(0, 256, 3)
+
+    image = image + rng.normal(0.0, 2.0, image.shape)
+    return np.clip(image, 0, 255).astype(np.uint8)
+
+
+def perturb_image(
+    image: np.ndarray,
+    *,
+    noise: float = 0.0,
+    block_ratio: float = 0.0,
+    seed: int = 0,
+) -> np.ndarray:
+    """生成图像变体：加噪声与/或改变局部区域。
+
+    Args:
+        image: 原始 BGR 图像。
+        noise: 高斯噪声标准差（0 表示不加噪声）。
+        block_ratio: 需要改写的面积比例（0 表示不改写，1 表示整图改写）。
+        seed: 随机种子。
+
+    Returns:
+        变体图像（新数组，不修改原图）。
+    """
+    if not 0.0 <= block_ratio <= 1.0:
+        raise ValueError(f"block_ratio 必须落在 [0, 1] 区间内: {block_ratio}")
+
+    rng = np.random.default_rng(seed)
+    result = image.astype(np.float32)
+    if noise > 0:
+        result = result + rng.normal(0.0, noise, result.shape)
+    if block_ratio > 0:
+        height, width = image.shape[:2]
+        block_height = max(1, int(height * block_ratio))
+        block_width = max(1, int(width * block_ratio))
+        result[:block_height, :block_width] = rng.integers(0, 256, (block_height, block_width, 3))
+    return np.clip(result, 0, 255).astype(np.uint8)

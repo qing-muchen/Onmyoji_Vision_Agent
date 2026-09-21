@@ -39,8 +39,15 @@
 11. `TemplateMatcher` —— 单模板多尺度匹配（`cv2.matchTemplate`，默认 `TM_CCOEFF_NORMED`）；
 12. `TemplateDetector` —— 实现 `Detector` 接口，输出**参考分辨率坐标系**下的 `DetectionResult`。
 
+**Phase 2.2 — Scene Classifier Foundation（已完成）**：整图场景识别（判断"当前在哪里"）：
+
+13. `SceneLoader` —— 从 `dataset/scenes/` 加载场景模板并解析 `scene_type / skin / scene / frame`；
+14. `SceneMatcher` —— 统一尺寸 + 灰度化后计算整图相似度（归一化 MAE）；
+15. `SceneClassifier` —— 同一场景多张截图**取最高置信度**，输出 `SceneResult`
+    （`scene_type / skin / scene_id / confidence / template_id`，**不含坐标**）。
+
 **尚未实现**：OCR、YOLO / 深度学习模型与训练、鼠标点击、键盘输入、状态机、任务系统、
-自动挂机逻辑与任何游戏内容理解（界面/按钮语义判断）。
+自动挂机逻辑与任何更进一步的游戏内容理解（界面语义判断、界面跳转）。
 
 ## 目录结构
 
@@ -53,7 +60,8 @@ Onmyoji_Vision_Agent/
 ├── examples/
 │   ├── capture_demo.py               # 采集链路 Demo（Foreground -> Capture）
 │   ├── frame_pipeline_demo.py        # 帧流水线 Demo（Capture -> Buffer -> Stability）
-│   └── template_detector_demo.py     # 模板检测 Demo（Frame -> Detector -> Result）
+│   ├── template_detector_demo.py     # 模板检测 Demo（Frame -> Detector -> Result）
+│   └── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
 ├── logs/                         # 运行日志输出目录
 ├── models/                       # 模型权重（内容不入库）
 ├── src/
@@ -87,6 +95,14 @@ Onmyoji_Vision_Agent/
 │   │   │       ├── preprocess.py #       灰度化 / 缩放
 │   │   │       ├── matcher.py    #       TemplateMatcher（多尺度匹配）
 │   │   │       └── detector.py   #       TemplateDetector（编排 + 坐标转换）
+│   │   ├── scene/                #   场景识别（Phase 2.2）
+│   │   │   ├── base.py           #     BaseSceneClassifier 抽象接口
+│   │   │   ├── models.py         #     SceneTemplate（场景模板元数据 + 图像）
+│   │   │   ├── result.py         #     SceneResult（场景识别结果）
+│   │   │   ├── loader.py         #     SceneLoader（dataset/scenes）
+│   │   │   ├── preprocess.py     #     灰度化 / 统一尺寸缩放
+│   │   │   ├── matcher.py        #     SceneMatcher（整图相似度）
+│   │   │   └── classifier.py     #     SceneClassifier（多模板投票 + 阈值）
 │   │   └── ocr/                  #   文字识别（后续阶段）
 │   ├── action/                   # 输入控制层
 │   ├── state/                    # 状态管理层
@@ -148,6 +164,7 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `capture` | 采集后端、帧率、显示器索引、采集区域、帧缓冲容量、稳定性判断 |
 | `calibration` | 参考分辨率（视觉模型/模板基于的逻辑分辨率） |
 | `detector` | 检测器配置（模板匹配方法、阈值、多尺度比例） |
+| `scene` | 场景识别配置（置信度阈值、统一缩放尺寸） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
 | `logging` | 日志级别、目录、滚动策略与格式 |
 
@@ -166,6 +183,8 @@ python examples/frame_pipeline_demo.py --duration 2.0
 | `detector.template.threshold` | `0.85` | 低于该置信度的命中被丢弃 |
 | `detector.template.multi_scale` | `true` | 是否按 `scales` 逐档缩放模板后再匹配 |
 | `detector.template.scales` | `[0.8 … 1.2]` | 多尺度搜索比例（默认覆盖 ±20%） |
+| `scene.matcher.threshold` | `0.85` | 低于该相似度的场景不输出 |
+| `scene.matcher.resize_width` / `resize_height` | `640` / `360` | 比较前统一缩放到的尺寸 |
 
 环境变量可覆盖任意字段，格式为 `OVA_<段>__<字段>`：
 
@@ -383,6 +402,101 @@ python examples/template_detector_demo.py --image dataset/scenes/yard/skin_001/s
 
 两种模式都会把检测框、元素名称与置信度绘制到 `examples/detection_result.png`。
 
+## 场景识别（Frame → SceneResult）
+
+```text
+Frame(image)
+        │  SceneMatcher.prepare()：缩放到统一尺寸（默认 640x360）+ 灰度化
+        ▼
+SceneMatcher.match(frame, template)             # 与每张场景截图比较
+        │  相似度 = 1 - 平均绝对差 / 255（完全一致 = 1.0）
+        ▼
+SceneClassifier.classify(frame)                 # 按场景分组，取组内最高分
+        │  过滤 threshold -> 按 confidence 降序
+        ▼
+list[SceneResult]（scene_type / skin / scene_id / confidence / template_id）
+```
+
+### Scene Classifier 职责
+
+`src/vision/scene` 只回答"当前在哪里"，**不做**点击、任务、状态机：
+
+| 组件 | 文件 | 职责 |
+| --- | --- | --- |
+| `BaseSceneClassifier` | `base.py` | 抽象接口：`classify(frame)` / `best_match(frame)` |
+| `SceneClassifier` | `classifier.py` | 实现类：多模板投票 + 阈值过滤 + 排序 |
+| `SceneMatcher` | `matcher.py` | 整图相似度计算（统一尺寸 + 灰度 + 归一化 MAE） |
+| `SceneLoader` | `loader.py` | 从 `dataset/scenes` 加载场景截图并解析元数据 |
+| `SceneTemplate` / `SceneResult` | `models.py` / `result.py` | 输入模型（场景截图）与输出模型（识别结果） |
+
+与 `detector` 的差异（两者同级、互不依赖）：
+
+| 对比项 | `detector`（Phase 2.1） | `scene`（Phase 2.2） |
+| --- | --- | --- |
+| 回答的问题 | 元素**在哪**（定位） | 当前**在哪里**（整图判断） |
+| 结果模型 | `DetectionResult`（含 `Rect`，reference 坐标） | `SceneResult`（**不含坐标**） |
+| 坐标依赖 | 必须携带 `coordinate_transform` | 不需要 |
+| 算法 | `cv2.matchTemplate` 多尺度滑动匹配 | 统一尺寸后的整图归一化 MAE |
+
+### Dataset 结构
+
+```text
+dataset/scenes/<scene_type>/skin_NNN/scene_NNN/<scene_type>_skinNNN_sceneNNN_frameNNN.png
+        │  例如 dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
+        ▼
+SceneTemplate(template_id, scene_type, skin, scene_id, frame, path, image)
+        │  template_id 为场景级标识：yard_skin001_scene001（同一场景的多张截图共享）
+```
+
+* 文件名解析失败、目录层级/目录名不合规、文件名编号与目录不一致 → `SceneTemplateError`（**不猜测**）；
+* 场景目录不存在或图像无法解码 → `SceneLoadError`；
+* `SceneLoader.load(scene_type=…, skin=…, scene_id=…)` 支持过滤。
+
+### 分类流程与多模板投票
+
+同一场景通常采集了多张截图（`frame_001`、`frame_002`…），因此分类时：
+
+1. 对所有模板计算相似度；
+2. 按 `scene_type + skin + scene_id`（即场景级 `template_id`）**分组，取组内最高分**——
+   任意一张截图匹配成功即说明"当前在该场景"，取平均会被差异最大的那张拖低；
+3. 过滤 `scene.matcher.threshold`，按 `confidence` 降序输出。
+
+`best_match(frame)` 返回最高置信度的那一条（无命中返回 `None`）。
+
+### SceneResult 格式
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `scene_type` | `str` | 场景类型，例如 `yard` |
+| `skin` | `int` | 皮肤编号（整数；展示时格式化为 `001`） |
+| `scene_id` | `int` | 场景编号（整数） |
+| `confidence` | `float` | 匹配置信度，`0 <= confidence <= 1`（越界即报错） |
+| `template_id` | `str` | 场景模板 ID，例如 `yard_skin001_scene001` |
+
+便捷接口：`result.scene_key`（`yard/skin001/scene001`）、`result.describe()`。
+
+```python
+from src.core import load_config
+from src.vision.scene import SceneClassifier
+
+config = load_config()
+classifier = SceneClassifier.from_dataset(config.scene.matcher)
+
+result = classifier.best_match(frame)
+if result is not None:
+    print(result.describe())   # scene_type=yard skin=001 scene=001 confidence=1.0000 template=...
+```
+
+命令行验证：
+
+```powershell
+# 实时采集（需要游戏窗口；否则回退整屏）
+python examples/scene_classifier_demo.py
+
+# 离线图片（用数据集里的真实截图验证识别能力）
+python examples/scene_classifier_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png
+```
+
 ## 代码规范
 
 1. 全部公共函数/方法使用类型注解并编写 docstring（Google 风格）。
@@ -399,8 +513,9 @@ python examples/template_detector_demo.py --image dataset/scenes/yard/skin_001/s
 - **Phase 1.2（已完成）**：Frame Pipeline Stabilization —— 帧缓冲、相似度比较、稳定性判断。
 - **Phase 2.0（已完成）**：Dataset Organization —— 数据集结构与命名标准化、校验脚本。
 - **Phase 2.1（已完成）**：Template Detector Foundation —— 模板匹配检测器。
-- Phase 2.2：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
-- Phase 2.3：OCR —— 界面文字读取（`src/vision/ocr`）。
+- **Phase 2.2（已完成）**：Scene Classifier Foundation —— 整图场景识别与多模板投票。
+- Phase 2.3：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
+- Phase 2.4：OCR —— 界面文字读取（`src/vision/ocr`）。
 - Phase 3：State Machine —— 界面状态建模与转移（`src/state`）。
 - Phase 4：Action Engine —— 受控的键鼠输入与安全约束（`src/action`，坐标一律经 `CoordinateTransform` 映射）。
 - Phase 5：Task System —— 任务编排、重试与中断处理（`src/task`）。

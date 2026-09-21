@@ -48,6 +48,12 @@ DEFAULT_TEMPLATE_THRESHOLD: float = 0.85
 DEFAULT_TEMPLATE_SCALES: tuple[float, ...] = (0.8, 0.9, 1.0, 1.1, 1.2)
 #: 原尺寸比例（不做缩放）
 IDENTITY_SCALE: float = 1.0
+#: 默认的场景匹配置信度阈值
+DEFAULT_SCENE_THRESHOLD: float = 0.85
+#: 场景匹配前的统一缩放宽度
+DEFAULT_SCENE_RESIZE_WIDTH: int = 640
+#: 场景匹配前的统一缩放高度
+DEFAULT_SCENE_RESIZE_HEIGHT: int = 360
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 #: 允许的日志级别（与 :data:`LogLevel` 保持一致）
@@ -213,6 +219,29 @@ class DetectorConfig(StrictModel):
     template: TemplateDetectorConfig = Field(default_factory=TemplateDetectorConfig)
 
 
+class SceneMatcherConfig(StrictModel):
+    """场景匹配配置。
+
+    场景识别是**整图判断**：当前帧与场景模板都会缩放到统一尺寸后比较，
+    因此不涉及坐标与 ``Rect``（与 ``detector`` 的定位型匹配不同）。
+    """
+
+    threshold: float = Field(default=DEFAULT_SCENE_THRESHOLD, gt=0.0, le=1.0)
+    resize_width: int = Field(default=DEFAULT_SCENE_RESIZE_WIDTH, ge=1)
+    resize_height: int = Field(default=DEFAULT_SCENE_RESIZE_HEIGHT, ge=1)
+
+    @property
+    def resize_size(self) -> tuple[int, int]:
+        """统一缩放尺寸 ``(width, height)``。"""
+        return (self.resize_width, self.resize_height)
+
+
+class SceneConfig(StrictModel):
+    """场景识别配置。"""
+
+    matcher: SceneMatcherConfig = Field(default_factory=SceneMatcherConfig)
+
+
 class AppConfig(StrictModel):
     """应用总配置，聚合所有子模块配置。"""
 
@@ -223,6 +252,7 @@ class AppConfig(StrictModel):
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     window: WindowConfig = Field(default_factory=WindowConfig)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
+    scene: SceneConfig = Field(default_factory=SceneConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     def log_dir(self) -> Path:
