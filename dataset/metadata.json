@@ -1,0 +1,2535 @@
+[
+  {
+    "image": "raw/yard/yard_cap_001.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_001.png",
+      "original": "dataset/states/yard/yard_001.png",
+      "state_positive": "states/yard/positive/yard_cap_001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_002.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_002.png",
+      "original": "dataset/states/yard/yard_002.png",
+      "state_positive": "states/yard/positive/yard_cap_002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_003.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_003.png",
+      "original": "dataset/states/yard/yard_003.png",
+      "state_positive": "states/yard/positive/yard_cap_003.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_004.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_004.png",
+      "original": "dataset/states/yard/yard_004.png",
+      "state_positive": "states/yard/positive/yard_cap_004.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_005.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_005.png",
+      "original": "dataset/states/yard/yard_005.png",
+      "state_positive": "states/yard/positive/yard_cap_005.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_006.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_006.png",
+      "original": "dataset/states/yard/yard_006.png",
+      "state_positive": "states/yard/positive/yard_cap_006.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_007.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_007.png",
+      "original": "dataset/states/yard/yard_007.png",
+      "state_positive": "states/yard/positive/yard_cap_007.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_008.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_008.png",
+      "original": "dataset/states/yard/yard_008.png",
+      "state_positive": "states/yard/positive/yard_cap_008.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_009.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_009.png",
+      "original": "dataset/states/yard/yard_009.png",
+      "state_positive": "states/yard/positive/yard_cap_009.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_010.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_010.png",
+      "original": "dataset/states/yard/yard_010.png",
+      "state_positive": "states/yard/positive/yard_cap_010.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_011.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_011.png",
+      "original": "dataset/states/yard/yard_011.png",
+      "state_positive": "states/yard/positive/yard_cap_011.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_012.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_012.png",
+      "original": "dataset/states/yard/yard_012.png",
+      "state_positive": "states/yard/positive/yard_cap_012.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_013.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_013.png",
+      "original": "dataset/states/yard/yard_013.png",
+      "state_positive": "states/yard/positive/yard_cap_013.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_014.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_014.png",
+      "original": "dataset/states/yard/yard_014.png",
+      "state_positive": "states/yard/positive/yard_cap_014.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_015.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_015.png",
+      "original": "dataset/states/yard/yard_015.png",
+      "state_positive": "states/yard/positive/yard_cap_015.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_016.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_016.png",
+      "original": "dataset/states/yard/yard_016.png",
+      "state_positive": "states/yard/positive/yard_cap_016.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_017.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_017.png",
+      "original": "dataset/states/yard/yard_017.png",
+      "state_positive": "states/yard/positive/yard_cap_017.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_018.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_018.png",
+      "original": "dataset/states/yard/yard_018.png",
+      "state_positive": "states/yard/positive/yard_cap_018.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_019.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_019.png",
+      "original": "dataset/states/yard/yard_019.png",
+      "state_positive": "states/yard/positive/yard_cap_019.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_020.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_020.png",
+      "original": "dataset/states/yard/yard_020.png",
+      "state_positive": "states/yard/positive/yard_cap_020.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_021.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_021.png",
+      "original": "dataset/states/yard/yard_021.png",
+      "state_positive": "states/yard/positive/yard_cap_021.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_022.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_022.png",
+      "original": "dataset/states/yard/yard_022.png",
+      "state_positive": "states/yard/positive/yard_cap_022.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_023.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_023.png",
+      "original": "dataset/states/yard/yard_023.png",
+      "state_positive": "states/yard/positive/yard_cap_023.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_024.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_024.png",
+      "original": "dataset/states/yard/yard_024.png",
+      "state_positive": "states/yard/positive/yard_cap_024.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_025.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_025.png",
+      "original": "dataset/states/yard/yard_025.png",
+      "state_positive": "states/yard/positive/yard_cap_025.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_026.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_026.png",
+      "original": "dataset/states/yard/yard_026.png",
+      "state_positive": "states/yard/positive/yard_cap_026.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_027.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏完整（图鉴/珍旅居/纳物库/…）",
+    "paths": {
+      "raw": "raw/yard/yard_cap_027.png",
+      "original": "dataset/states/yard/yard_027.png",
+      "state_positive": "states/yard/positive/yard_cap_027.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_001.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_001.png",
+      "original": "dataset/states/exploration/map_001.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_001.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_002.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_002.png",
+      "original": "dataset/states/exploration/map_002.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_002.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_003.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_003.png",
+      "original": "dataset/states/exploration/map_003.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_003.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_004.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_004.png",
+      "original": "dataset/states/exploration/map_004.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_004.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_005.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_005.png",
+      "original": "dataset/states/exploration/map_005.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_005.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_006.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_006.png",
+      "original": "dataset/states/exploration/map_006.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_006.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_007.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_007.png",
+      "original": "dataset/states/exploration/map_007.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_007.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_008.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_008.png",
+      "original": "dataset/states/exploration/map_008.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_008.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_009.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_009.png",
+      "original": "dataset/states/exploration/map_009.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_009.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_010.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_010.png",
+      "original": "dataset/states/exploration/map_010.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_010.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_011.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_011.png",
+      "original": "dataset/states/exploration/map_011.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_011.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_012.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_012.png",
+      "original": "dataset/states/exploration/map_012.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_012.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_013.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_013.png",
+      "original": "dataset/states/exploration/map_013.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_013.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_014.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_014.png",
+      "original": "dataset/states/exploration/map_014.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_014.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_015.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_015.png",
+      "original": "dataset/states/exploration/map_015.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_015.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_016.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_016.png",
+      "original": "dataset/states/exploration/map_016.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_016.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_017.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_017.png",
+      "original": "dataset/states/exploration/map_017.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_017.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_018.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_018.png",
+      "original": "dataset/states/exploration/map_018.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_018.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_019.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_019.png",
+      "original": "dataset/states/exploration/map_019.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_019.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_020.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_020.png",
+      "original": "dataset/states/exploration/map_020.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_020.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_021.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_021.png",
+      "original": "dataset/states/exploration/map_021.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_021.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_022.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_022.png",
+      "original": "dataset/states/exploration/map_022.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_022.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_023.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_023.png",
+      "original": "dataset/states/exploration/map_023.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_023.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_024.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_024.png",
+      "original": "dataset/states/exploration/map_024.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_024.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_025.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_025.png",
+      "original": "dataset/states/exploration/map_025.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_025.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_026.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_026.png",
+      "original": "dataset/states/exploration/map_026.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_026.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_027.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_027.png",
+      "original": "dataset/states/exploration/map_027.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_027.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_028.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_028.png",
+      "original": "dataset/states/exploration/map_028.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_028.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_029.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_029.png",
+      "original": "dataset/states/exploration/map_029.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_029.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_030.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_030.png",
+      "original": "dataset/states/exploration/map_030.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_030.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_031.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_031.png",
+      "original": "dataset/states/exploration/map_031.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_031.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_032.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_032.png",
+      "original": "dataset/states/exploration/map_032.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_032.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_033.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_033.png",
+      "original": "dataset/states/exploration/map_033.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_033.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_034.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，右侧章节栏与底部功能栏可见（章节 26~28）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_034.png",
+      "original": "dataset/states/exploration/map_034.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_034.png"
+    }
+  },
+  {
+    "image": "raw/battle/battle_auto_001.png",
+    "state": "battle",
+    "source": "auto",
+    "features": [
+      "battle_auto_button",
+      "battle_skill_area",
+      "battle_action_bar",
+      "battle_shikigami_icons"
+    ],
+    "confidence": "manual",
+    "note": "自动战斗，左下自动按钮 + 底部技能区 + 右侧行动条齐全",
+    "paths": {
+      "raw": "raw/battle/battle_auto_001.png",
+      "original": "dataset/states/battle/battle_001.png",
+      "state_positive": "states/battle/positive/battle_auto_001.png"
+    }
+  },
+  {
+    "image": "raw/battle/battle_auto_002.png",
+    "state": "battle",
+    "source": "auto",
+    "features": [
+      "battle_auto_button",
+      "battle_skill_area"
+    ],
+    "confidence": "manual",
+    "note": "战斗进行中，右侧行动条不可见（action_bar / shikigami_icons 的负样本）",
+    "paths": {
+      "raw": "raw/battle/battle_auto_002.png",
+      "original": "dataset/states/battle/battle_002.png",
+      "state_positive": "states/battle/positive/battle_auto_002.png"
+    }
+  },
+  {
+    "image": "raw/battle_result/battle_result_win_001.png",
+    "state": "battle_result",
+    "source": "win",
+    "features": [
+      "victory_icon"
+    ],
+    "confidence": "manual",
+    "note": "战斗胜利结算：中心胜利图标与「胜利」字样 + 式神结算列表",
+    "paths": {
+      "raw": "raw/battle_result/battle_result_win_001.png",
+      "original": "dataset/states/battle/battle_003.png",
+      "state_positive": "states/battle_result/positive/battle_result_win_001.png"
+    }
+  },
+  {
+    "image": "raw/battle_reward/battle_reward_item_001.png",
+    "state": "battle_reward",
+    "source": "item",
+    "features": [
+      "reward_panel"
+    ],
+    "confidence": "manual",
+    "note": "奖励展示：上方奖励卡片 + 中央奖励宝箱 + 点击屏幕继续",
+    "paths": {
+      "raw": "raw/battle_reward/battle_reward_item_001.png",
+      "original": "dataset/states/battle/battle_004.png",
+      "state_positive": "states/battle_reward/positive/battle_reward_item_001.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shop/unknown_shop_001.png",
+    "state": "unknown",
+    "source": "shop",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shop",
+    "paths": {
+      "raw": "raw/unknown/shop/unknown_shop_001.png",
+      "original": "dataset/states/non_transition_bottom/召唤-商店.png",
+      "state": "states/unknown/shop/unknown_shop_001.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_001.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "召唤（抽卡）界面，无法归入五个目标状态",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_001.png",
+      "original": "dataset/states/non_transition_bottom/召唤界面.png",
+      "state": "states/unknown/other/unknown_other_001.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shop/unknown_shop_002.png",
+    "state": "unknown",
+    "source": "shop",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shop",
+    "paths": {
+      "raw": "raw/unknown/shop/unknown_shop_002.png",
+      "original": "dataset/states/non_transition_bottom/商店-皮肤屋.png",
+      "state": "states/unknown/shop/unknown_shop_002.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shop/unknown_shop_003.png",
+    "state": "unknown",
+    "source": "shop",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shop",
+    "paths": {
+      "raw": "raw/unknown/shop/unknown_shop_003.png",
+      "original": "dataset/states/non_transition_bottom/商店-礼包屋.png",
+      "state": "states/unknown/shop/unknown_shop_003.png"
+    }
+  },
+  {
+    "image": "raw/unknown/collection/unknown_collection_001.png",
+    "state": "unknown",
+    "source": "collection",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "collection",
+    "paths": {
+      "raw": "raw/unknown/collection/unknown_collection_001.png",
+      "original": "dataset/states/non_transition_bottom/图鉴-式神.png",
+      "state": "states/unknown/collection/unknown_collection_001.png"
+    }
+  },
+  {
+    "image": "raw/unknown/collection/unknown_collection_002.png",
+    "state": "unknown",
+    "source": "collection",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "collection",
+    "paths": {
+      "raw": "raw/unknown/collection/unknown_collection_002.png",
+      "original": "dataset/states/non_transition_bottom/图鉴界面.png",
+      "state": "states/unknown/collection/unknown_collection_002.png"
+    }
+  },
+  {
+    "image": "raw/unknown/collection/unknown_collection_003.png",
+    "state": "unknown",
+    "source": "collection",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "collection",
+    "paths": {
+      "raw": "raw/unknown/collection/unknown_collection_003.png",
+      "original": "dataset/states/non_transition_bottom/契灵录.png",
+      "state": "states/unknown/collection/unknown_collection_003.png"
+    }
+  },
+  {
+    "image": "raw/unknown/friends/unknown_friends_001.png",
+    "state": "unknown",
+    "source": "friends",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "friends",
+    "paths": {
+      "raw": "raw/unknown/friends/unknown_friends_001.png",
+      "original": "dataset/states/non_transition_bottom/好友.png",
+      "state": "states/unknown/friends/unknown_friends_001.png"
+    }
+  },
+  {
+    "image": "raw/unknown/friends/unknown_friends_002.png",
+    "state": "unknown",
+    "source": "friends",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "friends",
+    "paths": {
+      "raw": "raw/unknown/friends/unknown_friends_002.png",
+      "original": "dataset/states/non_transition_bottom/好友界面.png",
+      "state": "states/unknown/friends/unknown_friends_002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_cap_028.png",
+    "state": "yard",
+    "source": "cap",
+    "features": [
+      "bottom_menu_yard"
+    ],
+    "confidence": "manual",
+    "note": "庭院完整截图，底部功能栏与右侧竖排入口同时可见",
+    "paths": {
+      "raw": "raw/yard/yard_cap_028.png",
+      "original": "dataset/states/non_transition_bottom/庭院界面.png",
+      "state_positive": "states/yard/positive/yard_cap_028.png"
+    }
+  },
+  {
+    "image": "raw/unknown/equipment/unknown_equipment_001.png",
+    "state": "unknown",
+    "source": "equipment",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "equipment",
+    "paths": {
+      "raw": "raw/unknown/equipment/unknown_equipment_001.png",
+      "original": "dataset/states/non_transition_bottom/式神录-御魂-整理界面.png",
+      "state": "states/unknown/equipment/unknown_equipment_001.png"
+    }
+  },
+  {
+    "image": "raw/unknown/equipment/unknown_equipment_002.png",
+    "state": "unknown",
+    "source": "equipment",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "equipment",
+    "paths": {
+      "raw": "raw/unknown/equipment/unknown_equipment_002.png",
+      "original": "dataset/states/non_transition_bottom/式神录-御魂-装配界面.png",
+      "state": "states/unknown/equipment/unknown_equipment_002.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shikigami/unknown_shikigami_001.png",
+    "state": "unknown",
+    "source": "shikigami",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shikigami",
+    "paths": {
+      "raw": "raw/unknown/shikigami/unknown_shikigami_001.png",
+      "original": "dataset/states/non_transition_bottom/式神录-队伍预设.png",
+      "state": "states/unknown/shikigami/unknown_shikigami_001.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shikigami/unknown_shikigami_002.png",
+    "state": "unknown",
+    "source": "shikigami",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shikigami",
+    "paths": {
+      "raw": "raw/unknown/shikigami/unknown_shikigami_002.png",
+      "original": "dataset/states/non_transition_bottom/式神录.png",
+      "state": "states/unknown/shikigami/unknown_shikigami_002.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_002.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "战斗准备阶段：式神阵容 + 准备按钮，尚无战斗 UI（battle 的困难负样本）",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_002.png",
+      "original": "dataset/states/non_transition_bottom/战斗准备阶段.png",
+      "state": "states/unknown/other/unknown_other_002.png"
+    }
+  },
+  {
+    "image": "raw/battle/battle_auto_003.png",
+    "state": "battle",
+    "source": "auto",
+    "features": [
+      "battle_auto_button",
+      "battle_skill_area",
+      "battle_action_bar",
+      "battle_shikigami_icons"
+    ],
+    "confidence": "manual",
+    "note": "战斗界面，左下自动按钮 + 底部技能区 + 右侧行动条",
+    "paths": {
+      "raw": "raw/battle/battle_auto_003.png",
+      "original": "dataset/states/non_transition_bottom/战斗界面.png",
+      "state_positive": "states/battle/positive/battle_auto_003.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_003.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_003.png",
+      "original": "dataset/states/non_transition_bottom/探索-地域鬼王-挑战界面.png",
+      "state": "states/unknown/other/unknown_other_003.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_004.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_004.png",
+      "original": "dataset/states/non_transition_bottom/探索-地域鬼王.png",
+      "state": "states/unknown/other/unknown_other_004.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_005.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_005.png",
+      "original": "dataset/states/non_transition_bottom/探索-契灵之境-平安京.png",
+      "state": "states/unknown/other/unknown_other_005.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_006.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_006.png",
+      "original": "dataset/states/non_transition_bottom/探索-契灵之境-逢魔之源.png",
+      "state": "states/unknown/other/unknown_other_006.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_035.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，但右侧为式神委派任务面板、无章节栏（chapter_panel 的困难负样本）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_035.png",
+      "original": "dataset/states/non_transition_bottom/探索-式神委派.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_035.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_007.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_007.png",
+      "original": "dataset/states/non_transition_bottom/探索-御灵-暗神龙-一层.png",
+      "state": "states/unknown/other/unknown_other_007.png"
+    }
+  },
+  {
+    "image": "raw/unknown/equipment/unknown_equipment_003.png",
+    "state": "unknown",
+    "source": "equipment",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "equipment",
+    "paths": {
+      "raw": "raw/unknown/equipment/unknown_equipment_003.png",
+      "original": "dataset/states/non_transition_bottom/探索-御魂-八岐大蛇-神罚副本.png",
+      "state": "states/unknown/equipment/unknown_equipment_003.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_008.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_008.png",
+      "original": "dataset/states/non_transition_bottom/探索-秘闻副本-秘闻挑战界面.png",
+      "state": "states/unknown/other/unknown_other_008.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_009.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_009.png",
+      "original": "dataset/states/non_transition_bottom/探索-秘闻副本.png",
+      "state": "states/unknown/other/unknown_other_009.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_010.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_010.png",
+      "original": "dataset/states/non_transition_bottom/探索-结界突破.png",
+      "state": "states/unknown/other/unknown_other_010.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_011.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_011.png",
+      "original": "dataset/states/non_transition_bottom/探索-英杰试炼-传承试炼.png",
+      "state": "states/unknown/other/unknown_other_011.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_012.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_012.png",
+      "original": "dataset/states/non_transition_bottom/探索-英杰试炼.png",
+      "state": "states/unknown/other/unknown_other_012.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_013.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_013.png",
+      "original": "dataset/states/non_transition_bottom/探索-觉醒材料-火麒麟-十层.png",
+      "state": "states/unknown/other/unknown_other_013.png"
+    }
+  },
+  {
+    "image": "raw/exploration/exploration_ch26_036.png",
+    "state": "exploration",
+    "source": "ch26",
+    "features": [
+      "bottom_menu_exploration",
+      "chapter_panel"
+    ],
+    "confidence": "manual",
+    "note": "探索地图，章节栏完整（主线/玩法 + 第二十六~二十八章）",
+    "paths": {
+      "raw": "raw/exploration/exploration_ch26_036.png",
+      "original": "dataset/states/non_transition_bottom/探索界面.png",
+      "state_positive": "states/exploration/positive/exploration_ch26_036.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_014.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_014.png",
+      "original": "dataset/states/non_transition_bottom/斗技界面.png",
+      "state": "states/unknown/other/unknown_other_014.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_015.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_015.png",
+      "original": "dataset/states/non_transition_bottom/日常-逢魔之时.png",
+      "state": "states/unknown/other/unknown_other_015.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_016.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_016.png",
+      "original": "dataset/states/non_transition_bottom/日常界面.png",
+      "state": "states/unknown/other/unknown_other_016.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shop/unknown_shop_004.png",
+    "state": "unknown",
+    "source": "shop",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shop",
+    "paths": {
+      "raw": "raw/unknown/shop/unknown_shop_004.png",
+      "original": "dataset/states/non_transition_bottom/珍旅居-千物宝库.png",
+      "state": "states/unknown/shop/unknown_shop_004.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_017.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_017.png",
+      "original": "dataset/states/non_transition_bottom/珍旅居-换妖借妖.png",
+      "state": "states/unknown/other/unknown_other_017.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_018.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_018.png",
+      "original": "dataset/states/non_transition_bottom/珍旅居.png",
+      "state": "states/unknown/other/unknown_other_018.png"
+    }
+  },
+  {
+    "image": "raw/unknown/collection/unknown_collection_004.png",
+    "state": "unknown",
+    "source": "collection",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "collection",
+    "paths": {
+      "raw": "raw/unknown/collection/unknown_collection_004.png",
+      "original": "dataset/states/non_transition_bottom/纳物库.png",
+      "state": "states/unknown/collection/unknown_collection_004.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_019.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_019.png",
+      "original": "dataset/states/non_transition_bottom/组队.png",
+      "state": "states/unknown/other/unknown_other_019.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_020.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_020.png",
+      "original": "dataset/states/non_transition_bottom/花合战-任务.png",
+      "state": "states/unknown/other/unknown_other_020.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_021.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_021.png",
+      "original": "dataset/states/non_transition_bottom/阴阳寮-神社.png",
+      "state": "states/unknown/other/unknown_other_021.png"
+    }
+  },
+  {
+    "image": "raw/unknown/other/unknown_other_022.png",
+    "state": "unknown",
+    "source": "other",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "other",
+    "paths": {
+      "raw": "raw/unknown/other/unknown_other_022.png",
+      "original": "dataset/states/non_transition_bottom/阴阳寮界面.png",
+      "state": "states/unknown/other/unknown_other_022.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shikigami/unknown_shikigami_003.png",
+    "state": "unknown",
+    "source": "shikigami",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shikigami",
+    "paths": {
+      "raw": "raw/unknown/shikigami/unknown_shikigami_003.png",
+      "original": "dataset/states/non_transition_bottom/阴阳术.png",
+      "state": "states/unknown/shikigami/unknown_shikigami_003.png"
+    }
+  },
+  {
+    "image": "raw/unknown/shikigami/unknown_shikigami_004.png",
+    "state": "unknown",
+    "source": "shikigami",
+    "features": [],
+    "confidence": "manual",
+    "note": "无法归入 yard/exploration/battle/battle_result/battle_reward 的有效游戏界面",
+    "subcategory": "shikigami",
+    "paths": {
+      "raw": "raw/unknown/shikigami/unknown_shikigami_004.png",
+      "original": "dataset/states/non_transition_bottom/阵容助手界面.png",
+      "state": "states/unknown/shikigami/unknown_shikigami_004.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin001_001.png",
+    "state": "yard",
+    "source": "skin001",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin001_001.png",
+      "original": "dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin001_002.png",
+    "state": "yard",
+    "source": "skin001",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin001_002.png",
+      "original": "dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin001_003.png",
+    "state": "yard",
+    "source": "skin001",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin001_003.png",
+      "original": "dataset/scenes/yard/skin_001/scene_002/yard_skin001_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin001_004.png",
+    "state": "yard",
+    "source": "skin001",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin001_004.png",
+      "original": "dataset/scenes/yard/skin_001/scene_002/yard_skin001_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin001_005.png",
+    "state": "yard",
+    "source": "skin001",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin001_005.png",
+      "original": "dataset/scenes/yard/skin_001/scene_003/yard_skin001_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin001_006.png",
+    "state": "yard",
+    "source": "skin001",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin001_006.png",
+      "original": "dataset/scenes/yard/skin_001/scene_003/yard_skin001_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin002_001.png",
+    "state": "yard",
+    "source": "skin002",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin002_001.png",
+      "original": "dataset/scenes/yard/skin_002/scene_001/yard_skin002_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin002_002.png",
+    "state": "yard",
+    "source": "skin002",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin002_002.png",
+      "original": "dataset/scenes/yard/skin_002/scene_001/yard_skin002_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin002_003.png",
+    "state": "yard",
+    "source": "skin002",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin002_003.png",
+      "original": "dataset/scenes/yard/skin_002/scene_002/yard_skin002_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin002_004.png",
+    "state": "yard",
+    "source": "skin002",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin002_004.png",
+      "original": "dataset/scenes/yard/skin_002/scene_002/yard_skin002_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin002_005.png",
+    "state": "yard",
+    "source": "skin002",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin002_005.png",
+      "original": "dataset/scenes/yard/skin_002/scene_003/yard_skin002_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin002_006.png",
+    "state": "yard",
+    "source": "skin002",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin002_006.png",
+      "original": "dataset/scenes/yard/skin_002/scene_003/yard_skin002_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin003_001.png",
+    "state": "yard",
+    "source": "skin003",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin003_001.png",
+      "original": "dataset/scenes/yard/skin_003/scene_001/yard_skin003_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin003_002.png",
+    "state": "yard",
+    "source": "skin003",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin003_002.png",
+      "original": "dataset/scenes/yard/skin_003/scene_001/yard_skin003_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin003_003.png",
+    "state": "yard",
+    "source": "skin003",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin003_003.png",
+      "original": "dataset/scenes/yard/skin_003/scene_002/yard_skin003_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin003_004.png",
+    "state": "yard",
+    "source": "skin003",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin003_004.png",
+      "original": "dataset/scenes/yard/skin_003/scene_002/yard_skin003_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin003_005.png",
+    "state": "yard",
+    "source": "skin003",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin003_005.png",
+      "original": "dataset/scenes/yard/skin_003/scene_003/yard_skin003_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin003_006.png",
+    "state": "yard",
+    "source": "skin003",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin003_006.png",
+      "original": "dataset/scenes/yard/skin_003/scene_003/yard_skin003_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin004_001.png",
+    "state": "yard",
+    "source": "skin004",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin004_001.png",
+      "original": "dataset/scenes/yard/skin_004/scene_001/yard_skin004_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin004_002.png",
+    "state": "yard",
+    "source": "skin004",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin004_002.png",
+      "original": "dataset/scenes/yard/skin_004/scene_001/yard_skin004_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin004_003.png",
+    "state": "yard",
+    "source": "skin004",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin004_003.png",
+      "original": "dataset/scenes/yard/skin_004/scene_002/yard_skin004_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin004_004.png",
+    "state": "yard",
+    "source": "skin004",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin004_004.png",
+      "original": "dataset/scenes/yard/skin_004/scene_002/yard_skin004_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin004_005.png",
+    "state": "yard",
+    "source": "skin004",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin004_005.png",
+      "original": "dataset/scenes/yard/skin_004/scene_003/yard_skin004_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin004_006.png",
+    "state": "yard",
+    "source": "skin004",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin004_006.png",
+      "original": "dataset/scenes/yard/skin_004/scene_003/yard_skin004_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin005_001.png",
+    "state": "yard",
+    "source": "skin005",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin005_001.png",
+      "original": "dataset/scenes/yard/skin_005/scene_001/yard_skin005_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin005_002.png",
+    "state": "yard",
+    "source": "skin005",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin005_002.png",
+      "original": "dataset/scenes/yard/skin_005/scene_001/yard_skin005_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin005_003.png",
+    "state": "yard",
+    "source": "skin005",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin005_003.png",
+      "original": "dataset/scenes/yard/skin_005/scene_002/yard_skin005_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin005_004.png",
+    "state": "yard",
+    "source": "skin005",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin005_004.png",
+      "original": "dataset/scenes/yard/skin_005/scene_002/yard_skin005_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin005_005.png",
+    "state": "yard",
+    "source": "skin005",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin005_005.png",
+      "original": "dataset/scenes/yard/skin_005/scene_003/yard_skin005_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin005_006.png",
+    "state": "yard",
+    "source": "skin005",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin005_006.png",
+      "original": "dataset/scenes/yard/skin_005/scene_003/yard_skin005_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin006_001.png",
+    "state": "yard",
+    "source": "skin006",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin006_001.png",
+      "original": "dataset/scenes/yard/skin_006/scene_001/yard_skin006_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin006_002.png",
+    "state": "yard",
+    "source": "skin006",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin006_002.png",
+      "original": "dataset/scenes/yard/skin_006/scene_001/yard_skin006_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin006_003.png",
+    "state": "yard",
+    "source": "skin006",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin006_003.png",
+      "original": "dataset/scenes/yard/skin_006/scene_002/yard_skin006_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin006_004.png",
+    "state": "yard",
+    "source": "skin006",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin006_004.png",
+      "original": "dataset/scenes/yard/skin_006/scene_002/yard_skin006_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin006_005.png",
+    "state": "yard",
+    "source": "skin006",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin006_005.png",
+      "original": "dataset/scenes/yard/skin_006/scene_003/yard_skin006_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin006_006.png",
+    "state": "yard",
+    "source": "skin006",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin006_006.png",
+      "original": "dataset/scenes/yard/skin_006/scene_003/yard_skin006_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_001.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_001.png",
+      "original": "dataset/scenes/yard/skin_007/scene_001/yard_skin007_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_002.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_002.png",
+      "original": "dataset/scenes/yard/skin_007/scene_001/yard_skin007_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_003.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_003.png",
+      "original": "dataset/scenes/yard/skin_007/scene_002/yard_skin007_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_004.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_004.png",
+      "original": "dataset/scenes/yard/skin_007/scene_002/yard_skin007_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_005.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_005.png",
+      "original": "dataset/scenes/yard/skin_007/scene_003/yard_skin007_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_006.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_006.png",
+      "original": "dataset/scenes/yard/skin_007/scene_003/yard_skin007_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_007.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_007.png",
+      "original": "dataset/scenes/yard/skin_007/scene_004/yard_skin007_scene004_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin007_008.png",
+    "state": "yard",
+    "source": "skin007",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin007_008.png",
+      "original": "dataset/scenes/yard/skin_007/scene_004/yard_skin007_scene004_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin008_001.png",
+    "state": "yard",
+    "source": "skin008",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin008_001.png",
+      "original": "dataset/scenes/yard/skin_008/scene_001/yard_skin008_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin008_002.png",
+    "state": "yard",
+    "source": "skin008",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin008_002.png",
+      "original": "dataset/scenes/yard/skin_008/scene_001/yard_skin008_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin008_003.png",
+    "state": "yard",
+    "source": "skin008",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin008_003.png",
+      "original": "dataset/scenes/yard/skin_008/scene_002/yard_skin008_scene002_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin008_004.png",
+    "state": "yard",
+    "source": "skin008",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin008_004.png",
+      "original": "dataset/scenes/yard/skin_008/scene_002/yard_skin008_scene002_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin008_005.png",
+    "state": "yard",
+    "source": "skin008",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin008_005.png",
+      "original": "dataset/scenes/yard/skin_008/scene_003/yard_skin008_scene003_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin008_006.png",
+    "state": "yard",
+    "source": "skin008",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin008_006.png",
+      "original": "dataset/scenes/yard/skin_008/scene_003/yard_skin008_scene003_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin009_001.png",
+    "state": "yard",
+    "source": "skin009",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin009_001.png",
+      "original": "dataset/scenes/yard/skin_009/scene_001/yard_skin009_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin009_002.png",
+    "state": "yard",
+    "source": "skin009",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin009_002.png",
+      "original": "dataset/scenes/yard/skin_009/scene_001/yard_skin009_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin010_001.png",
+    "state": "yard",
+    "source": "skin010",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin010_001.png",
+      "original": "dataset/scenes/yard/skin_010/scene_001/yard_skin010_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin010_002.png",
+    "state": "yard",
+    "source": "skin010",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin010_002.png",
+      "original": "dataset/scenes/yard/skin_010/scene_001/yard_skin010_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin011_001.png",
+    "state": "yard",
+    "source": "skin011",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin011_001.png",
+      "original": "dataset/scenes/yard/skin_011/scene_001/yard_skin011_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin011_002.png",
+    "state": "yard",
+    "source": "skin011",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin011_002.png",
+      "original": "dataset/scenes/yard/skin_011/scene_001/yard_skin011_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin012_001.png",
+    "state": "yard",
+    "source": "skin012",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin012_001.png",
+      "original": "dataset/scenes/yard/skin_012/scene_001/yard_skin012_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin012_002.png",
+    "state": "yard",
+    "source": "skin012",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin012_002.png",
+      "original": "dataset/scenes/yard/skin_012/scene_001/yard_skin012_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin013_001.png",
+    "state": "yard",
+    "source": "skin013",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin013_001.png",
+      "original": "dataset/scenes/yard/skin_013/scene_001/yard_skin013_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin013_002.png",
+    "state": "yard",
+    "source": "skin013",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin013_002.png",
+      "original": "dataset/scenes/yard/skin_013/scene_001/yard_skin013_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin014_001.png",
+    "state": "yard",
+    "source": "skin014",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin014_001.png",
+      "original": "dataset/scenes/yard/skin_014/scene_001/yard_skin014_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin014_002.png",
+    "state": "yard",
+    "source": "skin014",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin014_002.png",
+      "original": "dataset/scenes/yard/skin_014/scene_001/yard_skin014_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin015_001.png",
+    "state": "yard",
+    "source": "skin015",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin015_001.png",
+      "original": "dataset/scenes/yard/skin_015/scene_001/yard_skin015_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin015_002.png",
+    "state": "yard",
+    "source": "skin015",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin015_002.png",
+      "original": "dataset/scenes/yard/skin_015/scene_001/yard_skin015_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin016_001.png",
+    "state": "yard",
+    "source": "skin016",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin016_001.png",
+      "original": "dataset/scenes/yard/skin_016/scene_001/yard_skin016_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin016_002.png",
+    "state": "yard",
+    "source": "skin016",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin016_002.png",
+      "original": "dataset/scenes/yard/skin_016/scene_001/yard_skin016_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin017_001.png",
+    "state": "yard",
+    "source": "skin017",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin017_001.png",
+      "original": "dataset/scenes/yard/skin_017/scene_001/yard_skin017_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin017_002.png",
+    "state": "yard",
+    "source": "skin017",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin017_002.png",
+      "original": "dataset/scenes/yard/skin_017/scene_001/yard_skin017_scene001_frame002.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin018_001.png",
+    "state": "yard",
+    "source": "skin018",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin018_001.png",
+      "original": "dataset/scenes/yard/skin_018/scene_001/yard_skin018_scene001_frame001.png"
+    }
+  },
+  {
+    "image": "raw/yard/yard_skin018_002.png",
+    "state": "yard",
+    "source": "skin018",
+    "features": [],
+    "confidence": "manual",
+    "note": "无 UI 纯场景图：仅返回/公告/切换按钮，无底部功能栏（scene_only）",
+    "scene_only": true,
+    "paths": {
+      "raw": "raw/yard/yard_skin018_002.png",
+      "original": "dataset/scenes/yard/skin_018/scene_001/yard_skin018_scene001_frame002.png"
+    }
+  }
+]

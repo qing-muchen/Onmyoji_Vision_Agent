@@ -1,16 +1,22 @@
 """数据集结构与命名校验脚本。
 
-校验 ``dataset/`` 目录：
+校验 ``dataset/`` 目录，新旧两套结构并存：
 
-1. 目录结构（``scenes/<scene_kind>/skin_XXX/scene_XXX/``、``templates/<group>/``、
-   ``states/<state_group>/``）；
-2. 图片命名（含"文件名编号与所在目录一致"）；
-3. PNG 文件是否有效（文件头签名 + 完整解码）；
-4. 是否存在重复编号；
-5. 是否存在无法解析的文件（输出 Unresolved Files List，等待人工确认）。
+**旧结构（历史数据，保留兼容）**
 
-说明：``states/`` 下的样本由人工标注（文件名含中文），因此**只校验目录结构与 PNG
-有效性**，不校验命名规范；该目录下出现的非 PNG 条目（如数据归档 ``*.zip``）记为提示。
+1. ``scenes/<scene_kind>/skin_XXX/scene_XXX/``：场景数据；
+2. ``templates/<category>/<group>/``：UI 模板数据；
+3. ``states/transition_bottom/``、``states/non_transition_bottom/``：扁平状态样本
+   （人工标注、允许中文名，因此**只校验目录结构与 PNG 有效性**）。
+
+**新结构（Phase 4，由 ``tools/build_dataset.py`` 生成）**
+
+4. ``raw/<state>/``：唯一真源，未修改的原始截图归档（``unknown/`` 下按子分类）；
+5. ``states/<state>/positive|negative/``：状态级正/负样本（``unknown/`` 按子分类）；
+6. ``features/<detector>/positive|negative/``：证据级 ROI 裁剪样本。
+
+新增结构一律要求命名符合 ``{prefix}_{source}_{NNN}.png``（三位编号、全小写、
+下划线分隔），且文件名前缀与所在目录一致。
 
 脚本只读取数据、不修改任何文件，可重复运行。
 
@@ -21,8 +27,9 @@
 
 退出码：``0`` = PASS，``1`` = FAIL。
 
-新增场景类型 / UI 元素类别 / 状态样本分组时，请同步更新下方的
-``ALLOWED_SCENE_KINDS``、``ALLOWED_TEMPLATE_GROUPS`` 与 ``ALLOWED_STATE_GROUPS`` 白名单。
+新增场景类型 / UI 元素类别 / 状态 / detector 时，请同步更新下方的
+``ALLOWED_SCENE_KINDS``、``ALLOWED_TEMPLATE_GROUPS``、``ALLOWED_STATE_GROUPS``、
+``ALLOWED_RAW_STATES`` 与 ``ALLOWED_FEATURE_DETECTORS`` 白名单。
 """
 
 from __future__ import annotations
@@ -50,18 +57,60 @@ SCENE_DIR_PATTERN = re.compile(r"^scene_\d{3}$")
 ALLOWED_SCENE_KINDS: tuple[str, ...] = ("yard",)
 #: 允许的模板分组（相对 ``templates/`` 的路径，新增 UI 元素类别时在此登记）
 ALLOWED_TEMPLATE_GROUPS: tuple[str, ...] = ("buttons/explore",)
+#: 旧状态样本分组：扁平 PNG，人工标注（允许中文名），不校验命名规范
+LEGACY_STATE_GROUPS: tuple[str, ...] = ("transition_bottom", "non_transition_bottom")
+#: 新状态分组：``states/<state>/positive|negative/``，要求命名规范
+STATE_GROUPS: tuple[str, ...] = ("yard", "exploration", "battle", "battle_result", "battle_reward")
+#: 兜底状态分组：``states/unknown/<category>/``
+UNKNOWN_GROUP = "unknown"
 #: 允许的状态样本分组（相对 ``states/`` 的目录名，新增状态数据时在此登记）
-ALLOWED_STATE_GROUPS: tuple[str, ...] = ("transition_bottom", "non_transition_bottom")
+ALLOWED_STATE_GROUPS: tuple[str, ...] = LEGACY_STATE_GROUPS + STATE_GROUPS + (UNKNOWN_GROUP,)
+#: ``states/unknown/`` 下允许的来源子分类
+ALLOWED_UNKNOWN_CATEGORIES: tuple[str, ...] = (
+    "shop",
+    "collection",
+    "friends",
+    "shikigami",
+    "equipment",
+    "other",
+)
+#: ``raw/`` 下允许的状态目录
+ALLOWED_RAW_STATES: tuple[str, ...] = STATE_GROUPS + (UNKNOWN_GROUP,)
+#: 允许的 features detector（相对 ``features/`` 的目录路径，可含一级分组）
+ALLOWED_FEATURE_DETECTORS: tuple[str, ...] = (
+    "bottom_menu/yard",
+    "bottom_menu/exploration",
+    "chapter_panel",
+    "battle/auto_button",
+    "battle/skill_area",
+    "battle/action_bar",
+    "battle/shikigami_icons",
+    "victory_icon",
+    "reward_panel",
+)
+#: 正/负样本子目录名
+SAMPLE_POLARITIES: tuple[str, ...] = ("positive", "negative")
 #: ``dataset/`` 根目录下允许出现的条目
-ALLOWED_ROOT_ENTRIES: tuple[str, ...] = (".gitkeep", "README.md", "scenes", "templates", "states")
+ALLOWED_ROOT_ENTRIES: tuple[str, ...] = (
+    ".gitkeep",
+    "README.md",
+    "metadata.json",
+    "scenes",
+    "templates",
+    "states",
+    "raw",
+    "features",
+)
 #: 数据集目录内允许出现的非图片文件（占位与说明，不参与校验）
-ALLOWED_NON_PNG_FILES: tuple[str, ...] = (".gitkeep", "README.md")
+ALLOWED_NON_PNG_FILES: tuple[str, ...] = (".gitkeep", "README.md", "metadata.json")
 #: PNG 文件头签名
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 #: 场景文件相对层级：<scene_kind>/skin_XXX/scene_XXX/<file>
 SCENE_RELATIVE_DEPTH = 4
 #: 模板文件相对层级：<category>/<group>/<file>（例如 buttons/explore/xxx.png）
 TEMPLATE_RELATIVE_DEPTH = 3
+#: 新结构样本命名：<prefix>_<source>_<三位编号>.png —— prefix 之后的部分
+SAMPLE_TAIL_PATTERN = re.compile(r"^(?P<source>[a-z][a-z0-9_]*?)_(?P<num>\d{3})\.png$")
 
 
 @dataclass
@@ -72,6 +121,9 @@ class ValidationReport:
         scenes: 合法的场景图片数量。
         templates: 合法的模板图片数量。
         state_samples: 各状态样本分组的合法图片数量（``分组名 -> 数量``）。
+        legacy_state_samples: 旧扁平状态样本分组的图片数量。
+        raw_samples: ``raw/<state>/`` 下的合法图片数量（``state -> 数量``）。
+        feature_samples: 各 detector 的正/负样本数量（``detector -> {"positive": n, "negative": n}``）。
         skin_directories: 出现过的皮肤目录名集合。
         scene_directories: 出现过的场景目录相对路径集合。
         template_groups: 出现过的模板分组集合。
@@ -84,6 +136,9 @@ class ValidationReport:
     scenes: int = 0
     templates: int = 0
     state_samples: dict[str, int] = field(default_factory=dict)
+    legacy_state_samples: dict[str, int] = field(default_factory=dict)
+    raw_samples: dict[str, int] = field(default_factory=dict)
+    feature_samples: dict[str, dict[str, int]] = field(default_factory=dict)
     skin_directories: set[str] = field(default_factory=set)
     scene_directories: set[str] = field(default_factory=set)
     template_groups: set[str] = field(default_factory=set)
@@ -272,11 +327,67 @@ def _validate_templates(root: Path, report: ValidationReport) -> None:
     _collect_non_png_files(root, "templates", report)
 
 
-def _validate_states(root: Path, report: ValidationReport) -> None:
-    """校验 ``states/`` 状态样本目录（宽松命名，只校验结构与 PNG 有效性）。
+def _validate_sample_files(
+    directory: Path,
+    label: str,
+    expected_prefix: str,
+    report: ValidationReport,
+) -> int:
+    """校验一个样本目录下 PNG 的命名与有效性。
 
-    ``states/`` 下的样本由人工标注（文件名含中文），因此不做命名规范校验；
-    该目录下出现的非 PNG 条目（例如数据归档 ``*.zip``）记为提示而非错误。
+    命名规范：``<expected_prefix>_<source>_<三位编号>.png``。
+
+    Args:
+        directory: 待校验的目录（只校验其直接子文件）。
+        label: 报告中使用的路径标签。
+        expected_prefix: 文件名前缀（应与所在目录一致）。
+        report: 校验结果汇总。
+
+    Returns:
+        合法样本数量。
+    """
+    count = 0
+    seen: dict[tuple[str, str], str] = {}
+    prefix_part = f"{expected_prefix}_"
+    for path in sorted(directory.rglob("*.png")):
+        relative = path.relative_to(directory).as_posix()
+        full = f"{label}/{relative}"
+        if path.parent != directory:
+            report.invalid.append(f"{full}: 样本目录下不应再包含子目录")
+            continue
+        if not path.name.startswith(prefix_part):
+            report.invalid.append(
+                f"{full}: 文件名应以 {expected_prefix}_ 开头（前缀须与所在目录一致）"
+            )
+            continue
+        matched = SAMPLE_TAIL_PATTERN.match(path.name[len(prefix_part):])
+        if matched is None:
+            report.unresolved.append(
+                f"{full}（文件名无法解析，应为 {expected_prefix}_<source>_<三位编号>.png）"
+            )
+            continue
+        key = (matched.group("source"), matched.group("num"))
+        if key in seen:
+            report.duplicates.append(f"{full} 与 {seen[key]} 编号重复")
+            continue
+        seen[key] = full
+
+        error = check_png(path)
+        if error:
+            report.invalid.append(f"{full}: {error}")
+            continue
+        count += 1
+    return count
+
+
+def _validate_states(root: Path, report: ValidationReport) -> None:
+    """校验 ``states/`` 状态样本目录（新旧结构并存）。
+
+    * 旧扁平分组（``transition_bottom`` / ``non_transition_bottom``）：人工标注、
+      文件名含中文，因此只校验结构与 PNG 有效性；
+    * 新状态分组（``yard`` / ``exploration`` / …）：``positive`` / ``negative`` 子目录，
+      要求命名规范；同目录下的历史扁平 PNG 保留兼容、宽松校验；
+    * ``unknown``：按来源子分类（``shop`` / ``collection`` / …）。
     """
     if not root.is_dir():
         report.warnings.append("states/ 不存在（尚未采集状态样本？）")
@@ -293,7 +404,8 @@ def _validate_states(root: Path, report: ValidationReport) -> None:
         if entry.name not in ALLOWED_NON_PNG_FILES:
             report.warnings.append(f"{entry.as_posix()}: states 根目录下的非样本条目（已忽略）")
 
-    for group in ALLOWED_STATE_GROUPS:
+    # ---- 旧扁平分组 ----
+    for group in LEGACY_STATE_GROUPS:
         directory = root / group
         if not directory.is_dir():
             report.warnings.append(f"states/{group} 不存在（尚未采集该组样本？）")
@@ -309,7 +421,141 @@ def _validate_states(root: Path, report: ValidationReport) -> None:
                 report.invalid.append(f"{label}: {error}")
                 continue
             count += 1
-        report.state_samples[group] = count
+        report.legacy_state_samples[group] = count
+
+    # ---- 新状态分组 ----
+    for group in STATE_GROUPS:
+        directory = root / group
+        if not directory.is_dir():
+            report.warnings.append(f"states/{group} 不存在（尚未构建新结构？）")
+            continue
+        total = 0
+        for entry in sorted(directory.iterdir()):
+            if entry.is_dir():
+                if entry.name not in SAMPLE_POLARITIES:
+                    report.invalid.append(
+                        f"{entry.as_posix()}: states/{group} 下只允许 "
+                        f"{'/'.join(SAMPLE_POLARITIES)} 子目录"
+                    )
+                    continue
+                total += _validate_sample_files(
+                    entry, f"states/{group}/{entry.name}", group, report
+                )
+            elif entry.suffix.lower() == ".png":
+                # 历史扁平样本：保留兼容
+                error = check_png(entry)
+                if error:
+                    report.invalid.append(f"{entry.as_posix()}: {error}")
+        report.state_samples[group] = total
+
+    # ---- unknown ----
+    unknown_dir = root / UNKNOWN_GROUP
+    if not unknown_dir.is_dir():
+        report.warnings.append(f"states/{UNKNOWN_GROUP} 不存在（尚未构建新结构？）")
+        return
+    total = 0
+    for entry in sorted(unknown_dir.iterdir()):
+        if entry.is_dir():
+            if entry.name not in ALLOWED_UNKNOWN_CATEGORIES:
+                report.invalid.append(
+                    f"{entry.as_posix()}: 未知 unknown 子分类"
+                    f"（允许: {', '.join(ALLOWED_UNKNOWN_CATEGORIES)}）"
+                )
+                continue
+            total += _validate_sample_files(
+                entry, f"states/{UNKNOWN_GROUP}/{entry.name}", UNKNOWN_GROUP, report
+            )
+        elif entry.suffix.lower() == ".png":
+            error = check_png(entry)
+            if error:
+                report.invalid.append(f"{entry.as_posix()}: {error}")
+    report.state_samples[UNKNOWN_GROUP] = total
+
+
+def _validate_raw(root: Path, report: ValidationReport) -> None:
+    """校验 ``raw/`` 原始截图归档（唯一真源）。
+
+    结构：``raw/<state>/``，``unknown`` 下再分来源子分类；
+    文件命名：``{state}_{source}_{NNN}.png``。
+    """
+    if not root.is_dir():
+        report.warnings.append("raw/ 不存在（尚未构建新结构？运行 tools/build_dataset.py）")
+        return
+
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            if entry.name not in ALLOWED_NON_PNG_FILES:
+                report.warnings.append(f"{entry.as_posix()}: raw 根目录下的非样本条目（已忽略）")
+            continue
+        if entry.name not in ALLOWED_RAW_STATES:
+            report.invalid.append(
+                f"{entry.as_posix()}: 未知状态目录（允许: {', '.join(ALLOWED_RAW_STATES)}）"
+            )
+            continue
+        if entry.name == UNKNOWN_GROUP:
+            total = 0
+            for sub in sorted(entry.iterdir()):
+                if not sub.is_dir():
+                    if sub.name not in ALLOWED_NON_PNG_FILES:
+                        report.warnings.append(f"{sub.as_posix()}: raw/unknown 下的非目录条目（已忽略）")
+                    continue
+                if sub.name not in ALLOWED_UNKNOWN_CATEGORIES:
+                    report.invalid.append(
+                        f"{sub.as_posix()}: 未知 unknown 子分类"
+                        f"（允许: {', '.join(ALLOWED_UNKNOWN_CATEGORIES)}）"
+                    )
+                    continue
+                total += _validate_sample_files(
+                    sub, f"raw/{UNKNOWN_GROUP}/{sub.name}", UNKNOWN_GROUP, report
+                )
+            report.raw_samples[UNKNOWN_GROUP] = total
+        else:
+            report.raw_samples[entry.name] = _validate_sample_files(
+                entry, f"raw/{entry.name}", entry.name, report
+            )
+
+
+def _validate_features(root: Path, report: ValidationReport) -> None:
+    """校验 ``features/`` 证据级 ROI 样本。
+
+    结构：``features/<detector>/positive|negative/``（detector 可含一级分组，
+    如 ``bottom_menu/yard``、``battle/auto_button``）；
+    文件命名：``{detector}_{source}_{NNN}.png``。
+    """
+    if not root.is_dir():
+        report.warnings.append("features/ 不存在（尚未构建新结构？运行 tools/build_dataset.py）")
+        return
+
+    found: set[str] = set()
+    for detector in ALLOWED_FEATURE_DETECTORS:
+        directory = root / detector
+        if not directory.is_dir():
+            report.invalid.append(f"features/{detector} 不存在（detector 目录缺失）")
+            continue
+        found.add(detector)
+        label = detector.replace("/", "_")
+        counts = {"positive": 0, "negative": 0}
+        for entry in sorted(directory.iterdir()):
+            if not entry.is_dir():
+                if entry.name not in ALLOWED_NON_PNG_FILES:
+                    report.warnings.append(f"{entry.as_posix()}: detector 下的非目录条目（已忽略）")
+                continue
+            if entry.name not in SAMPLE_POLARITIES:
+                report.invalid.append(
+                    f"{entry.as_posix()}: detector 下只允许 {'/'.join(SAMPLE_POLARITIES)} 子目录"
+                )
+                continue
+            counts[entry.name] = _validate_sample_files(
+                entry, f"features/{detector}/{entry.name}", label, report
+            )
+        report.feature_samples[detector] = counts
+
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if any(entry.name == d.split("/")[0] for d in ALLOWED_FEATURE_DETECTORS):
+            continue
+        report.invalid.append(f"{entry.as_posix()}: 未知 features 分组")
 
 
 def _validate_root_entries(dataset_root: Path, report: ValidationReport) -> None:
@@ -336,6 +582,8 @@ def validate(dataset_root: Path) -> ValidationReport:
     _validate_scenes(dataset_root / "scenes", report)
     _validate_templates(dataset_root / "templates", report)
     _validate_states(dataset_root / "states", report)
+    _validate_raw(dataset_root / "raw", report)
+    _validate_features(dataset_root / "features", report)
     return report
 
 
@@ -365,9 +613,27 @@ def print_report(dataset_root: Path, report: ValidationReport) -> None:
     print(f"{report.templates} images ({len(report.template_groups)} groups)")
     print()
     print("States:")
-    if report.state_samples:
+    if report.state_samples or report.legacy_state_samples:
+        for group, count in report.legacy_state_samples.items():
+            print(f"{group} (legacy): {count} images")
         for group, count in report.state_samples.items():
             print(f"{group}: {count} images")
+    else:
+        print("none")
+    print()
+    print("Raw:")
+    if report.raw_samples:
+        for state, count in report.raw_samples.items():
+            print(f"{state}: {count} images")
+        print(f"total: {sum(report.raw_samples.values())} images")
+    else:
+        print("none")
+    print()
+    print("Features:")
+    if report.feature_samples:
+        for detector, counts in report.feature_samples.items():
+            print(f"{detector}: positive {counts['positive']}, negative {counts['negative']}")
+        print(f"total: {sum(c['positive'] + c['negative'] for c in report.feature_samples.values())} images")
     else:
         print("none")
     print()
