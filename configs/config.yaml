@@ -143,6 +143,14 @@ runtime:
     max_events: 1000
     # 每个周期是否检查目标窗口在前台：只检查、不抢占，失焦则跳过该轮（计入 skipped）
     check_foreground: true
+  # 状态稳定化（Phase 3.2）：把逐帧识别结果稳定为"稳定状态"
+  stabilization:
+    # 总开关；关闭时退化为"每帧立即确认"（等价 min_frames=1）
+    enabled: true
+    # 稳定窗口：连续多少帧相同状态才确认
+    min_frames: 3
+    # 置信度阈值：已知状态低于该值的帧不计入稳定计数（unknown 豁免，因其置信度恒为 0）
+    confidence_threshold: 0.85
 
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL

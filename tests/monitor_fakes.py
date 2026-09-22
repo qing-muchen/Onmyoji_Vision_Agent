@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-from src.core.config import RuntimeStateMonitorConfig
-from src.runtime.state_monitor import StateMonitor
+from src.core.config import RuntimeStabilizationConfig, RuntimeStateMonitorConfig
+from src.runtime.state_monitor import StateMonitor, StateStabilizer
 from src.vision.capture.models import Frame
 from src.vision.state import StateName, StateResult, StateSource
 
@@ -30,11 +30,24 @@ def make_frame() -> Frame:
 class FakeClassifier:
     """按预设序列返回状态结果的分类器替身（序列循环使用，支持重复 run）。"""
 
-    def __init__(self, states: Sequence[StateName], *, confidence: float = 0.9) -> None:
+    def __init__(
+        self,
+        states: Sequence[StateName],
+        *,
+        confidence: float = 0.9,
+        confidences: Sequence[float] | None = None,
+    ) -> None:
+        if confidences is None:
+            confidences = [confidence] * len(states)
         self._results = [
             StateResult(
                 state_name=state,
-                confidence=confidence,
+                # 与真实 StateClassifier 一致：unknown 的置信度恒为 0.0
+                confidence=(
+                    0.0
+                    if state is StateName.UNKNOWN
+                    else confidences[index % len(confidences)]
+                ),
                 source=StateSource.FALLBACK,
                 detail=f"stub {index}",
             )
@@ -97,6 +110,9 @@ def build_monitor(
     tmp_path: Path | None = None,
     clock: FakeClock | None = None,
     interrupt_at: int | None = None,
+    stabilize: bool = False,
+    stabilizer: StateStabilizer | None = None,
+    confidences: Sequence[float] | None = None,
     **config_overrides: object,
 ) -> tuple[StateMonitor, FakeClassifier, FakeFrameSource, FakeClock]:
     """装配监控器与全部替身。
@@ -107,6 +123,11 @@ def build_monitor(
         tmp_path: 历史文件所在目录；省略时使用配置默认路径（测试中应尽量传入）。
         clock: 可复用的假时钟；省略时新建。
         interrupt_at: 在该轮索引抛出 ``KeyboardInterrupt``。
+        stabilize: 是否启用真实稳定窗口（``min_frames=3``）。默认 ``False`` 表示
+            **直通模式**（``min_frames=1``，每帧立即确认），用于独立验证周期与事件逻辑；
+            稳定化语义由 ``test_state_stabilizer.py`` 覆盖。
+        stabilizer: 直接注入的稳定器（优先于 ``stabilize``）。
+        confidences: 逐帧置信度序列（默认全部 0.9）。
         **config_overrides: 覆盖监控配置字段（例如 ``interval_ms`` / ``save_history``）。
 
     Returns:
@@ -119,12 +140,17 @@ def build_monitor(
     values.update(config_overrides)
     config = RuntimeStateMonitorConfig(**values)  # type: ignore[arg-type]
 
-    classifier = FakeClassifier(states)
+    active_stabilizer = stabilizer
+    if active_stabilizer is None and not stabilize:
+        active_stabilizer = StateStabilizer(RuntimeStabilizationConfig(min_frames=1))
+
+    classifier = FakeClassifier(states, confidences=confidences)
     source = FakeFrameSource(plan, interrupt_at=interrupt_at)
     monitor = StateMonitor(
         classifier,  # type: ignore[arg-type]
         source,
         config,
+        stabilizer=active_stabilizer,
         clock=active_clock.clock,
         sleep=active_clock.sleep,
         now=lambda: FIXED_TIMESTAMP,

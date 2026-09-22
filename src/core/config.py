@@ -92,6 +92,14 @@ MIN_MONITOR_INTERVAL_MS: int = 1
 MAX_MONITOR_INTERVAL_MS: int = 60000
 #: 每秒毫秒数（毫秒 <-> 秒换算）
 MILLISECONDS_PER_SECOND: float = 1000.0
+#: 默认的稳定窗口帧数（连续多少帧相同状态才确认）
+DEFAULT_STABILIZER_MIN_FRAMES: int = 3
+#: 默认的稳定化置信度阈值（低于该值的已知状态不计入稳定计数）
+DEFAULT_STABILIZER_CONFIDENCE_THRESHOLD: float = 0.85
+#: 稳定窗口的合法上限（防止配置成几乎不会确认的数值）
+MAX_STABILIZER_MIN_FRAMES: int = 60
+#: 关闭稳定化时使用的确认帧数（每帧立即确认）
+IDENTITY_STABILIZATION_FRAMES: int = 1
 #: 二值化阈值的合法范围
 GRAYSCALE_MAX_VALUE: int = 255
 
@@ -468,11 +476,48 @@ class RuntimeStateMonitorConfig(StrictModel):
         return self.interval_ms / MILLISECONDS_PER_SECOND
 
 
+class RuntimeStabilizationConfig(StrictModel):
+    """状态稳定化配置（Phase 3.2）。
+
+    视觉识别是逐帧的，瞬时结果可能抖动（画面在转场动画、UI 淡入淡出、门控抖动等）。
+    稳定化把"逐帧状态"变成"稳定状态"：只有**连续若干帧**给出同一状态才确认，
+    状态变化事件只由稳定状态驱动。
+
+    Attributes:
+        enabled: 稳定化总开关；关闭时退化为"每帧立即确认"（等价于 ``min_frames=1``）。
+        min_frames: 稳定窗口帧数：连续多少帧相同状态才确认。
+        confidence_threshold: 置信度阈值：已知状态低于该值的帧**不计入**稳定计数
+            （既不累加也不重置，视为"这一帧没提供有效证据"）。
+            ``unknown`` 的置信度恒为 ``0.0``，因此对 ``unknown`` 豁免该阈值
+            （否则 unknown 永远无法累积，状态会卡死在已知状态）。
+    """
+
+    enabled: bool = True
+    min_frames: int = Field(
+        default=DEFAULT_STABILIZER_MIN_FRAMES,
+        ge=1,
+        le=MAX_STABILIZER_MIN_FRAMES,
+    )
+    confidence_threshold: float = Field(
+        default=DEFAULT_STABILIZER_CONFIDENCE_THRESHOLD,
+        gt=0.0,
+        le=1.0,
+    )
+
+    @property
+    def required_frames(self) -> int:
+        """实际生效的确认帧数（关闭稳定化时为 1）。"""
+        return self.min_frames if self.enabled else IDENTITY_STABILIZATION_FRAMES
+
+
 class RuntimeConfig(StrictModel):
-    """运行期编排配置（Phase 3.1）。"""
+    """运行期编排配置（Phase 3.0 / 3.1 / 3.2）。"""
 
     state_monitor: RuntimeStateMonitorConfig = Field(
         default_factory=RuntimeStateMonitorConfig
+    )
+    stabilization: RuntimeStabilizationConfig = Field(
+        default_factory=RuntimeStabilizationConfig
     )
 
 

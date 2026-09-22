@@ -39,13 +39,17 @@ def local_now_iso() -> str:
 class MonitorReport:
     """一次监控运行的摘要。
 
+    说明：``initial_state`` / ``final_state`` / ``events`` 都是**稳定状态**
+    （经 :class:`~src.runtime.state_monitor.stabilizer.StateStabilizer` 处理后的结果），
+    不是逐帧的原始识别值。
+
     Attributes:
         cycles: 已完成的周期数。
         classified: 实际完成状态识别的周期数。
         skipped: 因帧不可用而跳过的周期数（后端暂无画面 / 前台门控未通过）。
-        events: 本次运行产生的状态变化事件。
-        initial_state: 首次识别到的状态（基线，不属于事件）。
-        final_state: 运行结束时的状态。
+        events: 本次运行产生的稳定状态变化事件。
+        initial_state: 首次确认的稳定状态（基线，不属于事件）。
+        final_state: 运行结束时的稳定状态。
         started_at: 开始时间（ISO 8601）。
         ended_at: 结束时间（ISO 8601）。
         stop_reason: 停止原因。

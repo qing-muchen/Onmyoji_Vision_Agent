@@ -10,8 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from src.core.config import AppConfig, RuntimeStateMonitorConfig
-from src.runtime.state_monitor import StateEvent, StateMonitor
+from src.core.config import (
+    AppConfig,
+    RuntimeStabilizationConfig,
+    RuntimeStateMonitorConfig,
+)
+from src.runtime.state_monitor import StateEvent, StateMonitor, StateStabilizer
 from src.vision.capture.models import Frame
 from src.vision.state import StateClassifier, StateName
 from tests.monitor_fakes import (
@@ -88,6 +92,8 @@ def test_on_result_and_on_event_callbacks(tmp_path: Path) -> None:
         FakeClassifier([StateName.UNKNOWN, StateName.YARD]),  # type: ignore[arg-type]
         FakeFrameSource(),
         config,
+        # 直通稳定化（窗口 1 帧）：本用例只验证回调接线，稳定化语义见 test_state_stabilizer.py
+        stabilizer=StateStabilizer(RuntimeStabilizationConfig(min_frames=1)),
         on_result=lambda result: seen_results.append(result.state_name),
         on_event=seen_events.append,
     )

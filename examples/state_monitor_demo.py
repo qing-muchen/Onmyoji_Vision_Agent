@@ -51,6 +51,7 @@ from src.runtime.state_monitor import (  # noqa: E402
     CaptureFrameSource,
     FrameSource,
     MonitorReport,
+    StableStateResult,
     StateEvent,
     StateHistoryStore,
     StateMonitor,
@@ -58,7 +59,7 @@ from src.runtime.state_monitor import (  # noqa: E402
 )
 from src.utils.logger import get_logger, setup_logging, shutdown_logging  # noqa: E402
 from src.vision.capture import Frame, create_capture_backend  # noqa: E402
-from src.vision.state import StateClassifier, StateResult  # noqa: E402
+from src.vision.state import StateClassifier  # noqa: E402
 from src.vision.window import WindowInfo, WindowManager  # noqa: E402
 
 EXIT_OK: int = 0
@@ -255,18 +256,19 @@ def run(args: argparse.Namespace, config: AppConfig) -> int:
     source, window = build_source(args, config)
     quiet = args.quiet
 
-    def on_result(result: StateResult) -> None:
-        """打印每轮识别结果。"""
-        if quiet:
+    def on_stable(stable: StableStateResult) -> None:
+        """打印每轮的原始状态与稳定状态（展示稳定器的工作过程）。"""
+        if quiet and not stable.changed:
             return
         stamp = datetime.now().strftime("%H:%M:%S")
+        stable_label = stable.state_name.value if stable.is_confirmed else "pending"
         print(
-            f"[{stamp}] state={result.state_name.value} "
-            f"confidence={result.confidence:.4f} source={result.source.value}"
+            f"[{stamp}] raw={stable.raw_state.value:<10} stable={stable_label:<10} "
+            f"({stable.support_frames}/{stable.required_frames})"
         )
 
     def on_event(event: StateEvent) -> None:
-        """打印状态变化事件。"""
+        """打印稳定状态变化事件。"""
         print(f"[{event.timestamp}] EVENT {event.state_key} confidence={event.confidence:.4f}")
 
     classifier = StateClassifier.from_config(config)
@@ -275,7 +277,7 @@ def run(args: argparse.Namespace, config: AppConfig) -> int:
         source,
         monitor_config,
         history=StateHistoryStore(monitor_config),
-        on_result=on_result,
+        on_stable=on_stable,
         on_event=on_event,
     )
 
@@ -286,6 +288,9 @@ def run(args: argparse.Namespace, config: AppConfig) -> int:
     print()
     print("Interval:")
     print(f"{monitor_config.interval_ms} ms")
+    print()
+    print("Stabilization:")
+    print(f"enabled={monitor.stabilizer.is_enabled} min_frames={monitor.stabilizer.required_frames} threshold={monitor.stabilizer.confidence_threshold:.2f}")
     print()
 
     if isinstance(source, CaptureFrameSource):

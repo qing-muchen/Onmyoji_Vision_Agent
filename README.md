@@ -87,9 +87,21 @@ UI 元素也能稳定定位（纯像素模板匹配对此类元素不可靠）�
 31. `CaptureFrameSource` + 前台门控 —— 每周期**只检查**目标窗口是否在前台（不抢占），
     失焦则跳过该轮并计入 `skipped`；`examples/state_monitor_demo.py` 持续打印当前状态。
 
+**Phase 3.2 — State Stabilizer（已完成）**：把逐帧识别结果稳定为"稳定状态"，
+避免瞬时抖动驱动事件：
+
+32. `StateStabilizer` —— 连续 `min_frames`（默认 3）帧相同状态才确认；已知状态置信度低于
+    `confidence_threshold`（默认 0.85）的帧**不计入**统计（既不累加也不重置，视为无效证据）；
+33. `unknown` **参与统计但不会瞬时覆盖**：其置信度恒为 `0.0`，若套用门槛将永远无法累积
+    （状态会卡死在已知状态），因此对 `unknown` 豁免门槛，但它同样必须满足稳定窗口
+    才能替换一个已知的稳定状态；
+34. 监控流程改为 `capture → classify → stabilizer → stable state → event`：**只有稳定状态
+    变化才产生 `StateEvent`**，首次确认只建立基线；`examples/state_stabilizer_demo.py`
+    对照展示 `raw state` 与 `stable state`。
+
 **尚未实现**：YOLO / 深度学习模型与训练、鼠标点击、键盘输入、**状态转移与状态机**
-（Phase 3.0 只回答"当前是什么状态"，Phase 3.1 只做"采集 → 识别 → 记录"，
-"接下来该做什么"属于 `src/state`）、任务系统、自动挂机逻辑，
+（Phase 3.0/3.1/3.2 只回答"当前是什么状态"、"它是否稳定"，不回答"接下来该做什么"——
+后者属于 `src/state`）、任务系统、自动挂机逻辑，
 以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，
 Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
@@ -111,6 +123,7 @@ Onmyoji_Vision_Agent/
 │   ├── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
 │   ├── state_classifier_demo.py      # 状态识别 Demo（Frame -> StateResult）
 │   ├── state_monitor_demo.py         # 实时状态监控 Demo（周期采集 -> 状态变化事件）
+│   ├── state_stabilizer_demo.py      # 状态稳定化 Demo（raw state -> stable state）
 │   └── ocr_demo.py                   # OCR Demo（Frame -> TextResult）
 ├── logs/                         # 运行日志输出目录
 ├── models/                       # 模型权重（内容不入库）
@@ -173,6 +186,7 @@ Onmyoji_Vision_Agent/
 │   ├── runtime/                  # 运行期编排（Phase 3.1）
 │   │   └── state_monitor/        #   实时状态监控
 │   │       ├── monitor.py        #     StateMonitor（固定节拍循环 + 变化检测）
+│   │       ├── stabilizer.py     #     StateStabilizer（逐帧 -> 稳定状态）
 │   │       ├── report.py         #     MonitorReport / StopReason（运行摘要）
 │   │       ├── events.py         #     StateEvent（状态变化事件）
 │   │       ├── history.py        #     StateHistoryStore（即时原子写 JSON）
@@ -237,6 +251,10 @@ python examples/state_classifier_demo.py --image dataset/states/transition_botto
 
 # 10. Demo：实时状态监控（Ctrl+C 结束；写入 logs/state_history.json）
 python examples/state_monitor_demo.py --duration 30
+
+# 11. Demo：状态稳定化（对照 raw state 与 stable state）
+python examples/state_stabilizer_demo.py
+python examples/state_stabilizer_demo.py --raw unknown,yard,yard,yard,unknown,unknown,unknown
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -255,7 +273,7 @@ python examples/state_monitor_demo.py --duration 30
 | `scene` | 场景识别配置（置信度阈值、统一缩放尺寸） |
 | `ocr` | OCR 配置（Provider 名称与语言、预处理放大倍数与二值化阈值） |
 | `state` | 状态识别配置（转场底部裁剪比例、阈值与负样本间隔；庭院阈值） |
-| `runtime` | 运行期编排配置（状态监控周期、历史文件路径与事件上限、前台检查开关） |
+| `runtime` | 运行期编排配置（状态监控周期、历史文件路径与事件上限、前台检查开关、状态稳定化窗口与门槛） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
 | `logging` | 日志级别、目录、滚动策略与格式 |
 
@@ -298,6 +316,9 @@ python examples/state_monitor_demo.py --duration 30
 | `runtime.state_monitor.save_history` | `true` | 是否落盘；关闭时只打印 |
 | `runtime.state_monitor.max_events` | `1000` | 事件历史上限（超出丢弃最旧） |
 | `runtime.state_monitor.check_foreground` | `true` | 每周期只检查目标窗口是否在前台（不抢占），失焦跳过该轮 |
+| `runtime.stabilization.enabled` | `true` | 稳定化总开关；关闭时退化为"每帧立即确认" |
+| `runtime.stabilization.min_frames` | `3` | 稳定窗口：连续多少帧相同状态才确认 |
+| `runtime.stabilization.confidence_threshold` | `0.85` | 已知状态低于该值的帧不计入稳定计数（`unknown` 豁免） |
 
 环境变量可覆盖任意字段，格式为 `OVA_<段>__<字段>`：
 
@@ -1097,6 +1118,92 @@ History:      logs/state_history.json
   `MonitorError`（不静默丢事件）；
 * 未在真实游戏窗口上长时间运行验证（本机无阴阳师窗口）。
 
+## 状态稳定化（Phase 3.2）
+
+Phase 3.1 的监控直接消费逐帧识别结果，而视觉识别**逐帧抖动**是常态（转场动画、UI 淡入淡出、
+窗口失焦/回焦、阈值临界点附近的像素差异），会让事件被噪声反复触发。Phase 3.2 在识别与事件
+之间插入稳定器：
+
+```text
+每 interval_ms（默认 500ms）:
+  FrameSource.get_frame()                    # None → 跳过该轮（计入 skipped）
+        ▼
+  StateClassifier.classify(frame)            # Phase 3.0：逐帧识别（raw state）
+        ▼
+  StateStabilizer.update(result)             # Phase 3.2：累积 -> 稳定状态
+        │  连续 min_frames 帧相同状态才确认；低于门槛的帧不计入
+        ▼
+  只有 stable state 改变 → StateEvent → history 即时落盘
+```
+
+### 稳定化规则
+
+| 规则 | 说明 |
+| --- | --- |
+| 连续窗口确认 | 同一状态连续出现 `min_frames`（默认 3）帧才成为稳定状态；候选状态改变时计数从 1 重新开始 |
+| 置信度门槛 | 已知状态（`yard` / `transition`）置信度低于 `confidence_threshold`（默认 0.85）的帧**不计入**统计——既不累加也**不重置**，视为"这一帧没有提供有效证据"，偶发低分不会打断已累积的证据 |
+| `unknown` 参与统计 | `unknown` 的置信度恒为 `0.0`（Phase 3.0 约定），若套用门槛将永远无法累积、状态会卡死在已知状态；因此对 `unknown` **豁免**门槛 |
+| `unknown` 不能瞬时覆盖 | 它同样必须满足 `min_frames` 连续窗口才能替换已知稳定状态——单帧 unknown 推不翻高可信状态；状态"回落"是合法变化，但要付同样的证据代价 |
+| 首次确认是基线 | `StableStateResult.changed` 只在"已有稳定状态且发生切换"时为 `True`；首次确认（`None → yard`）不算变化，因此**不产生事件** |
+
+### 接口
+
+| 类型 | 文件 | 说明 |
+| --- | --- | --- |
+| `StateStabilizer` | `state_monitor/stabilizer.py` | `update(result) -> StableStateResult`；`stable_state` / `candidate` / `support_frames` / `is_confirmed` / `reset()` |
+| `StableStateResult` | 同上 | `state_name` / `previous_state` / `confidence` / `changed` / `is_confirmed` / `raw_state` / `raw_confidence` / `candidate` / `support_frames` / `required_frames` / `counted` |
+
+`StateMonitor` 的公开接口保持兼容并扩展：`current_state`（现在是**稳定状态**）、
+`current_raw_state`（逐帧原始状态）、`last_stable`（稳定化明细）、`stabilizer`，
+以及新增 `on_stable` 回调。
+
+### Demo 结果
+
+```powershell
+python examples/state_stabilizer_demo.py
+python examples/state_stabilizer_demo.py --raw unknown,yard,yard,yard,unknown,unknown,unknown
+python examples/state_stabilizer_demo.py --confidence 0.5    # 演示"置信度不足不计入"
+python examples/state_stabilizer_demo.py --disable           # 演示关闭稳定化（每帧确认）
+```
+
+实测（本机 Python 3.12.10，默认序列即需求示例）：
+
+```text
+Config: enabled=True min_frames=3 confidence_threshold=0.85
+
+Frames (raw -> stable):
+   1. raw=unknown    stable=pending    (1/3)
+   2. raw=yard       stable=pending    (1/3)
+   3. raw=yard       stable=pending    (2/3)
+   4. raw=yard       stable=yard       (3/3)
+
+Raw States:      unknown, yard, yard, yard
+Stable States:   pending, pending, pending, yard
+Final Stable State: yard
+Stable Changes: 0            # 首次确认是基线，不算变化
+```
+
+另外两个实测场景：
+
+```text
+# 抖动不驱动事件（连续 3 帧才切换）：yard yard yard | transition transition transition
+[19:29:42] raw=yard       stable=pending    (1/3)
+[19:29:42] raw=yard       stable=yard       (3/3)      ← 首次确认（无事件）
+[19:29:42] raw=transition stable=yard       (2/3)      ← 单帧/双帧不覆盖
+[19:29:42] EVENT yard -> transition ...                ← 第 3 帧才产生事件
+
+# 置信度不足（--confidence 0.5 < 0.85）：3 帧 yard 全部被忽略
+   2. raw=yard       stable=pending    (1/3)  [ignored: confidence below threshold]
+```
+
+### 当前限制
+
+* 稳定化只处理**状态序列**：不做"持续时长统计"、不做超时兜底（例如长期不确认时如何降级）；
+* 稳定窗口固定为全局 `min_frames`，不支持"per-state 不同窗口"（如需为 `unknown` 单独设更长窗口，
+  需要新增配置项——当前用统一窗口 + `unknown` 豁免门槛实现）；
+* 稳定化会**引入延迟**（最坏 `min_frames × interval`，默认 1.5s），这是刻意的精度/时延取舍；
+* 与 Phase 3.0 一致：状态集合仅三态，识别能力受样本量限制。
+
 ## 代码规范
 
 1. 全部公共函数/方法使用类型注解并编写 docstring（Google 风格）。
@@ -1120,6 +1227,8 @@ History:      logs/state_history.json
   （庭院 / 转场 / 未知），转场只使用底部固定条带并结合正负样本双侧判别。
 - **Phase 3.1（已完成）**：State Monitor —— 固定周期状态监控、状态变化事件与
   `state_history.json` 持久化（只做"采集 → 识别 → 记录"）。
+- **Phase 3.2（已完成）**：State Stabilizer —— 连续窗口确认 + 置信度门槛 + `unknown` 语义，
+  事件只由稳定状态驱动。
 - Phase 2.4：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
 - Phase 2.5：感知融合 —— 把 scene / detector / ocr / state 的结果组合成统一的界面描述（仍不做决策）。
 - Phase 3：State Machine —— 界面状态建模与转移（`src/state`）。

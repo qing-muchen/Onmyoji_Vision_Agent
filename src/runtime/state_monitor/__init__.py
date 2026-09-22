@@ -40,15 +40,18 @@ from src.runtime.state_monitor.source import (
     FrameSource,
     make_foreground_gate,
 )
+from src.runtime.state_monitor.stabilizer import StableStateResult, StateStabilizer
 
 __all__ = [
     "CaptureFrameSource",
     "ForegroundGate",
     "FrameSource",
     "MonitorReport",
+    "StableStateResult",
     "StateEvent",
     "StateHistoryStore",
     "StateMonitor",
+    "StateStabilizer",
     "StopReason",
     "local_now_iso",
     "make_foreground_gate",
