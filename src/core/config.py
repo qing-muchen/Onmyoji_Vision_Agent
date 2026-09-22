@@ -143,6 +143,18 @@ DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
         "templates": "dataset/features/battle/auto_button/positive",
         "text_targets": ["自动", "手动"],
     },
+    "battle_skill_area": {
+        "roi": (0.60, 0.74, 0.92, 1.00),
+        "templates": "dataset/features/battle/skill_area/positive",
+    },
+    "battle_action_bar": {
+        "roi": (0.90, 0.04, 1.00, 0.72),
+        "templates": "dataset/features/battle/action_bar/positive",
+    },
+    "battle_shikigami_icons": {
+        "roi": (0.925, 0.09, 1.00, 0.60),
+        "templates": "dataset/features/battle/shikigami_icons/positive",
+    },
     "victory_icon": {
         "roi": (0.25, 0.05, 0.85, 0.40),
         "templates": "dataset/features/victory_icon/positive",
@@ -154,10 +166,18 @@ DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
     },
 }
 #: 默认的证据聚合规则：状态 -> 需要的证据名
+#:
+#: ``requires`` 必须全部命中，``any_of`` 至少命中一条（Phase 4.2 起 ``battle`` 使用两者组合：
+#: 自动按钮是战斗的强特征，技能区 / 行动条 / 式神头像任一再加一条旁证即可，
+#: 这样单个证据被技能动画遮挡时不会丢掉整条链路）。
 DEFAULT_EVIDENCE_RULES: tuple[dict[str, Any], ...] = (
     {"state": "battle_result", "requires": ["victory_icon"]},
     {"state": "battle_reward", "requires": ["reward_panel"]},
-    {"state": "battle", "requires": ["battle_auto_button"]},
+    {
+        "state": "battle",
+        "requires": ["battle_auto_button"],
+        "any_of": ["battle_skill_area", "battle_action_bar", "battle_shikigami_icons"],
+    },
     {"state": "exploration", "requires": ["bottom_menu_exploration", "chapter_panel"]},
     {"state": "yard", "requires": ["bottom_menu_yard"]},
 )

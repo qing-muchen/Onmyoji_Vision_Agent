@@ -134,17 +134,17 @@ class EvidenceAggregator:
             else:
                 matched.append(hit)
 
+        # any_of 里的证据"命中即加分"，"全部未命中"则整条规则不满足；
+        # 未命中的也要记入 missing，否则调用方无法解释"证据不够"的原因。
+        any_of_missing: list[str] = []
         for name in rule.any_of:
             hit = self._hit(by_name, name, rule.min_confidence)
             if hit is not None:
                 matched.append(hit)
+            else:
+                any_of_missing.append(name)
 
-        any_of_ok = True
-        if rule.any_of and not any(
-            self._hit(by_name, name, rule.min_confidence) is not None for name in rule.any_of
-        ):
-            any_of_ok = False
-
+        any_of_ok = (not rule.any_of) or (len(any_of_missing) < len(rule.any_of))
         satisfied = not missing and any_of_ok
         score = 0.0
         if satisfied and matched:
@@ -155,7 +155,7 @@ class EvidenceAggregator:
             score=score,
             satisfied=satisfied,
             matched=tuple(matched),
-            missing=tuple(missing),
+            missing=tuple(missing + any_of_missing),
             reason=", ".join(f"{item.name}={item.confidence:.4f}" for item in matched),
         )
 

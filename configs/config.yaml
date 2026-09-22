@@ -175,6 +175,26 @@ evidence:
       templates: "dataset/features/battle/auto_button/positive"
       threshold: 0.85
       text_targets: ["自动", "手动"]
+    # Phase 4.2：battle 证据链扩展。战斗 UI 的有效证据分散在三处，
+    # 各自独立成 detector，由 aggregator 综合判断（不做单一 ROI 合并）。
+    battle_skill_area:
+      enabled: true
+      # 底部技能按钮区（妖术/普攻）
+      roi: [0.60, 0.74, 0.92, 1.00]
+      templates: "dataset/features/battle/skill_area/positive"
+      threshold: 0.85
+    battle_action_bar:
+      enabled: true
+      # 右侧行动顺序条
+      roi: [0.90, 0.04, 1.00, 0.72]
+      templates: "dataset/features/battle/action_bar/positive"
+      threshold: 0.85
+    battle_shikigami_icons:
+      enabled: true
+      # 行动条上的式神头像（与 action_bar 区域相邻，语义不同：遮挡容错）
+      roi: [0.925, 0.09, 1.00, 0.60]
+      templates: "dataset/features/battle/shikigami_icons/positive"
+      threshold: 0.85
     victory_icon:
       enabled: true
       # 结算界面中心：胜利图标与「胜利」字样
@@ -205,8 +225,11 @@ evidence:
       - state: "battle_reward"
         requires: ["reward_panel"]
         min_confidence: 0.6
+      # 战斗（Phase 4.2）：自动按钮是必需证据，技能区 / 行动条 / 式神头像
+      # 至少再命中一条——单个证据可能被技能动画遮挡（实测 battle_002 右侧行动条不可见）
       - state: "battle"
         requires: ["battle_auto_button"]
+        any_of: ["battle_skill_area", "battle_action_bar", "battle_shikigami_icons"]
         min_confidence: 0.6
       - state: "exploration"
         requires: ["bottom_menu_exploration", "chapter_panel"]

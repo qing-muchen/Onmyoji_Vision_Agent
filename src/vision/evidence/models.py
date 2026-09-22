@@ -172,7 +172,8 @@ class EvidenceScore:
         score: 聚合得分，范围 ``[0, 1]``（命中证据置信度的平均）。
         satisfied: 规则是否被满足；只有满足的规则才可能成为候选。
         matched: 参与计分的命中证据（按置信度降序）。
-        missing: 规则要求但未命中的证据名（解释"为什么没达成"）。
+        missing: 未命中的证据名——包含 ``requires`` 中缺失的必需证据，以及 ``any_of`` 中
+            全部未命中的候选证据（解释"为什么这条规则没达成"）。
         reason: 可读的计分理由，例如 ``battle_auto_button=0.9500``。
 
     Raises:

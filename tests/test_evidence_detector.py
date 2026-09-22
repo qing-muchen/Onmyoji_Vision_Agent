@@ -1,4 +1,4 @@
-"""证据层（Phase 4.1）单元测试。
+"""证据层（Phase 4.1 / 4.2）单元测试。
 
 覆盖：
 
@@ -8,7 +8,8 @@
 4. :class:`EvidenceRegistry` 注册/重名/启停/批量检测；
 5. Fake Frame 输入（不依赖真实截图与真实数据集）；
 6. 每个已实现的 detector 都返回合法 :class:`EvidenceResult`；
-7. :class:`EvidenceAggregator` 的规则聚合（battle / yard / exploration / 无证据 → unknown）。
+7. :class:`EvidenceAggregator` 的规则聚合（battle / yard / exploration / 无证据 → unknown）；
+8. **Phase 4.2**：battle 证据链（新增 detector 注册、无模板契约、配置形态、``requires + any_of`` 规则）。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pydantic import ValidationError
 
 from src.core.config import (
     EvidenceAggregatorConfig,
+    EvidenceConfig,
     EvidenceDetectorConfig,
     EvidenceRuleConfig,
 )
@@ -243,11 +245,9 @@ class TestBaseDetectorInterface:
         with pytest.raises(EvidenceTemplateLoadError):
             load_feature_templates(directory, "other", limit=3, root=tmp_path)
 
-    def test_from_config_requires_name(self, tmp_path: Path) -> None:
+    def test_from_config_requires_name(self) -> None:
         class NoName(TemplateEvidenceDetector):
             pass
-
-        from src.core.config import EvidenceConfig
 
         with pytest.raises(EvidenceError, match="NAME"):
             NoName.from_config(EvidenceConfig())
@@ -304,8 +304,6 @@ class TestEvidenceRegistry:
         assert mapped["a"].confidence == pytest.approx(0.9)
 
     def test_create_detectors_from_config(self) -> None:
-        from src.core.config import EvidenceConfig
-
         detectors = create_detectors(EvidenceConfig())
         assert [item.name for item in detectors] == list(DETECTOR_CLASSES)
         assert "bottom_menu_yard" in EvidenceRegistry(detectors)
@@ -458,3 +456,130 @@ class TestEvidenceAggregator:
     def test_rule_needs_state(self) -> None:
         with pytest.raises(ValidationError):
             EvidenceRuleConfig(state="  ", requires=["battle_auto_button"])
+
+
+# --------------------------------------------------------------------------
+# 8. Phase 4.2：battle 证据链
+# --------------------------------------------------------------------------
+
+#: battle 相关的全部证据名（与配置顺序一致）
+BATTLE_EVIDENCE_NAMES: tuple[str, ...] = (
+    "battle_auto_button",
+    "battle_skill_area",
+    "battle_action_bar",
+    "battle_shikigami_icons",
+)
+#: Phase 4.2 新增的三个 detector
+NEW_BATTLE_DETECTORS: tuple[str, ...] = (
+    "battle_skill_area",
+    "battle_action_bar",
+    "battle_shikigami_icons",
+)
+
+
+class TestBattleEvidenceChain:
+    """Phase 4.2：battle 证据链的注册、无模板契约、配置形态与聚合规则。"""
+
+    def test_all_detectors_registered(self) -> None:
+        assert set(DETECTOR_CLASSES) == {
+            "bottom_menu_yard",
+            "bottom_menu_exploration",
+            "chapter_panel",
+            *BATTLE_EVIDENCE_NAMES,
+            "victory_icon",
+            "reward_panel",
+        }
+
+    @pytest.mark.parametrize("name", NEW_BATTLE_DETECTORS)
+    def test_new_detector_declares_battle_ui_type(self, name: str) -> None:
+        assert DETECTOR_CLASSES[name].NAME == name
+        assert DETECTOR_CLASSES[name].EVIDENCE_TYPE is EvidenceType.BATTLE_UI
+
+    @pytest.mark.parametrize("name", NEW_BATTLE_DETECTORS)
+    def test_no_template_returns_miss(self, name: str) -> None:
+        """没有模板时必须是"未检出"并给出原因，而不是抛异常或假装命中。"""
+        detector = DETECTOR_CLASSES[name](name, EvidenceDetectorConfig())
+        result = detector.detect(make_frame())
+        assert isinstance(result, EvidenceResult)
+        assert result.name == name
+        assert result.detected is False
+        assert result.confidence == pytest.approx(0.0)
+        assert result.bbox is None
+        assert result.metadata["reason"]
+
+    @pytest.mark.parametrize("name", NEW_BATTLE_DETECTORS)
+    def test_new_detectors_are_configurable(self, name: str) -> None:
+        config = EvidenceConfig()
+        assert name in config.detectors
+        expected = f"dataset/features/battle/{name.removeprefix('battle_')}/positive"
+        assert config.detectors[name].templates == expected
+
+    def test_config_roi_matches_dataset_layout(self) -> None:
+        """ROI 必须与 dataset/README.md 的 detector 表一致（防止配置漂移）。"""
+        detectors = EvidenceConfig().detectors
+        assert detectors["battle_skill_area"].roi == (0.60, 0.74, 0.92, 1.00)
+        assert detectors["battle_action_bar"].roi == (0.90, 0.04, 1.00, 0.72)
+        assert detectors["battle_shikigami_icons"].roi == (0.925, 0.09, 1.00, 0.60)
+
+    def test_default_battle_rule_shape(self) -> None:
+        config = EvidenceConfig()
+        battle = next(rule for rule in config.aggregator.rules if rule.state == "battle")
+        assert battle.requires == ["battle_auto_button"]
+        assert battle.any_of == list(NEW_BATTLE_DETECTORS)
+
+    @staticmethod
+    def battle_rule() -> EvidenceRuleConfig:
+        """Phase 4.2 的 battle 规则：必需自动按钮 + 任一辅助证据。"""
+        return EvidenceRuleConfig(
+            state="battle",
+            requires=["battle_auto_button"],
+            any_of=list(NEW_BATTLE_DETECTORS),
+        )
+
+    @pytest.mark.parametrize("aux", NEW_BATTLE_DETECTORS)
+    def test_auto_plus_one_aux_is_battle(self, aux: str) -> None:
+        """自动按钮 + 任一辅助证据即可判定 battle（覆盖技能动画遮挡单个证据的场景）。"""
+        result = aggregator(self.battle_rule()).aggregate(
+            [hit("battle_auto_button", 0.95), hit(aux, 0.9)]
+        )
+        assert result.state == "battle"
+        assert result.confidence == pytest.approx(0.925)
+        assert len(result.evidence) == 2
+
+    def test_auto_alone_is_not_enough(self) -> None:
+        """只有自动按钮、没有任何辅助证据时不判定 battle（避免单证据误判）。"""
+        result = aggregator(self.battle_rule()).aggregate([hit("battle_auto_button", 0.95)])
+        assert result.state == "unknown"
+        assert "battle_skill_area" in result.reason
+
+    def test_aux_alone_is_not_enough(self) -> None:
+        """辅助证据齐全但缺少必需的自动按钮 → 不判定 battle。"""
+        result = aggregator(self.battle_rule()).aggregate(
+            [hit(name, 0.95) for name in NEW_BATTLE_DETECTORS]
+        )
+        assert result.state == "unknown"
+        assert "battle_auto_button" in result.reason
+
+    def test_full_battle_evidence(self) -> None:
+        result = aggregator(self.battle_rule()).aggregate(
+            [hit(name, 0.9) for name in BATTLE_EVIDENCE_NAMES]
+        )
+        assert result.state == "battle"
+        assert len(result.evidence) == 4
+
+    def test_any_of_respects_min_confidence(self) -> None:
+        """any_of 里的证据同样受 min_confidence 约束，弱证据不算命中。"""
+        agg = aggregator(
+            EvidenceRuleConfig(
+                state="battle",
+                requires=["battle_auto_button"],
+                any_of=list(NEW_BATTLE_DETECTORS),
+                min_confidence=0.9,
+            )
+        )
+        assert agg.aggregate(
+            [hit("battle_auto_button", 0.95), hit("battle_skill_area", 0.5)]
+        ).state == "unknown"
+        assert agg.aggregate(
+            [hit("battle_auto_button", 0.95), hit("battle_skill_area", 0.95)]
+        ).state == "battle"

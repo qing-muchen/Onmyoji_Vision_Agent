@@ -1,4 +1,4 @@
-"""证据 detector 集合与工厂（Phase 4.1）。
+"""证据 detector 集合与工厂（Phase 4.1 / 4.2）。
 
 新增 detector 的完整流程（**不需要修改核心流程**）：
 
@@ -18,7 +18,10 @@ from pathlib import Path
 from src.core.config import EvidenceConfig
 from src.utils.logger import get_logger
 from src.vision.evidence.base import BaseEvidenceDetector, TemplateEvidenceDetector
+from src.vision.evidence.detectors.battle_action_bar import BattleActionBarDetector
 from src.vision.evidence.detectors.battle_auto import BattleAutoDetector
+from src.vision.evidence.detectors.battle_shikigami import BattleShikigamiIconsDetector
+from src.vision.evidence.detectors.battle_skill_area import BattleSkillAreaDetector
 from src.vision.evidence.detectors.bottom_menu import (
     BottomMenuExplorationDetector,
     BottomMenuYardDetector,
@@ -29,7 +32,10 @@ from src.vision.evidence.detectors.victory_icon import VictoryIconDetector
 
 __all__ = [
     "DETECTOR_CLASSES",
+    "BattleActionBarDetector",
     "BattleAutoDetector",
+    "BattleShikigamiIconsDetector",
+    "BattleSkillAreaDetector",
     "BottomMenuExplorationDetector",
     "BottomMenuYardDetector",
     "ChapterPanelDetector",
@@ -46,6 +52,9 @@ DETECTOR_CLASSES: dict[str, type[TemplateEvidenceDetector]] = {
     BottomMenuExplorationDetector.NAME: BottomMenuExplorationDetector,
     ChapterPanelDetector.NAME: ChapterPanelDetector,
     BattleAutoDetector.NAME: BattleAutoDetector,
+    BattleSkillAreaDetector.NAME: BattleSkillAreaDetector,
+    BattleActionBarDetector.NAME: BattleActionBarDetector,
+    BattleShikigamiIconsDetector.NAME: BattleShikigamiIconsDetector,
     VictoryIconDetector.NAME: VictoryIconDetector,
     RewardPanelDetector.NAME: RewardPanelDetector,
 }

@@ -48,7 +48,10 @@ from src.vision.evidence.base import (
 )
 from src.vision.evidence.detectors import (
     DETECTOR_CLASSES,
+    BattleActionBarDetector,
     BattleAutoDetector,
+    BattleShikigamiIconsDetector,
+    BattleSkillAreaDetector,
     BottomMenuExplorationDetector,
     BottomMenuYardDetector,
     ChapterPanelDetector,
@@ -78,7 +81,10 @@ __all__ = [
     "STATE_UNKNOWN",
     "BaseDetector",
     "BaseEvidenceDetector",
+    "BattleActionBarDetector",
     "BattleAutoDetector",
+    "BattleShikigamiIconsDetector",
+    "BattleSkillAreaDetector",
     "BottomMenuExplorationDetector",
     "BottomMenuYardDetector",
     "ChapterPanelDetector",
