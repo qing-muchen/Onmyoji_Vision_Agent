@@ -75,9 +75,22 @@ UI 元素也能稳定定位（纯像素模板匹配对此类元素不可靠）�
 27. `YardClassifier` —— 包装 `SceneClassifier`（判定阈值由 `state.yard.threshold` 决定），
     不复制任何场景匹配代码。
 
+**Phase 3.1 — State Monitor（已完成）**：把单帧状态识别扩展为**持续运行**的监控过程：
+
+28. `StateMonitor` —— 固定节拍循环（`runtime.state_monitor.interval_ms`，默认 500ms）：
+    取帧 → `StateClassifier.classify` → 状态变化检测；节拍按"上次节拍 + interval"推进，
+    不随单轮耗时漂移；
+29. `StateEvent` —— 状态变化事件（`previous_state / current_state / timestamp / confidence`），
+    **只有 `state_name` 改变才产生**；首次识别只建立基线（记入 `initial_state`）；
+30. `StateHistoryStore` —— `logs/state_history.json`：**每次事件即时原子写入**（临时文件 + replace），
+    `max_events` 上限丢弃最旧事件；
+31. `CaptureFrameSource` + 前台门控 —— 每周期**只检查**目标窗口是否在前台（不抢占），
+    失焦则跳过该轮并计入 `skipped`；`examples/state_monitor_demo.py` 持续打印当前状态。
+
 **尚未实现**：YOLO / 深度学习模型与训练、鼠标点击、键盘输入、**状态转移与状态机**
-（Phase 3.0 只回答"当前是什么状态"，不回答"接下来该做什么"——后者属于 `src/state`）、
-任务系统、自动挂机逻辑，以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，
+（Phase 3.0 只回答"当前是什么状态"，Phase 3.1 只做"采集 → 识别 → 记录"，
+"接下来该做什么"属于 `src/state`）、任务系统、自动挂机逻辑，
+以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，
 Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
 ## 目录结构
@@ -97,6 +110,7 @@ Onmyoji_Vision_Agent/
 │   ├── detector_debug_demo.py        # 检测调试 Demo（Template + OCR -> Fusion，含可视化）
 │   ├── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
 │   ├── state_classifier_demo.py      # 状态识别 Demo（Frame -> StateResult）
+│   ├── state_monitor_demo.py         # 实时状态监控 Demo（周期采集 -> 状态变化事件）
 │   └── ocr_demo.py                   # OCR Demo（Frame -> TextResult）
 ├── logs/                         # 运行日志输出目录
 ├── models/                       # 模型权重（内容不入库）
@@ -156,6 +170,13 @@ Onmyoji_Vision_Agent/
 │   │       ├── classifier.py     #     StateClassifier（transition -> yard -> unknown）
 │   │       ├── transition/       #     转场判定：dataset / extractor / matcher / classifier
 │   │       └── yard/             #     庭院判定：包装 SceneClassifier
+│   ├── runtime/                  # 运行期编排（Phase 3.1）
+│   │   └── state_monitor/        #   实时状态监控
+│   │       ├── monitor.py        #     StateMonitor（固定节拍循环 + 变化检测）
+│   │       ├── report.py         #     MonitorReport / StopReason（运行摘要）
+│   │       ├── events.py         #     StateEvent（状态变化事件）
+│   │       ├── history.py        #     StateHistoryStore（即时原子写 JSON）
+│   │       └── source.py         #     FrameSource / CaptureFrameSource / 前台门控
 │   ├── action/                   # 输入控制层
 │   ├── state/                    # 状态管理层（未来 State Machine，Phase 3 后续）
 │   └── task/                     # 任务调度层
@@ -213,6 +234,9 @@ python examples/detector_debug_demo.py
 
 # 9. Demo：状态识别（庭院 / 转场 / 未知；--image 支持离线图片）
 python examples/state_classifier_demo.py --image dataset/states/transition_bottom/transition_bottom_003.png
+
+# 10. Demo：实时状态监控（Ctrl+C 结束；写入 logs/state_history.json）
+python examples/state_monitor_demo.py --duration 30
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -231,6 +255,7 @@ python examples/state_classifier_demo.py --image dataset/states/transition_botto
 | `scene` | 场景识别配置（置信度阈值、统一缩放尺寸） |
 | `ocr` | OCR 配置（Provider 名称与语言、预处理放大倍数与二值化阈值） |
 | `state` | 状态识别配置（转场底部裁剪比例、阈值与负样本间隔；庭院阈值） |
+| `runtime` | 运行期编排配置（状态监控周期、历史文件路径与事件上限、前台检查开关） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
 | `logging` | 日志级别、目录、滚动策略与格式 |
 
@@ -268,6 +293,11 @@ python examples/state_classifier_demo.py --image dataset/states/transition_botto
 | `state.transition.strip_aspect_ratio` | `8.0` | 宽高比不低于该值时视为"输入本身已是条带"，不再裁剪 |
 | `state.yard.enabled` | `true` | 是否启用庭院识别分支 |
 | `state.yard.threshold` | `0.85` | 庭院判定阈值（**覆盖** `scene.matcher.threshold`） |
+| `runtime.state_monitor.interval_ms` | `500` | 监控周期（毫秒）；节拍固定，不随单轮耗时漂移 |
+| `runtime.state_monitor.history_path` | `logs/state_history.json` | 状态历史文件；相对路径以项目根为准（`logs/` 已忽略） |
+| `runtime.state_monitor.save_history` | `true` | 是否落盘；关闭时只打印 |
+| `runtime.state_monitor.max_events` | `1000` | 事件历史上限（超出丢弃最旧） |
+| `runtime.state_monitor.check_foreground` | `true` | 每周期只检查目标窗口是否在前台（不抢占），失焦跳过该轮 |
 
 环境变量可覆盖任意字段，格式为 `OVA_<段>__<字段>`：
 
@@ -958,6 +988,115 @@ Case 3  state=unknown     confidence=0.0000  source=fallback
   泛化能力只能由上面的留一法数据体现；
 * **未做状态转移**：本阶段不实现"状态持续多久""何时切换"，也不触发任何交互。
 
+## 实时状态监控（Phase 3.1）
+
+Phase 3.0 的 `StateClassifier` 只回答"这一帧是什么状态"；监控层把它变成**持续运行的过程**：
+
+```text
+每 interval_ms（默认 500ms）:
+  FrameSource.get_frame()
+        │  帧不可用（后端暂无画面 / 前台门控未通过）→ 跳过该轮，计入 skipped
+        ▼
+  StateClassifier.classify(frame)          # 复用 Phase 3.0，未改动
+        │  StateResult
+        ▼
+  状态变化检测（只有 state_name 改变才产生事件；首次识别只建立基线）
+        │  StateEvent
+        ▼
+  StateHistoryStore → logs/state_history.json（每次事件即时原子写入）
+```
+
+### 组件
+
+| 组件 | 文件 | 职责 |
+| --- | --- | --- |
+| `StateMonitor` | `state_monitor/monitor.py` | 固定节拍循环 + 变化检测 + 回调（`on_result` / `on_event`） |
+| `MonitorReport` / `StopReason` | `state_monitor/report.py` | 运行摘要（周期数 / 跳过数 / 事件 / 初始与最终状态 / 停止原因） |
+| `StateEvent` | `state_monitor/events.py` | 状态变化事件与 JSON 序列化 |
+| `StateHistoryStore` | `state_monitor/history.py` | 历史记录（内存 + 即时原子写 JSON、`max_events` 截断） |
+| `FrameSource` / `CaptureFrameSource` | `state_monitor/source.py` | 帧来源协议与采集实现（含"只检查不抢占"的前台门控） |
+
+依赖方向：`core` → `capture` → `scene` / `state` → `runtime`（`runtime` 是最上层编排，
+可依赖 `vision`；`vision` 不依赖 `runtime`）。
+
+### StateEvent 格式
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `previous_state` | `StateName` | 变化前的状态 |
+| `current_state` | `StateName` | 变化后的状态（与前者相同即报错——事件必须代表变化） |
+| `timestamp` | `str` | 事件时间，ISO 8601（含时区偏移） |
+| `confidence` | `float` | 新状态的置信度，`0 <= confidence <= 1` |
+
+便捷接口：`event.state_key`（`unknown -> transition`）、`event.describe()`、`to_dict()` / `from_dict()`。
+
+### 历史文件结构
+
+```json
+{
+  "started_at": "2026-09-22T19:13:12+08:00",
+  "updated_at": "2026-09-22T19:13:12+08:00",
+  "interval_ms": 10,
+  "cycles": 4,
+  "skipped": 0,
+  "initial_state": "yard",
+  "events": [
+    {"previous_state": "yard", "current_state": "transition",
+     "timestamp": "2026-09-22T19:13:12+08:00", "confidence": 1.0}
+  ]
+}
+```
+
+### 设计取舍
+
+1. **固定节拍**：等待时长按"上次节拍 + interval"计算（`deadline += interval`），
+   而不是"每轮 sleep(interval)"；单轮耗时超过周期时重新对齐，避免"追赶风暴"；
+2. **首次识别只建立基线**：没有"前一个状态"就不构成变化，基线写入 `initial_state`；
+3. **每次事件即时落盘 + 原子写**（临时文件 + `replace`）：事件频率远低于周期，代价小，
+   但进程被中断也不丢事件、也不会读到半截 JSON；
+4. **前台门控只检查、不抢占**：屏幕采集拿不到被遮挡窗口的像素，失焦时该轮直接跳过
+   （计入 `skipped`）而**不会**把游戏窗口抢到前台打扰用户；
+5. **不引入线程/异步**：500ms 周期下单轮成本远小于周期，同步循环足够且可确定性测试；
+6. **可注入 `source` / `clock` / `sleep` / `now`**：测试无需真实屏幕与真实等待。
+
+### 命令与运行结果
+
+```powershell
+# 实时监控（Ctrl+C 结束；失焦时跳过该轮）
+python examples/state_monitor_demo.py --duration 30
+
+# 离线自测：让三张图片循环充当帧来源（无需游戏窗口）
+python examples/state_monitor_demo.py --max-cycles 9 --interval-ms 10 --image dataset/scenes/yard/skin_001/scene_001/yard_skin001_scene001_frame001.png --image dataset/states/transition_bottom/transition_bottom_003.png --image "dataset/states/non_transition_bottom/战斗准备阶段.png"
+```
+
+实测结果（本机 Python 3.12.10，离线三图循环 9 轮）：
+
+```text
+[19:13:03] state=yard confidence=1.0000 source=scene_classifier
+[2026-09-22T19:13:03+08:00] EVENT yard -> transition confidence=1.0000
+[19:13:03] state=transition confidence=1.0000 source=transition_bottom_match
+[2026-09-22T19:13:03+08:00] EVENT transition -> unknown confidence=0.0000
+...
+State Monitor Summary
+Cycles:     9
+Classified: 9
+Skipped:    0
+Initial State: yard
+Final State:   unknown
+Events:     8
+Stop Reason:  max_cycles
+History:      logs/state_history.json
+```
+
+### 当前限制
+
+* 状态识别能力与限制同 Phase 3.0（仅三态；正负样本 gap 区间只有 `0.014 ~ 0.049`）；
+* 监控**不做状态转移**、不统计"状态持续时长"，也不重试/纠错（属于 `src/state` / `src/task`）；
+* 前台检查只"跳过该轮"，不自动置前（需要抢占时显式使用 `WindowManager.ensure_foreground`）；
+* 历史文件受 `max_events` 限制，长时间运行需自行归档；历史写入失败会抛
+  `MonitorError`（不静默丢事件）；
+* 未在真实游戏窗口上长时间运行验证（本机无阴阳师窗口）。
+
 ## 代码规范
 
 1. 全部公共函数/方法使用类型注解并编写 docstring（Google 风格）。
@@ -979,6 +1118,8 @@ Case 3  state=unknown     confidence=0.0000  source=fallback
 - **Phase 2.3（已完成）**：OCR Foundation —— Provider 架构的文字识别（默认 Tesseract）。
 - **Phase 3.0（已完成）**：State Classification Foundation —— 三态状态识别
   （庭院 / 转场 / 未知），转场只使用底部固定条带并结合正负样本双侧判别。
+- **Phase 3.1（已完成）**：State Monitor —— 固定周期状态监控、状态变化事件与
+  `state_history.json` 持久化（只做"采集 → 识别 → 记录"）。
 - Phase 2.4：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
 - Phase 2.5：感知融合 —— 把 scene / detector / ocr / state 的结果组合成统一的界面描述（仍不做决策）。
 - Phase 3：State Machine —— 界面状态建模与转移（`src/state`）。

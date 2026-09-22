@@ -130,6 +130,20 @@ state:
     enabled: true
     threshold: 0.85
 
+runtime:
+  # 运行期编排（Phase 3.1）：把单帧状态识别扩展为持续运行的监控过程
+  state_monitor:
+    # 采集 + 识别的固定周期（毫秒）；节拍固定，不随单轮耗时漂移
+    interval_ms: 500
+    # 状态历史文件（相对路径以项目根为基准；logs/ 已被 .gitignore 忽略）
+    history_path: "logs/state_history.json"
+    # 是否落盘；关闭时只打印、不写文件
+    save_history: true
+    # 事件历史上限（超出后丢弃最旧事件，防止文件无限增长）
+    max_events: 1000
+    # 每个周期是否检查目标窗口在前台：只检查、不抢占，失焦则跳过该轮（计入 skipped）
+    check_foreground: true
+
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL
   dir: "logs"

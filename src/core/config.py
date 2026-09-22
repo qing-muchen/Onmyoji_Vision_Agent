@@ -81,6 +81,17 @@ DEFAULT_STATE_THRESHOLD: float = 0.85
 DEFAULT_TRANSITION_NEGATIVE_MARGIN: float = 0.03
 #: 判定"输入本身就是底部条带"的宽高比下限（宽/高；条带约 29:1，完整帧约 1.8:1）
 DEFAULT_TRANSITION_STRIP_ASPECT_RATIO: float = 8.0
+#: 默认的状态监控周期（毫秒）
+DEFAULT_MONITOR_INTERVAL_MS: int = 500
+#: 默认的状态历史文件（相对项目根；``logs/`` 已被 .gitignore 忽略）
+DEFAULT_STATE_HISTORY_PATH: str = "logs/state_history.json"
+#: 状态历史保留的最大事件数（超出丢弃最旧事件）
+DEFAULT_MONITOR_MAX_EVENTS: int = 1000
+#: 监控周期的合法范围（毫秒）
+MIN_MONITOR_INTERVAL_MS: int = 1
+MAX_MONITOR_INTERVAL_MS: int = 60000
+#: 每秒毫秒数（毫秒 <-> 秒换算）
+MILLISECONDS_PER_SECOND: float = 1000.0
 #: 二值化阈值的合法范围
 GRAYSCALE_MAX_VALUE: int = 255
 
@@ -419,6 +430,52 @@ class StateConfig(StrictModel):
     yard: StateYardConfig = Field(default_factory=StateYardConfig)
 
 
+class RuntimeStateMonitorConfig(StrictModel):
+    """实时状态监控配置（Phase 3.1）。
+
+    监控只做"按固定周期采集 → 识别 → 记录"：不等待、不做状态转移、不触发交互。
+
+    Attributes:
+        interval_ms: 采集 + 识别的固定周期（毫秒）。
+        history_path: 状态历史文件路径；相对路径以项目根目录为基准。
+        save_history: 是否落盘；关闭时只打印、不写文件。
+        max_events: 事件历史上限，超出后丢弃**最旧**事件。
+        check_foreground: 每个周期是否检查目标窗口在前台（仅检查、不抢占；
+            失焦时跳过该轮并计入 ``skipped``）。整屏回退等无真实窗口的场景不检查。
+    """
+
+    interval_ms: int = Field(
+        default=DEFAULT_MONITOR_INTERVAL_MS,
+        ge=MIN_MONITOR_INTERVAL_MS,
+        le=MAX_MONITOR_INTERVAL_MS,
+    )
+    history_path: str = DEFAULT_STATE_HISTORY_PATH
+    save_history: bool = True
+    max_events: int = Field(default=DEFAULT_MONITOR_MAX_EVENTS, ge=1)
+    check_foreground: bool = True
+
+    @field_validator("history_path")
+    @classmethod
+    def _validate_history_path(cls, value: str) -> str:
+        """校验历史文件路径非空。"""
+        if not value.strip():
+            raise ValueError("runtime.state_monitor.history_path 不能为空")
+        return value
+
+    @property
+    def interval_seconds(self) -> float:
+        """监控周期（秒）。"""
+        return self.interval_ms / MILLISECONDS_PER_SECOND
+
+
+class RuntimeConfig(StrictModel):
+    """运行期编排配置（Phase 3.1）。"""
+
+    state_monitor: RuntimeStateMonitorConfig = Field(
+        default_factory=RuntimeStateMonitorConfig
+    )
+
+
 class AppConfig(StrictModel):
     """应用总配置，聚合所有子模块配置。"""
 
@@ -432,6 +489,7 @@ class AppConfig(StrictModel):
     scene: SceneConfig = Field(default_factory=SceneConfig)
     ocr: OCRConfig = Field(default_factory=OCRConfig)
     state: StateConfig = Field(default_factory=StateConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     def log_dir(self) -> Path:

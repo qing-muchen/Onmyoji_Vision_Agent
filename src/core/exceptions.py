@@ -73,3 +73,11 @@ class StateDataError(StateError):
     区分开，避免把缺失静默当成 UNKNOWN。
     """
 
+
+class MonitorError(OnmyojiVisionError):
+    """实时状态监控相关错误（例如历史文件无法写入）。
+
+    监控循环本身不吞异常：历史落盘失败说明"记录链断了"，必须让调用方看到，
+    而不是静默丢失状态变化。
+    """
+
