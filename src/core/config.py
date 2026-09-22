@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from src.core.exceptions import ConfigError
 from src.core.paths import get_default_config_path, resolve_from_project_root
@@ -102,6 +102,65 @@ MAX_STABILIZER_MIN_FRAMES: int = 60
 IDENTITY_STABILIZATION_FRAMES: int = 1
 #: 二值化阈值的合法范围
 GRAYSCALE_MAX_VALUE: int = 255
+
+# ---- Phase 4.1 证据层 ------------------------------------------------------
+#: evidence ROI 的长度：``[x0, y0, x1, y1]``（相对比例）
+EVIDENCE_ROI_LENGTH: int = 4
+#: 默认的证据模板匹配置信度阈值
+DEFAULT_EVIDENCE_THRESHOLD: float = 0.85
+#: 默认的最大证据模板数（均匀抽样，控制匹配耗时）
+DEFAULT_EVIDENCE_MAX_TEMPLATES: int = 8
+#: 证据模板数量的"充足"门槛；低于该值视为数据不足（不伪造高准确率）
+DEFAULT_EVIDENCE_MIN_TEMPLATES: int = 3
+#: 模板数据不足时的证据置信度折价
+DEFAULT_EVIDENCE_SHORTFALL_FACTOR: float = 0.7
+#: OCR 证据与模板证据融合时的权重
+DEFAULT_EVIDENCE_OCR_WEIGHT: float = 0.4
+#: 仅 OCR 命中（缺少视觉定位）时的置信度折价
+DEFAULT_EVIDENCE_OCR_ONLY_FACTOR: float = 0.9
+#: Aggregator 规则中单条证据的默认置信度下限
+DEFAULT_EVIDENCE_RULE_MIN_CONFIDENCE: float = 0.6
+#: Aggregator 的兜底状态名（没有任何规则命中时输出）
+DEFAULT_EVIDENCE_FALLBACK_STATE: str = "unknown"
+#: 默认的证据 detector 定义：名称 -> {ROI, 模板目录, OCR 目标文本}
+DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
+    "bottom_menu_yard": {
+        "roi": (0.00, 0.80, 1.00, 1.00),
+        "templates": "dataset/features/bottom_menu/yard/positive",
+    },
+    "bottom_menu_exploration": {
+        "roi": (0.00, 0.80, 1.00, 1.00),
+        "templates": "dataset/features/bottom_menu/exploration/positive",
+    },
+    "chapter_panel": {
+        "roi": (0.80, 0.15, 1.00, 0.70),
+        "templates": "dataset/features/chapter_panel/positive",
+        "text_targets": ["第二十六章", "第二十七章", "第二十八章", "主线", "玩法"],
+        "max_templates": 6,
+    },
+    "battle_auto_button": {
+        "roi": (0.00, 0.74, 0.12, 1.00),
+        "templates": "dataset/features/battle/auto_button/positive",
+        "text_targets": ["自动", "手动"],
+    },
+    "victory_icon": {
+        "roi": (0.25, 0.05, 0.85, 0.40),
+        "templates": "dataset/features/victory_icon/positive",
+        "text_targets": ["胜利"],
+    },
+    "reward_panel": {
+        "roi": (0.15, 0.15, 0.62, 0.90),
+        "templates": "dataset/features/reward_panel/positive",
+    },
+}
+#: 默认的证据聚合规则：状态 -> 需要的证据名
+DEFAULT_EVIDENCE_RULES: tuple[dict[str, Any], ...] = (
+    {"state": "battle_result", "requires": ["victory_icon"]},
+    {"state": "battle_reward", "requires": ["reward_panel"]},
+    {"state": "battle", "requires": ["battle_auto_button"]},
+    {"state": "exploration", "requires": ["bottom_menu_exploration", "chapter_panel"]},
+    {"state": "yard", "requires": ["bottom_menu_yard"]},
+)
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 #: 允许的日志级别（与 :data:`LogLevel` 保持一致）
@@ -438,6 +497,134 @@ class StateConfig(StrictModel):
     yard: StateYardConfig = Field(default_factory=StateYardConfig)
 
 
+class EvidenceDetectorConfig(StrictModel):
+    """单个证据 detector 的配置（Phase 4.1）。
+
+    Attributes:
+        enabled: 是否启用该 detector（关闭时输出"未检出"证据）。
+        roi: 检测区域 ``[x0, y0, x1, y1]``，均为相对整帧的比例。
+        templates: 证据模板目录（相对项目根；通常指向 ``dataset/features/<detector>/positive``）。
+        threshold: 证据置信度下限，低于该值的匹配不算命中。
+        method: 模板匹配方法（仅限归一化方法）。
+        multi_scale: 是否多尺度匹配（窗口尺寸不固定时需要）。
+        scales: 多尺度搜索比例。
+        max_templates: 最多加载多少个模板（均匀抽样，控制匹配耗时）。
+        min_templates: 模板数量的"充足"门槛，低于该值视为数据不足。
+        shortfall_factor: 数据不足时的置信度折价（不允许伪造高准确率）。
+        text_targets: OCR 目标文本；为空表示该 detector 不做文字识别。
+        ocr_weight: OCR 与模板同时命中时的 OCR 权重。
+        ocr_only_factor: 仅 OCR 命中（缺少视觉定位）时的置信度折价。
+    """
+
+    enabled: bool = True
+    roi: tuple[float, float, float, float] = Field(default=(0.0, 0.0, 1.0, 1.0))
+    templates: str = ""
+    threshold: float = Field(default=DEFAULT_EVIDENCE_THRESHOLD, gt=0.0, le=1.0)
+    method: TemplateMatchMethod = "TM_CCOEFF_NORMED"
+    multi_scale: bool = True
+    scales: list[float] = Field(default_factory=lambda: list(DEFAULT_TEMPLATE_SCALES))
+    max_templates: int = Field(default=DEFAULT_EVIDENCE_MAX_TEMPLATES, ge=0)
+    min_templates: int = Field(default=DEFAULT_EVIDENCE_MIN_TEMPLATES, ge=0)
+    shortfall_factor: float = Field(default=DEFAULT_EVIDENCE_SHORTFALL_FACTOR, gt=0.0, le=1.0)
+    text_targets: list[str] = Field(default_factory=list)
+    ocr_weight: float = Field(default=DEFAULT_EVIDENCE_OCR_WEIGHT, ge=0.0, le=1.0)
+    ocr_only_factor: float = Field(default=DEFAULT_EVIDENCE_OCR_ONLY_FACTOR, gt=0.0, le=1.0)
+
+    @field_validator("roi")
+    @classmethod
+    def _validate_roi(cls, value: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        """校验 ROI 为 ``0 <= x0 < x1 <= 1`` 且 ``0 <= y0 < y1 <= 1``。"""
+        x0, y0, x1, y1 = value
+        if not (0.0 <= x0 < x1 <= 1.0):
+            raise ValueError(f"evidence roi 横向比例非法: x0={x0}, x1={x1}")
+        if not (0.0 <= y0 < y1 <= 1.0):
+            raise ValueError(f"evidence roi 纵向比例非法: y0={y0}, y1={y1}")
+        return value
+
+    @property
+    def template_source(self) -> str:
+        """模板目录（空字符串表示该 detector 不使用模板）。"""
+        return self.templates.strip()
+
+    def matcher_config(self) -> TemplateDetectorConfig:
+        """构造供 :class:`~src.vision.detector.template.matcher.TemplateMatcher` 使用的配置。"""
+        return TemplateDetectorConfig(
+            method=self.method,
+            threshold=self.threshold,
+            multi_scale=self.multi_scale,
+            scales=list(self.scales),
+        )
+
+
+class EvidenceRuleConfig(StrictModel):
+    """一条"证据 -> 候选状态"的聚合规则（Phase 4.1）。
+
+    规则是**声明式**的：满足条件即产生候选状态，因此新增状态不需要改 Aggregator 代码。
+
+    Attributes:
+        state: 候选状态名。
+        requires: 必须**全部**命中的证据名。
+        any_of: 至少命中一个的证据名（可为空）。
+        min_confidence: 单条证据的置信度下限。
+    """
+
+    state: str
+    requires: list[str] = Field(default_factory=list)
+    any_of: list[str] = Field(default_factory=list)
+    min_confidence: float = Field(default=DEFAULT_EVIDENCE_RULE_MIN_CONFIDENCE, gt=0.0, le=1.0)
+
+    @field_validator("state")
+    @classmethod
+    def _validate_state(cls, value: str) -> str:
+        """校验状态名非空。"""
+        if not value.strip():
+            raise ValueError("evidence 规则的 state 不能为空")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_conditions(self) -> EvidenceRuleConfig:
+        """校验规则至少声明了一个条件，避免"无条件的规则"永远命中。"""
+        if not self.requires and not self.any_of:
+            raise ValueError(
+                f"evidence 规则 {self.state!r} 至少要声明 requires 或 any_of 之一"
+            )
+        return self
+
+
+class EvidenceAggregatorConfig(StrictModel):
+    """证据聚合配置（Phase 4.1）。
+
+    Attributes:
+        enabled: 是否启用聚合（关闭时 ``aggregate`` 直接返回兜底候选）。
+        fallback_state: 没有任何规则命中时输出的状态名。
+        rules: 聚合规则列表；按置信度择优（得分相同时按声明顺序）。
+    """
+
+    enabled: bool = True
+    fallback_state: str = DEFAULT_EVIDENCE_FALLBACK_STATE
+    rules: list[EvidenceRuleConfig] = Field(
+        default_factory=lambda: [EvidenceRuleConfig(**rule) for rule in DEFAULT_EVIDENCE_RULES]
+    )
+
+
+class EvidenceConfig(StrictModel):
+    """视觉证据层配置（Phase 4.1）。
+
+    Attributes:
+        enabled: 证据层总开关。
+        detectors: detector 名 -> 配置；新增 detector 只需在此登记，不必改核心流程。
+        aggregator: 证据聚合配置。
+    """
+
+    enabled: bool = True
+    detectors: dict[str, EvidenceDetectorConfig] = Field(
+        default_factory=lambda: {
+            name: EvidenceDetectorConfig(**values) for name, values in DEFAULT_EVIDENCE_DETECTORS.items()
+        }
+    )
+    aggregator: EvidenceAggregatorConfig = Field(default_factory=EvidenceAggregatorConfig)
+
+
 class RuntimeStateMonitorConfig(StrictModel):
     """实时状态监控配置（Phase 3.1）。
 
@@ -534,6 +721,7 @@ class AppConfig(StrictModel):
     scene: SceneConfig = Field(default_factory=SceneConfig)
     ocr: OCRConfig = Field(default_factory=OCRConfig)
     state: StateConfig = Field(default_factory=StateConfig)
+    evidence: EvidenceConfig = Field(default_factory=EvidenceConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

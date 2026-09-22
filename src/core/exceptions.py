@@ -81,3 +81,15 @@ class MonitorError(OnmyojiVisionError):
     而不是静默丢失状态变化。
     """
 
+
+class EvidenceError(OnmyojiVisionError):
+    """视觉证据层（Phase 4.1）相关错误的基类。"""
+
+
+class EvidenceTemplateLoadError(EvidenceError):
+    """证据模板无法加载时抛出（目录缺失、命名不符或图像无法读取）。
+
+    与 :class:`StateDataError` 同理：把"模板数据缺失/非法"与"画面里没有证据"
+    区分开——前者是数据问题，必须让调用方看到；后者是正常的否定结果。
+    """
+

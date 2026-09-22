@@ -130,6 +130,91 @@ state:
     enabled: true
     threshold: 0.85
 
+evidence:
+  # 视觉证据层（Phase 4.1）：Frame -> [EvidenceResult] -> StateCandidate
+  # 只提取可解释的视觉证据，**不直接输出状态**；状态映射全部由 aggregator 的规则完成。
+  #
+  # detectors 的公共默认值（各条目可单独覆盖）：
+  #   threshold: 0.85        证据置信度下限（低于该值的匹配不算命中）
+  #   method: TM_CCOEFF_NORMED、multi_scale: true、scales: [0.8,0.9,1.0,1.1,1.2]
+  #   max_templates: 8       最多加载多少个模板（均匀抽样，控制匹配耗时）
+  #   min_templates: 3       模板数量门槛；低于该值视为数据不足
+  #   shortfall_factor: 0.7  数据不足时的置信度折价（不允许伪造高准确率）
+  #   ocr_weight: 0.4        模板与 OCR 双源命中时的 OCR 权重
+  #   ocr_only_factor: 0.9   仅 OCR 命中（缺少视觉定位）时的置信度折价
+  enabled: true
+  detectors:
+    # 注意：bottom_menu 刻意拆成 yard / exploration 两个 detector——
+    # 两类底部功能栏的图标组成与上下文完全不同，合并会丢掉区分度。
+    bottom_menu_yard:
+      enabled: true
+      # ROI 为相对整帧的比例 [x0, y0, x1, y1]：底部功能栏
+      roi: [0.00, 0.80, 1.00, 1.00]
+      templates: "dataset/features/bottom_menu/yard/positive"
+      threshold: 0.85
+      max_templates: 8
+    bottom_menu_exploration:
+      enabled: true
+      roi: [0.00, 0.80, 1.00, 1.00]
+      templates: "dataset/features/bottom_menu/exploration/positive"
+      threshold: 0.85
+      max_templates: 8
+    chapter_panel:
+      enabled: true
+      # 探索界面右侧章节栏（主线/玩法 + 第二十六~二十八章）
+      roi: [0.80, 0.15, 1.00, 0.70]
+      templates: "dataset/features/chapter_panel/positive"
+      threshold: 0.85
+      max_templates: 6
+      # OCR 语义锚点：章节文字跨皮肤稳定
+      text_targets: ["第二十六章", "第二十七章", "第二十八章", "主线", "玩法"]
+    battle_auto_button:
+      enabled: true
+      # 左下角自动/手动按钮
+      roi: [0.00, 0.74, 0.12, 1.00]
+      templates: "dataset/features/battle/auto_button/positive"
+      threshold: 0.85
+      text_targets: ["自动", "手动"]
+    victory_icon:
+      enabled: true
+      # 结算界面中心：胜利图标与「胜利」字样
+      roi: [0.25, 0.05, 0.85, 0.40]
+      templates: "dataset/features/victory_icon/positive"
+      threshold: 0.85
+      text_targets: ["胜利"]
+      # 当前正样本仅 1 张：显式保留数据不足的折价标记，不允许伪造高准确率
+      min_templates: 3
+      shortfall_factor: 0.7
+    reward_panel:
+      enabled: true
+      # 奖励展示中心区：奖励卡片 + 中央奖励
+      roi: [0.15, 0.15, 0.62, 0.90]
+      templates: "dataset/features/reward_panel/positive"
+      threshold: 0.85
+      min_templates: 3
+      shortfall_factor: 0.7
+  aggregator:
+    # 证据 -> 候选状态的映射规则（声明式：新增状态只需加规则，无需改代码）
+    enabled: true
+    fallback_state: "unknown"
+    rules:
+      # 顺序影响同分时的优先级；已满足的规则按得分降序择优
+      - state: "battle_result"
+        requires: ["victory_icon"]
+        min_confidence: 0.6
+      - state: "battle_reward"
+        requires: ["reward_panel"]
+        min_confidence: 0.6
+      - state: "battle"
+        requires: ["battle_auto_button"]
+        min_confidence: 0.6
+      - state: "exploration"
+        requires: ["bottom_menu_exploration", "chapter_panel"]
+        min_confidence: 0.6
+      - state: "yard"
+        requires: ["bottom_menu_yard"]
+        min_confidence: 0.6
+
 runtime:
   # 运行期编排（Phase 3.1）：把单帧状态识别扩展为持续运行的监控过程
   state_monitor:
