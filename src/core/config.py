@@ -118,10 +118,32 @@ DEFAULT_EVIDENCE_SHORTFALL_FACTOR: float = 0.7
 DEFAULT_EVIDENCE_OCR_WEIGHT: float = 0.4
 #: 仅 OCR 命中（缺少视觉定位）时的置信度折价
 DEFAULT_EVIDENCE_OCR_ONLY_FACTOR: float = 0.9
-#: Aggregator 规则中单条证据的默认置信度下限
+#: Aggregator 规则中单条证据的默认置信度下限（**证据准入阈值**，不是状态置信度；
+#: Phase 4.6.6 明确语义）
 DEFAULT_EVIDENCE_RULE_MIN_CONFIDENCE: float = 0.6
 #: Aggregator 的兜底状态名（没有任何规则命中时输出）
 DEFAULT_EVIDENCE_FALLBACK_STATE: str = "unknown"
+# ---- Phase 4.6.1 状态词汇 --------------------------------------------------
+#: 系统支持的合法状态名（配置里声明状态名时的校验依据）。
+#:
+#: 与 :class:`~src.vision.state.models.StateName` 的成员**一一对应**：状态词汇的语义来源在
+#: ``vision.state``，但配置校验发生在基础设施层，而 ``core`` 不得在导入期依赖 ``vision``
+#: （依赖方向只允许 ``core → vision``）。因此这里保存同一词汇的镜像，
+#: 由 ``tests/test_state_vocabulary.py`` 锁定"枚举 ↔ 本常量 ↔ 默认证据规则"三者一致。
+#:
+#: 新增状态时的顺序：先在 ``StateName`` 登记成员 → 再更新本常量 → 再在
+#: ``evidence.aggregator.rules`` 中使用（校验会拒绝未登记的状态名，避免拼写错误静默生效）。
+KNOWN_STATE_NAMES: frozenset[str] = frozenset(
+    {
+        "yard",
+        "exploration",
+        "battle",
+        "battle_result",
+        "battle_reward",
+        "transition",
+        "unknown",
+    }
+)
 #: 证据可靠度的合法区间（左开右闭：可靠度为 0 会让加权平均除零）
 MIN_EVIDENCE_RELIABILITY: float = 0.0
 MAX_EVIDENCE_RELIABILITY: float = 1.0
@@ -129,6 +151,8 @@ MAX_EVIDENCE_RELIABILITY: float = 1.0
 DEFAULT_EVIDENCE_RELIABILITY: float = 1.0
 #: 规则中 any_of 的默认最少命中 **group** 数（1 = "至少命中一个视觉区域"）
 DEFAULT_EVIDENCE_MIN_GROUPS: int = 1
+#: 状态可信度校准的默认模式（Phase 4.6.6）：由规则结构 + 证据可靠度决定下限
+DEFAULT_STATE_CONFIDENCE_MODE: str = "rule_based"
 #: 默认的证据分组（Phase 4.4）：group 名 -> 成员证据名
 #:
 #: 多个 detector 可能观察**同一块视觉区域**（例如战斗界面右侧的行动条与式神头像），
@@ -155,6 +179,8 @@ DEFAULT_EVIDENCE_HISTORY_MIN_STATE_COUNT: int = 3
 #: * 自动按钮与技能区跨皮肤形态稳定 → 0.8；
 #: * 行动条 / 式神头像易被技能动画遮挡，且两者区域重叠、独立价值有限 → 0.5。
 DEFAULT_EVIDENCE_RELIABILITY_MAP: dict[str, float] = {
+    # 转场底部条带（深棕底纹 + 官网文字）形态固定、误报率低；Phase 4.6.4 起作为证据
+    "transition_banner": 0.95,
     "victory_icon": 0.95,
     "reward_panel": 0.95,
     "bottom_menu_yard": 0.9,
@@ -207,6 +233,11 @@ DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
         "roi": (0.15, 0.15, 0.62, 0.90),
         "templates": "dataset/features/reward_panel/positive",
     },
+    # 转场条带（Phase 4.6.4）：**包装型** detector，不使用 ROI 模板——
+    # 判定由 state.transition 的 TransitionClassifier（底部条带 + 负样本否决）提供，
+    # 由编排层通过 create_detectors(..., transition_classifier=...) 注入。
+    # 因此这里只需要开关：阈值只有一份，留在 state.transition。
+    "transition_banner": {"enabled": True},
 }
 #: 默认的证据聚合规则：状态 -> 需要的证据名
 #:
@@ -215,9 +246,34 @@ DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
 #: （行动条 + 式神头像，同一块区域）里任意两个区域命中即可——
 #: 既容忍某个区域被技能动画遮挡，也不会把"同一块右侧 UI 上两个 detector 同时命中"
 #: 误当成两条独立证据。
+#:
+#: **声明顺序影响同分时的优先级**（已满足的规则按得分降序、同分保持声明顺序）：
+#: 转场条带是专属强特征，因此放在首位，保持 Phase 3.0"transition 优先"的语义。
 DEFAULT_EVIDENCE_RULES: tuple[dict[str, Any], ...] = (
-    {"state": "battle_result", "requires": ["victory_icon"]},
-    {"state": "battle_reward", "requires": ["reward_panel"]},
+    # 转场（Phase 4.6.4）：把 Phase 3.0 的底部条带判定变成普通证据后，仍需它在
+    # 与其它状态同分时优先——把规则放在首位即可（无需在代码里特判）。
+    {"state": "transition", "any_of": ["transition_banner"]},
+    # 单样本证据（Phase 4.6.6）：victory_icon / reward_panel 各只有 1 张正样本，
+    # 置信度被 shortfall_factor 折价到 0.70；但规则本身明确（证据类型唯一、无并列候选），
+    # 且该类证据可靠度高（0.95）→ 状态可信度不应低于 0.85，否则会被稳定化门槛挡掉。
+    {
+        "state": "battle_result",
+        "requires": ["victory_icon"],
+        "state_confidence": {
+            "mode": DEFAULT_STATE_CONFIDENCE_MODE,
+            "min": 0.85,
+            "min_reliability": 0.9,
+        },
+    },
+    {
+        "state": "battle_reward",
+        "requires": ["reward_panel"],
+        "state_confidence": {
+            "mode": DEFAULT_STATE_CONFIDENCE_MODE,
+            "min": 0.85,
+            "min_reliability": 0.9,
+        },
+    },
     {
         "state": "battle",
         "any_of": [
@@ -243,6 +299,30 @@ TemplateMatchMethod = Literal["TM_CCOEFF_NORMED", "TM_CCORR_NORMED", "TM_SQDIFF_
 OCRProviderName = Literal["tesseract"]
 Region = tuple[int, int, int, int]
 Resolution = tuple[int, int]
+
+
+def _require_known_state_name(value: str, *, field: str) -> str:
+    """校验 ``value`` 是系统支持的合法状态名（Phase 4.6.1）。
+
+    配置里任何声明状态名的地方都必须经过本函数，否则拼写错误（例如 ``battel``）
+    会静默生效，产生状态链路无法表达的"幽灵状态"。
+
+    Args:
+        value: 待校验的状态名。
+        field: 出错提示中使用的配置字段路径，例如 ``evidence.aggregator.fallback_state``。
+
+    Returns:
+        原状态名（校验通过时不做任何规范化）。
+
+    Raises:
+        ValueError: 状态名为空，或不在 :data:`KNOWN_STATE_NAMES` 中。
+    """
+    if not value.strip():
+        raise ValueError(f"{field} 不能为空")
+    if value not in KNOWN_STATE_NAMES:
+        allowed = ", ".join(sorted(KNOWN_STATE_NAMES))
+        raise ValueError(f"{field} 不是系统支持的状态名: {value!r}（合法值: {allowed}）")
+    return value
 
 
 class StrictModel(BaseModel):
@@ -547,13 +627,17 @@ class StateTransitionConfig(StrictModel):
 
 
 class StateYardConfig(StrictModel):
-    """庭院状态识别配置（Phase 3.0）。
+    """庭院**视觉组件**配置（Phase 3.0；Phase 4.6.5 起不参与状态判定）。
 
     庭院识别复用场景识别能力（``scene`` 模块），本配置只声明开关与阈值。
 
+    状态归属（Phase 4.6.5）：``enabled`` 只决定是否装配该独立视觉组件；
+    庭院状态（``yard``）的权威来源是证据路径
+    （``evidence.detectors.bottom_menu_yard`` + ``evidence.aggregator.rules`` 的 yard 规则）。
+
     Attributes:
-        enabled: 是否启用庭院识别。
-        threshold: 场景相似度下限（低于该值不算庭院）。
+        enabled: 是否装配庭院视觉组件（不影响状态判定）。
+        threshold: 场景相似度下限（低于该值不算庭院；供该组件单独使用时使用）。
     """
 
     enabled: bool = True
@@ -655,6 +739,31 @@ class EvidenceGroupConfig(StrictModel):
         return value
 
 
+class StateConfidenceConfig(StrictModel):
+    """状态可信度校准配置（Phase 4.6.6）。
+
+    用于区分两个**不同**概念：
+
+    * ``evidence.aggregator.rules[*].min_confidence`` —— **证据准入阈值**：该证据是否
+      足够参与状态判断；
+    * 本段 —— **状态可信度**：规则命中后，输出状态结果的可信度下限。
+
+    为什么需要：单条证据的匹配分可能因"模板样本不足"被折价（例如只有 1 张正样本 →
+    置信度 0.70），但该规则本身可能非常明确（证据类型唯一、证据类可靠度高、误判空间小）。
+    把证据得分直接当成状态可信度会低估结论，导致下游稳定化门槛
+    （``runtime.stabilization.confidence_threshold``）永远无法通过。
+
+    Attributes:
+        mode: 校准模式；当前仅 ``rule_based``（由规则结构 + 证据可靠度决定下限）。
+        min: 状态可信度下限（"结构信用"）；仅当规则完整满足且参与证据平均可靠度达标时生效。
+        min_reliability: 触发下限所需的参与证据**平均**可靠度。
+    """
+
+    mode: Literal["rule_based"] = DEFAULT_STATE_CONFIDENCE_MODE  # type: ignore[assignment]
+    min: float = Field(default=0.0, ge=0.0, le=1.0)
+    min_reliability: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class EvidenceRuleConfig(StrictModel):
     """一条"证据 -> 候选状态"的聚合规则（Phase 4.1，Phase 4.4 改为按 group 计数）。
 
@@ -662,12 +771,16 @@ class EvidenceRuleConfig(StrictModel):
     都不需要改 Aggregator 代码。
 
     Attributes:
-        state: 候选状态名。
+        state: 候选状态名（Phase 4.6.1 起必须是 :data:`KNOWN_STATE_NAMES` 中的合法状态名，
+            与 :class:`~src.vision.state.models.StateName` 一致）。
         requires: 必须**全部**命中的证据名（按证据逐条判断，不参与 group 计数）。
         any_of: 候选证据名；其命中证据覆盖到至少 ``min_groups`` 个**不同 group** 即算满足。
         min_groups: ``any_of`` 需要覆盖的最少 group 数；``1`` 等价于"至少命中一个区域"。
             同一 group 内命中多条证据只算一个 group。
-        min_confidence: 单条证据的置信度下限（低于该值的证据不算命中）。
+        min_confidence: **证据准入阈值**（Phase 4.6.6 明确语义）：单条证据的置信度下限，
+            低于该值的证据**不参与**状态判断。它**不是**最终状态置信度。
+        state_confidence: 状态可信度校准（Phase 4.6.6，可选）；``None`` 表示不做校准，
+            此时状态可信度等于证据得分。
     """
 
     state: str
@@ -675,14 +788,13 @@ class EvidenceRuleConfig(StrictModel):
     any_of: list[str] = Field(default_factory=list)
     min_groups: int = Field(default=DEFAULT_EVIDENCE_MIN_GROUPS, ge=1)
     min_confidence: float = Field(default=DEFAULT_EVIDENCE_RULE_MIN_CONFIDENCE, gt=0.0, le=1.0)
+    state_confidence: StateConfidenceConfig | None = None
 
     @field_validator("state")
     @classmethod
     def _validate_state(cls, value: str) -> str:
-        """校验状态名非空。"""
-        if not value.strip():
-            raise ValueError("evidence 规则的 state 不能为空")
-        return value
+        """校验状态名非空且属于系统支持的状态词汇（Phase 4.6.1）。"""
+        return _require_known_state_name(value, field="evidence 规则的 state")
 
     @model_validator(mode="after")
     def _validate_conditions(self) -> EvidenceRuleConfig:
@@ -704,11 +816,12 @@ class EvidenceRuleConfig(StrictModel):
 
 
 class EvidenceAggregatorConfig(StrictModel):
-    """证据聚合配置（Phase 4.1）。
+    """证据聚合配置（Phase 4.1；Phase 4.6.1 起校验状态名合法性）。
 
     Attributes:
         enabled: 是否启用聚合（关闭时 ``aggregate`` 直接返回兜底候选）。
-        fallback_state: 没有任何规则命中时输出的状态名。
+        fallback_state: 没有任何规则命中时输出的状态名（必须是合法状态名，见
+            :data:`KNOWN_STATE_NAMES`）。
         rules: 聚合规则列表；按置信度择优（得分相同时按声明顺序）。
     """
 
@@ -717,6 +830,12 @@ class EvidenceAggregatorConfig(StrictModel):
     rules: list[EvidenceRuleConfig] = Field(
         default_factory=lambda: [EvidenceRuleConfig(**rule) for rule in DEFAULT_EVIDENCE_RULES]
     )
+
+    @field_validator("fallback_state")
+    @classmethod
+    def _validate_fallback_state(cls, value: str) -> str:
+        """校验兜底状态名非空且属于系统支持的状态词汇（Phase 4.6.1）。"""
+        return _require_known_state_name(value, field="evidence.aggregator.fallback_state")
 
 
 class EvidenceHistoryConfig(StrictModel):

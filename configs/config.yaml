@@ -126,7 +126,12 @@ state:
     # （条带样本约 29:1，完整帧约 1.8:1）
     strip_aspect_ratio: 8.0
   yard:
-    # 庭院识别复用场景识别能力；threshold 会覆盖 scene.matcher.threshold
+    # 庭院**视觉组件**（复用场景识别能力；threshold 会覆盖 scene.matcher.threshold）。
+    # Phase 4.6.5：本开关只决定"是否装配该独立组件"——它**不参与状态判定**。
+    # 庭院状态（yard）的唯一权威来源是证据路径：
+    #   evidence.detectors.bottom_menu_yard + evidence.aggregator.rules 的 yard 规则
+    #   （依据稳定的底部功能栏结构，不随庭院皮肤 / 布局变化漂移）。
+    # 该组件保留供离线分析 / 后续其它视觉任务使用。
     enabled: true
     threshold: 0.85
 
@@ -149,6 +154,8 @@ evidence:
   # 做加权平均，因此低可靠度的旁证不会显著拉低强证据的结论。
   # 判定依据：界面形态是否独特（误报率）、是否容易被动画/遮挡影响。
   reliability:
+    # 转场底部条带（深棕底纹 + 官网文字）形态固定、误报率低；Phase 4.6.4 起作为证据
+    transition_banner: 0.95
     # 结算 / 奖励界面形态独特，误报率低
     victory_icon: 0.95
     reward_panel: 0.95
@@ -253,19 +260,48 @@ evidence:
       threshold: 0.85
       min_templates: 3
       shortfall_factor: 0.7
+    # Phase 4.6.4：转场条带改为**证据**。本 detector 是"包装型"：
+    # 不使用 ROI 模板，判定复用 state.transition 的 TransitionClassifier
+    # （底部条带 + 正负样本双侧判别），由编排层通过
+    # create_detectors(..., transition_classifier=...) 注入；
+    # 因此这里只有开关——阈值仍然只有一份，留在 state.transition。
+    transition_banner:
+      enabled: true
   aggregator:
     # 证据 -> 候选状态的映射规则（声明式：新增状态只需加规则，无需改代码）
     # requires: 必须全部命中；any_of + min_groups: 候选证据需覆盖至少 min_groups 个不同 group
+    #
+    # 两个**不同**的阈值（Phase 4.6.6 明确区分）：
+    #   min_confidence   —— **证据准入阈值**：单条证据是否足够参与状态判断；
+    #   state_confidence —— **状态可信度**：规则命中后输出状态的可信度下限（可选）。
+    #     规则完整满足、且参与证据的平均可靠度 >= min_reliability 时，状态可信度取
+    #     max(证据得分, min)；否则等于证据得分（详见 evidence/aggregator.py 模块文档）。
     enabled: true
     fallback_state: "unknown"
     rules:
-      # 顺序影响同分时的优先级；已满足的规则按得分降序择优
+      # 顺序影响同分时的优先级；已满足的规则按得分降序择优（同分保持声明顺序）。
+      # 转场条带是专属强特征，放在首位以保持 Phase 3.0 的"transition 优先"语义。
+      - state: "transition"
+        any_of: ["transition_banner"]
+        min_confidence: 0.6
+      # 已满足的规则按得分降序择优
       - state: "battle_result"
         requires: ["victory_icon"]
         min_confidence: 0.6
+        # 单样本证据：victory_icon 只有 1 张正样本 → 置信度被 shortfall_factor 折价到 0.70；
+        # 但证据类型唯一、规则明确、该类证据可靠度 0.95（形态独特、误报低）
+        # → 状态可信度不应低于 0.85，否则会被稳定化门槛（0.85）永久挡掉
+        state_confidence:
+          mode: rule_based
+          min: 0.85
+          min_reliability: 0.9
       - state: "battle_reward"
         requires: ["reward_panel"]
         min_confidence: 0.6
+        state_confidence:
+          mode: rule_based
+          min: 0.85
+          min_reliability: 0.9
       # 战斗（Phase 4.4）：按**视觉区域**计数，需覆盖至少两个不同 group。
       # 行动条与式神头像同属 battle_right_ui，一起命中只算一个区域，
       # 因此"只有右侧 UI 亮起"不会被误判为战斗。

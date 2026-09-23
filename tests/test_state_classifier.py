@@ -1,4 +1,10 @@
-"""StateClassifier 的单元测试：三态判定、分支优先级与降级行为。"""
+"""StateClassifier 的帧路径单元测试：转场判定、分支装配与降级行为。
+
+Phase 4.6.5 起帧路径**只判转场**：庭院（``yard``）的权威来源是证据路径，
+因此本文件不再断言"帧路径产出 yard"，而是断言它返回 ``unknown`` 并给出
+``FRAME_YARD_DISABLED_REASON``（证据路径的 yard 判定由
+``tests/test_yard_authority.py`` 与 ``tests/test_state_classifier_evidence.py`` 覆盖）。
+"""
 
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ from src.core.config import (
 from src.vision.capture.models import Frame
 from src.vision.scene.loader import SceneLoader
 from src.vision.state import StateName, StateClassifier, StateResult, StateSource
+from src.vision.state.classifier import FRAME_YARD_DISABLED_REASON
 from src.vision.state.transition.classifier import TransitionClassifier
 from src.vision.state.transition.dataset import SampleKind, TransitionSample, TransitionSampleLoader
 from src.vision.state.yard.classifier import YardClassifier
@@ -119,19 +126,20 @@ def test_transition_takes_priority_over_yard(tmp_path: Path) -> None:
     assert result.source is StateSource.TRANSITION_BOTTOM_MATCH
 
 
-def test_yard_branch_used_when_transition_misses(tmp_path: Path) -> None:
-    """转场未命中时回落到庭院分支。"""
+def test_frame_path_no_longer_returns_yard(tmp_path: Path) -> None:
+    """Phase 4.6.5：帧路径不再判定庭院——场景组件即使命中，也只返回 unknown 并说明原因。"""
     image = yard_image()
     classifier = StateClassifier(
         transition=transition_classifier(flat_strip(0)),  # 与亮色庭院图的底部相距很远
-        yard=yard_classifier(tmp_path, image),
+        yard=yard_classifier(tmp_path, image),  # 场景组件仍装配，但不再参与状态判定
     )
 
     result = classifier.classify(frame_of(image))
 
-    assert result.state_name is StateName.YARD
-    assert result.source is StateSource.SCENE_CLASSIFIER
-    assert "yard/skin001/scene001" in (result.detail or "")
+    assert result.state_name is StateName.UNKNOWN
+    assert result.source is StateSource.FALLBACK
+    assert result.reason == FRAME_YARD_DISABLED_REASON
+    assert "use evidence path" in (result.detail or "")
 
 
 def test_unknown_when_no_branch_matches(tmp_path: Path) -> None:
@@ -148,7 +156,7 @@ def test_unknown_when_no_branch_matches(tmp_path: Path) -> None:
     assert result.confidence == pytest.approx(0.0)
     assert result.is_known is False
     assert "transition positive=" in (result.detail or "")
-    assert "yard below threshold" in (result.detail or "")
+    assert FRAME_YARD_DISABLED_REASON in (result.detail or "")
 
 
 def test_unknown_when_yard_disabled() -> None:
@@ -164,15 +172,17 @@ def test_unknown_when_yard_disabled() -> None:
     assert "yard" not in (result.detail or "")
 
 
-def test_unknown_when_transition_disabled(tmp_path: Path) -> None:
-    """转场分支未启用时，仅靠庭院分支判定。"""
+def test_frame_path_keeps_unknown_when_transition_disabled(tmp_path: Path) -> None:
+    """Phase 4.6.5：转场分支未启用时，帧路径只能给出 unknown（庭院不再由帧路径判定）。"""
     image = yard_image()
     classifier = StateClassifier(transition=None, yard=yard_classifier(tmp_path, image))
 
     result = classifier.classify(frame_of(image))
 
-    assert result.state_name is StateName.YARD
+    assert result.state_name is StateName.UNKNOWN
+    assert result.reason == FRAME_YARD_DISABLED_REASON
     assert "transition" not in (result.detail or "")
+    assert "use evidence path" in (result.detail or "")
 
 
 def test_classify_rejects_non_frame_input() -> None:
@@ -205,7 +215,10 @@ def test_from_config_builds_enabled_branches(tmp_path: Path) -> None:
     assert classifier.yard is not None
     assert classifier.transition.negative_count == 1
     assert classifier.classify(frame_of(flat_strip(0))).state_name is StateName.TRANSITION
-    assert classifier.classify(frame_of(yard_data)).state_name is StateName.YARD
+    # Phase 4.6.5：庭院已迁出帧路径（权威来源 = 证据路径），帧路径对庭院图返回 unknown
+    yard_result = classifier.classify(frame_of(yard_data))
+    assert yard_result.state_name is StateName.UNKNOWN
+    assert yard_result.reason == FRAME_YARD_DISABLED_REASON
 
 
 def test_from_config_honours_disabled_switches(tmp_path: Path) -> None:

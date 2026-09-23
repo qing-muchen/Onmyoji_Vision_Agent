@@ -98,16 +98,31 @@ def test_event_to_dict_is_json_friendly() -> None:
 
 
 def test_from_dict_rejects_unknown_state() -> None:
-    """未知状态名必须报错，而不是静默产生非法状态。"""
+    """词汇表之外的状态名必须报错，而不是静默产生非法状态。"""
     with pytest.raises(ValueError):
         StateEvent.from_dict(
             {
                 "previous_state": "unknown",
-                "current_state": "battle",
+                "current_state": "not_a_state",
                 "timestamp": TIMESTAMP,
                 "confidence": 0.9,
             }
         )
+
+
+@pytest.mark.parametrize("state", ["exploration", "battle", "battle_result", "battle_reward"])
+def test_from_dict_accepts_unified_states(state: str) -> None:
+    """Phase 4.6.1 统一后的状态名可以正常解析（历史记录的读法保持不变）。"""
+    event = StateEvent.from_dict(
+        {
+            "previous_state": "unknown",
+            "current_state": state,
+            "timestamp": TIMESTAMP,
+            "confidence": 0.9,
+        }
+    )
+
+    assert event.current_state.value == state
 
 
 def test_from_dict_requires_all_fields() -> None:

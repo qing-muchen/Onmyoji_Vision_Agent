@@ -96,6 +96,41 @@ def test_region_is_validated_and_normalized(write_config: WriteConfig) -> None:
         load_config(write_config("capture:\n  region: [0, 0, 0, 600]\n"), environ={})
 
 
+def test_evidence_rule_state_must_be_known(write_config: WriteConfig) -> None:
+    """证据规则的状态名可以是任一合法状态名（Phase 4.6.1 统一状态词汇）。"""
+    config = load_config(
+        write_config(
+            "evidence:\n"
+            "  aggregator:\n"
+            "    rules:\n"
+            "      - state: battle\n"
+            "        requires: [battle_auto_button]\n"
+        ),
+        environ={},
+    )
+
+    assert config.evidence.aggregator.rules[0].state == "battle"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # 拼写错误的状态名
+        "evidence:\n  aggregator:\n    rules:\n      - state: battel\n        requires: [battle_auto_button]\n",
+        # 大小写不符（词汇表是 snake_case 小写取值）
+        "evidence:\n  aggregator:\n    rules:\n      - state: Battle\n        requires: [battle_auto_button]\n",
+        # 系统不支持的状态名
+        "evidence:\n  aggregator:\n    rules:\n      - state: shop\n        requires: [bottom_menu_yard]\n",
+        # 兜底状态名同样受限
+        "evidence:\n  aggregator:\n    fallback_state: nothing\n",
+    ],
+)
+def test_invalid_state_names_raise_config_error(write_config: WriteConfig, content: str) -> None:
+    """非法状态名必须在加载阶段失败，避免产生状态链路无法表达的"幽灵状态"。"""
+    with pytest.raises(ConfigError):
+        load_config(write_config(content), environ={})
+
+
 def test_env_overrides_take_precedence(write_config: WriteConfig) -> None:
     """OVA_<段>__<字段> 环境变量应覆盖配置文件中的值，无关变量应被忽略。"""
     config = load_config(

@@ -28,6 +28,18 @@
 所有证据可靠度相同时该式退化为简单平均。``EvidenceScore.matched`` 与 ``reason``
 中列出的是**去重后的代表**，因此其条目数就是实际贡献得分的视觉区域数。
 
+**两个分值的分离（Phase 4.6.6）**：证据得分回答"证据匹配得多好"，状态可信度回答"这个状态
+结论有多可靠"。命中证据的匹配分低（例如模板样本不足被折价）并不等于判错——规则本身可能
+非常明确（证据类型唯一、区域覆盖达标、证据类可靠度高）。因此：
+
+* ``score``（证据得分）—— 用于判断规则是否满足，并解释证据匹配程度；
+* ``state_confidence``（状态可信度）—— 经规则结构校准后的最终可信度，供
+  ``StateResult.confidence`` 与 ``StateStabilizer`` 使用。
+
+校准方式与阈值**全部来自配置**（``evidence.aggregator.rules[*].state_confidence``），
+本模块不含"状态名 → 置信度"的硬编码映射。规则中的 ``min_confidence`` 是**证据准入阈值**
+（该证据是否足够参与状态判断），不是最终状态置信度。
+
 数据流::
 
     [EvidenceResult, ...]
@@ -51,6 +63,9 @@ from src.vision.evidence.models import (
 )
 
 __all__ = ["EvidenceAggregator"]
+
+#: 状态可信度校准模式：由规则结构 + 证据可靠度决定下限（Phase 4.6.6）
+RULE_BASED_MODE: str = "rule_based"
 
 logger = get_logger("vision.evidence.aggregator")
 
@@ -106,11 +121,16 @@ class EvidenceAggregator:
 
         Returns:
             候选状态；没有任何规则被满足时返回 ``fallback_state`` 且置信度为 ``0.0``。
+
+            候选的两个分值语义不同（Phase 4.6.6）：``confidence`` 是**证据得分**，
+            ``state_confidence`` 是经规则校准后的**状态可信度**（供 ``StateResult.confidence``
+            与 ``StateStabilizer`` 使用）。
         """
         if not self._config.enabled:
             return StateCandidate(
                 state=self.fallback_state,
                 confidence=0.0,
+                state_confidence=0.0,
                 reason="aggregator disabled by config",
             )
 
@@ -120,6 +140,7 @@ class EvidenceAggregator:
             return StateCandidate(
                 state=self.fallback_state,
                 confidence=0.0,
+                state_confidence=0.0,
                 reason="no rule satisfied: " + self._summarize_unsatisfied(scores),
             )
 
@@ -127,6 +148,7 @@ class EvidenceAggregator:
         return StateCandidate(
             state=best.state,
             confidence=best.score,
+            state_confidence=best.state_confidence,
             evidence=best.matched,
             reason=best.reason,
         )
@@ -172,10 +194,15 @@ class EvidenceAggregator:
         groups_ok = (not rule.any_of) or (len(any_of_groups) >= rule.min_groups)
         satisfied = not missing and groups_ok
         score = self._weighted_score(representatives) if satisfied else 0.0
+        # Phase 4.6.6：状态可信度与证据得分分离；规则未满足时两者都为 0
+        state_confidence = (
+            self._state_confidence(rule, score, representatives) if satisfied else 0.0
+        )
         representatives.sort(key=lambda item: item.confidence, reverse=True)
         return EvidenceScore(
             state=rule.state,
             score=score,
+            state_confidence=state_confidence,
             satisfied=satisfied,
             matched=tuple(representatives),
             missing=tuple(missing + any_of_missing),
@@ -189,6 +216,47 @@ class EvidenceAggregator:
     def _group_key(item: EvidenceResult) -> str:
         """证据的分组键：有 ``group`` 用 group，未分组时以证据名自成一组。"""
         return item.group or item.name
+
+    @staticmethod
+    def _state_confidence(
+        rule: EvidenceRuleConfig,
+        score: float,
+        representatives: Sequence[EvidenceResult],
+    ) -> float:
+        """校准**状态可信度**（Phase 4.6.6）。
+
+        与证据得分（``score``）分离：``score`` 描述"证据匹配得多好"；状态可信度还要考虑
+        **规则结构的判别力**——证据类型是否唯一、视觉区域覆盖是否达标（由调用方保证
+        ``satisfied``）、参与证据的**平均可靠度**是否足够高。
+
+        当前模式（``rule_based``，阈值来自配置
+        ``evidence.aggregator.rules[*].state_confidence``）：
+
+        * 规则未被满足 → 不校准（调用方传 0.0）；
+        * 参与证据的平均可靠度 < ``min_reliability`` → 保持证据得分
+          （证据类本身不够可信时，不因"规则明确"而抬高结论）；
+        * 否则 → 取 ``max(证据得分, min)``，即"结构信用下限"：
+          规则明确、证据类可信时，即使单条证据被折价（样本不足），状态可信度也不低于 ``min``。
+
+        Args:
+            rule: 规则配置（提供 ``state_confidence`` 校准参数）。
+            score: 该规则的证据得分。
+            representatives: 参与计分的代表证据（group 去重后）。
+
+        Returns:
+            状态可信度，范围 ``[0, 1]``。
+        """
+        calibration = rule.state_confidence
+        if calibration is None or calibration.mode != RULE_BASED_MODE:
+            return score
+        if not representatives:
+            return score
+        average_reliability = sum(item.reliability for item in representatives) / len(
+            representatives
+        )
+        if average_reliability < calibration.min_reliability:
+            return score
+        return max(score, calibration.min)
 
     @staticmethod
     def _effective_score(item: EvidenceResult) -> float:

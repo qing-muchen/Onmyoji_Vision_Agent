@@ -502,6 +502,7 @@ class TestBattleEvidenceChain:
             *BATTLE_EVIDENCE_NAMES,
             "victory_icon",
             "reward_panel",
+            "transition_banner",  # Phase 4.6.4：包装型（判定由 state.transition 注入）
         }
 
     @pytest.mark.parametrize("name", NEW_BATTLE_DETECTORS)

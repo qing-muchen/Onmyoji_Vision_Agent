@@ -71,6 +71,8 @@ class EvidenceType(StrEnum):
     CHAPTER_PANEL = "chapter_panel"
     #: 战斗 UI 元素（自动按钮 / 技能区 / 行动条 / 式神头像）
     BATTLE_UI = "battle_ui"
+    #: 转场 / 加载插画的底部固定条带（Phase 4.6.4：``transition_banner``）
+    TRANSITION = "transition"
     #: 战斗胜利结算
     VICTORY = "victory"
     #: 奖励展示
@@ -208,9 +210,20 @@ class EvidenceScore:
 
     它回答"这个状态的证据够不够、有多强"，而 :class:`StateCandidate` 是"最终选中的那个"。
 
+    Phase 4.6.6 起本模型同时承载**两个不同维度**：
+
+    * :attr:`score` —— **证据得分**：命中证据（group 去重后的代表）的可靠度加权平均，
+      用于判断规则是否满足与解释"证据匹配得多好"；
+    * :attr:`state_confidence` —— **状态可信度**：由规则结构与证据可靠度校准后的最终可信度，
+      供 :class:`StateCandidate` / ``StateResult.confidence`` 使用。
+
+    两者分离的原因：证据匹配分低（例如模板样本不足被折价）并不等于"状态判错"——
+    规则本身可能非常明确（证据类型唯一、区域覆盖达标、证据类可靠度高）。
+
     Attributes:
         state: 候选状态名。
-        score: 聚合得分，范围 ``[0, 1]``（命中证据置信度的平均）。
+        score: 证据得分，范围 ``[0, 1]``（命中证据置信度的可靠度加权平均）。
+        state_confidence: 状态可信度，范围 ``[0, 1]``；未配置校准时等于 :attr:`score`。
         satisfied: 规则是否被满足；只有满足的规则才可能成为候选。
         matched: 参与计分的命中证据（按置信度降序）。
         missing: 未命中的证据名——包含 ``requires`` 中缺失的必需证据，以及 ``any_of`` 中
@@ -218,11 +231,12 @@ class EvidenceScore:
         reason: 可读的计分理由，例如 ``battle_auto_button=0.9500``。
 
     Raises:
-        ValueError: 状态名为空或得分越界。
+        ValueError: 状态名为空，或得分 / 状态可信度越界。
     """
 
     state: str
     score: float
+    state_confidence: float = 0.0
     satisfied: bool = False
     matched: tuple[EvidenceResult, ...] = ()
     missing: tuple[str, ...] = ()
@@ -235,11 +249,18 @@ class EvidenceScore:
             raise ValueError(
                 f"score 必须落在 [{MIN_CONFIDENCE:g}, {MAX_CONFIDENCE:g}] 区间内: {self.score}"
             )
+        if not MIN_CONFIDENCE <= self.state_confidence <= MAX_CONFIDENCE:
+            raise ValueError(
+                f"state_confidence 必须落在 [{MIN_CONFIDENCE:g}, {MAX_CONFIDENCE:g}] 区间内: "
+                f"{self.state_confidence}"
+            )
 
     def describe(self) -> str:
         """返回可读描述。"""
         state = "satisfied" if self.satisfied else "unsatisfied"
         description = f"state={self.state} score={self.score:.4f} {state}"
+        if self.state_confidence != self.score:
+            description += f" state_confidence={self.state_confidence:.4f}"
         if self.reason:
             description += f" because: {self.reason}"
         if self.missing:
@@ -254,19 +275,27 @@ class StateCandidate:
     这是证据层的终点，不是最终状态：候选仍需经状态稳定化才能真正确认，
     因此本模型不携带 ``StateResult`` 的语义。
 
+    Phase 4.6.6 起区分两个分值（见 :class:`EvidenceScore`）：
+
+    * :attr:`confidence` —— **证据得分**（可靠度加权平均），解释"证据匹配得多好"；
+    * :attr:`state_confidence` —— **状态可信度**（校准后），是 ``StateResult.confidence``
+      的来源，也是 :class:`~src.runtime.state_monitor.stabilizer.StateStabilizer` 消费的值。
+
     Attributes:
         state: 候选状态名（``yard`` / ``exploration`` / ``battle`` / ``battle_result`` /
-            ``battle_reward`` / ``unknown``）。
-        confidence: 候选置信度，范围 ``[0, 1]``。
-        evidence: 支撑该候选的证据元组（全部命中的证据，按置信度降序）。
+            ``battle_reward`` / ``transition`` / ``unknown``）。
+        confidence: 证据得分，范围 ``[0, 1]``（命中证据的可靠度加权平均，group 去重后）。
+        state_confidence: 状态可信度，范围 ``[0, 1]``；未配置校准时等于 :attr:`confidence`。
+        evidence: 支撑该候选的证据元组（参与计分的代表证据，按置信度降序）。
         reason: 可读的判定理由，例如 ``battle_auto_button=0.9500, battle_skill_area=0.8800``。
 
     Raises:
-        ValueError: 状态名为空或置信度越界。
+        ValueError: 状态名为空，或证据得分 / 状态可信度越界。
     """
 
     state: str
     confidence: float
+    state_confidence: float = 0.0
     evidence: tuple[EvidenceResult, ...] = ()
     reason: str = ""
 
@@ -277,15 +306,27 @@ class StateCandidate:
             raise ValueError(
                 f"confidence 必须落在 [{MIN_CONFIDENCE:g}, {MAX_CONFIDENCE:g}] 区间内: {self.confidence}"
             )
+        if not MIN_CONFIDENCE <= self.state_confidence <= MAX_CONFIDENCE:
+            raise ValueError(
+                f"state_confidence 必须落在 [{MIN_CONFIDENCE:g}, {MAX_CONFIDENCE:g}] 区间内: "
+                f"{self.state_confidence}"
+            )
 
     @property
     def is_known(self) -> bool:
         """是否是具体状态（非 ``unknown``）。"""
         return self.state != STATE_UNKNOWN
 
+    @property
+    def is_calibrated(self) -> bool:
+        """状态可信度是否被规则校准抬高（即与证据得分不同）。"""
+        return self.state_confidence != self.confidence
+
     def describe(self) -> str:
         """返回可读描述。"""
         description = f"state={self.state} confidence={self.confidence:.4f}"
+        if self.is_calibrated:
+            description += f" state_confidence={self.state_confidence:.4f}"
         if self.reason:
             return f"{description} because: {self.reason}"
         return description

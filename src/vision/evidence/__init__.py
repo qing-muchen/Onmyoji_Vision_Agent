@@ -1,4 +1,5 @@
-"""视觉证据层（Phase 4.1 框架；4.2 补齐 battle 证据；4.3 可靠度加权；4.4 空间分组与时间稳定）。
+"""视觉证据层（Phase 4.1 框架；4.2 补齐 battle 证据；4.3 可靠度加权；4.4 空间分组与时间稳定；
+4.6.4 转场证据接入）。
 
 职责：把一帧画面**翻译成一组可解释的视觉证据**，而**不是**直接输出状态。
 
@@ -19,6 +20,14 @@
   由 :class:`~src.vision.evidence.aggregator.EvidenceAggregator` 按**配置规则**完成。
 * **一种证据一个 detector**：``bottom_menu`` 按 yard / exploration 拆分，
   ``battle`` 按自动按钮 / 技能区 / 行动条 / 式神头像拆分，避免单 ROI 丢证据。
+* **两类 detector（Phase 4.6.4）**：
+  * **ROI 模板型**——继承 :class:`~src.vision.evidence.base.TemplateEvidenceDetector`，
+    自带 ROI / 模板 / 阈值；
+  * **包装型**——如 :class:`~src.vision.evidence.detectors.transition_banner.TransitionBannerDetector`，
+    复用其它层已有的判定能力（转场条带 = ``state.transition`` 的
+    ``TransitionClassifier``），判定器由**编排层**通过
+    ``create_detectors(..., transition_classifier=...)`` 注入。
+    这样既不把判定逻辑复制到证据层，也避免 ``evidence`` 反向依赖 ``state``（否则循环导入）。
 * **detector 不读文件**：模板在构造期加载，``detect(frame)`` 只消费内存数据与帧像素；
   证据检测不要求帧携带 ``coordinate_transform``（``bbox`` 位于帧像素坐标系）。
 * **不伪造置信度**：模板数据不足时按 ``shortfall_factor`` 折价并在 metadata 标记
@@ -64,6 +73,8 @@ from src.vision.evidence.detectors import (
     BottomMenuYardDetector,
     ChapterPanelDetector,
     RewardPanelDetector,
+    TransitionBannerDetector,
+    TransitionProbe,
     VictoryIconDetector,
     create_detectors,
 )
@@ -109,6 +120,8 @@ __all__ = [
     "StateCandidate",
     "TemplateEvidenceDetector",
     "TextMatch",
+    "TransitionBannerDetector",
+    "TransitionProbe",
     "VictoryIconDetector",
     "create_detectors",
     "load_feature_templates",
