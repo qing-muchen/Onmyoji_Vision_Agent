@@ -27,6 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.core.config import AppConfig
+from src.core.exceptions import OnmyojiVisionError
 from src.utils.logger import get_logger
 from src.vision.capture.models import Frame
 from src.vision.evidence import (
@@ -37,9 +38,31 @@ from src.vision.evidence import (
 )
 from src.vision.state import StateClassifier, StateResult
 
-__all__ = ["EvidenceFrameProcessor"]
+__all__ = ["EvidenceFrameProcessor", "build_transition_probe"]
 
 logger = get_logger("vision.pipeline.frame_processor")
+
+
+def build_transition_probe(config: AppConfig) -> TransitionProbe | None:
+    """按配置构造转场判定器（数据不可用时返回 ``None``，不抛异常）。
+
+    转场证据需要 ``dataset/states/transition_bottom``（Phase 3.0 的条带样本）。
+    数据集缺失时返回 ``None``：``transition_banner`` 会输出"未检出"并在 ``metadata``
+    里记录 ``missing_dataset``——**不会**因此让调用方崩溃。
+
+    Args:
+        config: 应用配置（``state.transition`` 段提供裁剪比例、阈值与负样本间隔）。
+
+    Returns:
+        转场判定器；数据不可用时为 ``None``。
+    """
+    from src.vision.state.transition.classifier import TransitionClassifier
+
+    try:
+        return TransitionClassifier.from_dataset(config.state.transition)
+    except OnmyojiVisionError as exc:
+        logger.warning("转场判定器不可用（%s）；transition 证据将始终输出未检出", exc)
+        return None
 
 
 class EvidenceFrameProcessor:

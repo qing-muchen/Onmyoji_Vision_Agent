@@ -146,7 +146,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 4.6.4 | transition 证据化 | `PHASE4_6_4_TRANSITION_EVIDENCE_REPORT.md` |
 | Phase 4.6.5 | yard 权威迁移 | `PHASE4_6_5_YARD_AUTHORITY_REPORT.md` |
 | Phase 4.6.6 | 置信度校准 | `PHASE4_6_6_CONFIDENCE_CALIBRATION_REPORT.md` |
-| Phase 4.7 | 架构收敛（本阶段） | `PHASE4_7_ARCHITECTURE_CLEANUP_REPORT.md` |
+| Phase 4.7 | 架构收敛 | `PHASE4_7_ARCHITECTURE_CLEANUP_REPORT.md` |
+| Phase 5 | Runtime 证据流水线接入（`StateMonitor` 判定入口 / 失败降级 / 首次性能测量） | `PHASE5_RUNTIME_PIPELINE_REPORT.md`、`PHASE5_RUNTIME_PERFORMANCE_REPORT.md` |
 
 ---
 
@@ -154,9 +155,9 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 
 | 项 | 现状 | 归属 |
 | --- | --- | --- |
-| 实时循环 | 未实现（无 500ms 截图循环、无事件接线） | Phase 5 |
-| `StateMonitor` | 仍调用 `classify(frame)`（帧路径）；`EvidenceFrameProcessor` 已就绪待接线 | Phase 5 |
-| `EvidenceHistory` | 已 deprecated、无生产调用方；连同 `evidence.history` 配置段可删除 | Phase 5（随实时循环接线一并处理） |
+| 实时循环（真实采集） | 证据流水线已接线（`StateMonitor` 默认走 `EvidenceFrameProcessor`，含转场证据与失败降级）；**真实 500ms 截图循环仍未实现** | Phase 5.1 |
+| 计算性能 | `detect` mean 356 ms / p95 514 ms → **500 ms 周期不可行**；瓶颈为 `bottom_menu_exploration`(32.7%) + `bottom_menu_yard`(26.8%) + `chapter_panel`(15.1%) | Phase 5.1（优化前先缩小 ROI / 降模板数与尺度） |
+| `EvidenceHistory` | 已 deprecated、无生产调用方；连同 `evidence.history` 配置段可删除 | 独立清理项 |
 | `config.py` | 单文件承载全部配置模型（含 evidence / state / runtime 段），拆分方案见 Phase 4.7 报告 | Phase 5+（可选） |
 | 计算性能 | 单帧 ≈ 170 次 `matchTemplate`（10 detector）；未做性能优化与预算验证 | Phase 5（接线前先测） |
 | 样本量 | `victory_icon` / `reward_panel` 各 1 张正样本（靠状态可信度校准补偿） | 数据侧 |

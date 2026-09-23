@@ -148,7 +148,21 @@ Phase 4.6.1 起扩展为完整状态集）：
 48. 新增 `examples/evidence_state_demo.py`（证据驱动状态判定 Demo，覆盖 6 个状态）；
 49. 文档同步：本 README + `docs/ARCHITECTURE_OVERVIEW.md`。
 
-### 架构总览（Phase 4.x 完成后的主链路）
+**Phase 5 — Runtime Evidence Pipeline Integration（已完成：链路接线）**：把 Runtime 主链路迁移到证据流水线：
+
+50. `StateMonitor` 判定入口改为 `EvidenceFrameProcessor.process(frame)`（**processor 优先**，
+    回退到状态分类器；`from_config` 默认装配完整证据流水线，含转场证据）；
+51. 构造方式扩展但仍兼容：第一位置参数同时接受 `StateClassifier` 与 `EvidenceFrameProcessor`，
+    并新增关键字 `processor=`；`monitor.classifier` 恒为 `StateClassifier`（接口不变）；
+52. **判定失败不崩溃**：detector / OCR / 模板异常被捕获，该帧降级为 `unknown` 并把原因写入
+    `reason` / `detail`，计入新增属性 `monitor.errors`；循环继续；
+53. `examples/runtime_pipeline_demo.py` —— 固定节拍 Demo（模拟 500ms，`--real-time` 可真实等待），
+    逐帧输出 `timestamp / raw state / confidence / source / stable state / event`；
+54. 性能测量（首次）：`detect` 阶段 mean **356 ms** / p95 **514 ms** → **500 ms 周期当前不可行**
+    （瓶颈：`bottom_menu_exploration` 32.7% + `bottom_menu_yard` 26.8% + `chapter_panel` 15.1%）；
+    按阶段要求**未做优化**（详见 `docs/PHASE5_RUNTIME_PERFORMANCE_REPORT.md`）。
+
+### 架构总览（Phase 5 完成后的主链路）
 
 ```text
 Frame                                  采集：Window → Foreground → Calibration → Capture
@@ -159,6 +173,8 @@ StateCandidate                         候选状态 + 证据得分 + 状态可�
   ↓  StateClassifier.classify_evidence 状态层：这些证据意味着什么（无硬编码映射）
 StateResult                            state_name / confidence / source / reason / evidence
   ↓  StateStabilizer.update            runtime：时间滤波（唯一归属）+ 置信度门槛
+                                       （StateMonitor 的判定入口 = EvidenceFrameProcessor；
+                                         判定失败降级为 unknown 并记录原因，循环不崩溃）
 StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json）
 ```
 
@@ -181,7 +197,9 @@ StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json
 | `evidence.aggregator.rules[*].state_confidence.min` | **状态可信度下限**（可选校准；`rule_based`） |
 | `runtime.stabilization.confidence_threshold` | 稳定化门槛（消费**状态可信度**） |
 
-**尚未实现**：Phase 5 的实时循环（500ms 截图 + 事件接线）、Phase 6/7/8 的 State Integration /
+**尚未实现**：**真实采集的实时循环**（Phase 5 已完成证据流水线接线与离线节拍 Demo；
+真实 500ms 截图循环、前台门控接线与性能预算仍待办——当前 `detect` p95 ≈ 514 ms 已超周期）、
+Phase 6/7/8 的 State Integration /
 Action /
 State Machine / Task System、YOLO 与深度学习模型、鼠标点击与键盘输入，以及任何**基于文字或界面的
 决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
@@ -204,6 +222,7 @@ Onmyoji_Vision_Agent/
 │   ├── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
 │   ├── evidence_demo.py              # 证据层 Demo（Frame -> EvidenceResult -> StateCandidate）
 │   ├── evidence_state_demo.py        # 证据驱动状态 Demo（Frame -> Evidence -> StateResult，Phase 4.7）
+│   ├── runtime_pipeline_demo.py      # Runtime 证据流水线 Demo（固定节拍 -> 状态 -> 稳定 -> 事件，Phase 5）
 │   ├── state_classifier_demo.py      # 状态识别 Demo（帧路径：Frame -> StateResult）
 │   ├── state_monitor_demo.py         # 实时状态监控 Demo（周期采集 -> 状态变化事件）
 │   ├── state_stabilizer_demo.py      # 状态稳定化 Demo（raw state -> stable state）
@@ -352,6 +371,10 @@ python examples/state_stabilizer_demo.py --raw unknown,yard,yard,yard,unknown,un
 # 12. Demo：证据驱动状态判定（Frame -> Evidence -> StateResult，Phase 4.7）
 python examples/evidence_state_demo.py
 python examples/evidence_state_demo.py --image dataset/raw/battle_result/battle_result_win_001.png --verbose
+
+# 13. Demo：Runtime 证据流水线（固定节拍 → 证据 → 状态 → 稳定 → 事件，Phase 5）
+python examples/runtime_pipeline_demo.py
+python examples/runtime_pipeline_demo.py --interval-ms 500 --real-time
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -1353,8 +1376,11 @@ Stable Changes: 0            # 首次确认是基线，不算变化
 - **Phase 4.0–4.7（已完成）**：Evidence Layer 与 State Layer 收敛 —— 证据框架、battle 证据链、
   可靠度加权、空间分组与时间缓冲、架构 Review、Evidence → State 迁移（分类器 / transition / yard）、
   置信度校准、架构收敛（详见上文"当前阶段"与 `docs/ARCHITECTURE_OVERVIEW.md`）。
-- Phase 5：Runtime Loop —— 500ms 截图循环 + 证据驱动的实时状态判定
-  （`src/vision/pipeline` 与 `src/runtime` 接线；**尚未实现**）。
+- **Phase 5（已完成：链路接线）**：Runtime Evidence Pipeline Integration —— `StateMonitor` 判定入口
+  迁移到 `EvidenceFrameProcessor`（processor 优先、旧 `classifier` 兼容、判定失败降级不崩溃）、
+  固定节拍 Demo 与首次性能测量（`detect` p95 ≈ 514 ms，500 ms 周期**尚不可行**）。
+- Phase 5.1（待办）：真实采集的实时循环 —— 500ms 截图循环 + 前台门控接线 + 性能预算
+  （需先处理 `bottom_menu` / `chapter_panel` 的检测耗时，见 `docs/PHASE5_RUNTIME_PERFORMANCE_REPORT.md`）。
 - Phase 6：State Integration —— 事件 / 落盘 / 观测与状态语义收敛。
 - Phase 7：Action Planning & Action Engine —— 受控的键鼠输入与安全约束
   （`src/action`，坐标一律经 `CoordinateTransform` 映射）。
