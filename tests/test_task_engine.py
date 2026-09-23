@@ -826,8 +826,10 @@ def test_predicate_error_fails_task() -> None:
 # 6. task 不依赖 vision（D-4：AST 依赖检查）
 # ---------------------------------------------------------------------------
 
-#: 允许的依赖前缀（其余必须为标准库）
+#: 允许的依赖前缀（其余必须为标准库或下方白名单）
 ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = ("src.core", "src.utils", "src.task")
+#: 允许的第三方依赖：仅配置解析（**不是**视觉 / 运行时 / 输入依赖）
+ALLOWED_THIRD_PARTY: frozenset[str] = frozenset({"yaml"})
 #: 明确禁止的依赖（架构决策 D-4）
 FORBIDDEN_IMPORT_PREFIXES: tuple[str, ...] = (
     "cv2",
@@ -867,11 +869,13 @@ def test_task_layer_does_not_import_vision_or_runtime() -> None:
 
 
 def test_task_layer_only_imports_stdlib_and_own_layers() -> None:
-    """``src/task`` 的依赖必须是标准库或 ``src.core`` / ``src.utils`` / ``src.task``。"""
+    """``src/task`` 的依赖必须是标准库、``yaml``（配置解析）或自身层级。"""
     violations: list[str] = []
     for path, module in _iter_task_imports():
         top = module.split(".")[0]
         if top in sys.stdlib_module_names or top == "__future__":
+            continue
+        if top in ALLOWED_THIRD_PARTY:
             continue
         if module.startswith(ALLOWED_IMPORT_PREFIXES):
             continue

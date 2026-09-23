@@ -32,6 +32,7 @@ from enum import StrEnum
 from time import monotonic
 from typing import Any, Protocol, runtime_checkable
 
+from src.task.estop import EStop
 from src.task.hooks import (
     Hook,
     HookEvent,
@@ -41,13 +42,17 @@ from src.task.hooks import (
     build_predicate,
 )
 from src.task.models import (
+    TERMINAL_STATE_NAME,
     RuntimeSnapshot,
     StateSnapshot,
     Step,
+    StepPhase,
     Task,
     TaskContext,
+    TaskDefinition,
     TaskResult,
     TaskStatus,
+    WorkflowState,
 )
 from src.task.state_machine import (
     InvalidTaskTransition,
@@ -55,6 +60,16 @@ from src.task.state_machine import (
     TaskState,
     TaskStateMachine,
     local_now_iso,
+)
+from src.task.workflow import (
+    ActionOutcome,
+    ActionPort,
+    ActionRequest,
+    ActionStatus,
+    NullActionPort,
+    WorkflowDecision,
+    WorkflowDecisionKind,
+    WorkflowRunner,
 )
 from src.utils.logger import get_logger
 
@@ -81,164 +96,12 @@ class TaskEngineBusyError(TaskEngineError):
     """已有活动任务时再次启动新任务。"""
 
 
-class ActionStatus(StrEnum):
-    """动作请求的处理结果（由 Action 层返回）。"""
-
-    #: 已受理并执行（**不代表界面已响应**：效果由后续 ``on_stable`` 验证）
-    EXECUTED = "executed"
-    #: 已受理但未执行（未接线 / 空端口 / 骨架阶段）
-    SKIPPED = "skipped"
-    #: 被安全门拒绝（窗口无效 / 失焦 / 限流 / E-STOP）
-    REJECTED = "rejected"
-    #: 执行失败（输入出错）
-    FAILED = "failed"
-
-
-@dataclass(frozen=True, slots=True)
-class ActionRequest:
-    """一次**语义**动作请求（架构决策 D-3：不含屏幕绝对坐标）。
-
-    Attributes:
-        action_id: 幂等键（``task:step:attempt``），Action 层可据此去重。
-        kind: 动作类型（``click`` / ``key`` / ``wait`` …，取值见 ``ACTION_KINDS``）。
-        target: 语义目标（``{"element": "buttons/explore"}`` 或 ``{"reference": [x, y]}``）。
-        task_id / step_id: 来源标识（审计用）。
-        params: 附加参数（时长 / 按键等）。
-        timeout_s: 执行层超时（与步骤验证窗口无关）。
-        attempt: 第几次尝试（从 1 开始）。
-    """
-
-    action_id: str
-    kind: str
-    target: Mapping[str, Any] | None
-    task_id: str
-    step_id: str
-    params: Mapping[str, Any] = field(default_factory=dict)
-    timeout_s: float = 1.0
-    attempt: int = 1
-
-    def to_dict(self) -> dict[str, Any]:
-        """返回可 JSON 序列化的字典（不含截图 / 用户数据）。"""
-        return {
-            "action_id": self.action_id,
-            "kind": self.kind,
-            "target": dict(self.target) if self.target else None,
-            "task_id": self.task_id,
-            "step_id": self.step_id,
-            "params": dict(self.params),
-            "timeout_s": self.timeout_s,
-            "attempt": self.attempt,
-        }
-
-    def describe(self) -> str:
-        """返回可读描述。"""
-        target = self.target.get("element") if self.target else None
-        if target is None and self.target:
-            target = self.target.get("reference")
-        return f"{self.kind}({target}) attempt={self.attempt} id={self.action_id}"
-
-
-@dataclass(frozen=True, slots=True)
-class ActionOutcome:
-    """动作请求的处理结果。
-
-    Attributes:
-        status: 处理结果状态。
-        reason: 人类可读说明（拒绝 / 失败原因）。
-        executed_at: 执行时间（ISO 8601）；未执行时为 ``None``。
-        detail: 附加信息（例如解析到的坐标；不含截图）。
-    """
-
-    status: ActionStatus
-    reason: str = ""
-    executed_at: str | None = None
-    detail: Mapping[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_failure(self) -> bool:
-        """是否失败（被拒绝或执行出错）。"""
-        return self.status in (ActionStatus.REJECTED, ActionStatus.FAILED)
-
-    def describe(self) -> str:
-        """返回可读描述。"""
-        return f"{self.status.value}{f'（{self.reason}）' if self.reason else ''}"
-
-
-@runtime_checkable
-class ActionPort(Protocol):
-    """Task 依赖的 Action 端口（Phase 7 由 ``src.action`` 提供实现）。"""
-
-    def request(self, request: ActionRequest, /) -> ActionOutcome:
-        """提交一次语义动作请求。
-
-        Args:
-            request: 语义动作请求。
-
-        Returns:
-            处理结果（``EXECUTED`` 不代表界面已响应，效果由后续状态验证）。
-        """
-        ...
-
-
-class NullActionPort:
-    """骨架阶段的默认端口：**接收请求、记录请求，但不执行任何输入**。
-
-    用途：让 Task Engine 在 Phase 6.1/6.2 可以被完整驱动与测试（决策链路可跑通），
-    同时**绝对不会**产生键鼠输入。
-    """
-
-    def __init__(self) -> None:
-        self._requests: list[ActionRequest] = []
-
-    @property
-    def requests(self) -> tuple[ActionRequest, ...]:
-        """已记录的请求（按提交顺序）。"""
-        return tuple(self._requests)
-
-    @property
-    def count(self) -> int:
-        """已记录的请求数量。"""
-        return len(self._requests)
-
-    def request(self, request: ActionRequest, /) -> ActionOutcome:
-        """记录请求并返回"未执行"。
-
-        Args:
-            request: 语义动作请求。
-
-        Returns:
-            ``SKIPPED`` 结果（骨架阶段不执行输入）。
-        """
-        self._requests.append(request)
-        logger.info("动作请求（骨架阶段未执行）: %s", request.describe())
-        return ActionOutcome(
-            status=ActionStatus.SKIPPED, reason="no action backend (Phase 6.1 skeleton)"
-        )
-
-
-class StepPhase(StrEnum):
-    """当前步骤的执行阶段（引擎内部状态，可观测）。"""
-
-    #: 任务未启动 / 步骤尚未进入
-    IDLE = "idle"
-    #: 等待观测到满足（尚未派发动作）
-    PENDING = "pending"
-    #: 已派发动作，等待达成
-    AWAITING = "awaiting"
-    #: 已达成并推进
-    SATISFIED = "satisfied"
-    #: 与期望冲突（``forbid`` 命中）
-    VIOLATED = "violated"
-    #: 动作被拒绝 / 失败
-    REJECTED = "rejected"
-    #: 超时
-    TIMEOUT = "timeout"
-    #: 任务已结束
-    DONE = "done"
+#: 动作端口契约（``ActionRequest`` / ``ActionOutcome`` / ``ActionPort`` / ``NullActionPort``）
+#: 自 Phase 6.2 起定义在 :mod:`src.task.workflow`（工作流执行模型），此处重新导出保持兼容。
 
 
 class TaskEngine:
-    """任务编排引擎（Phase 6.1 骨架）。
+    """任务编排引擎（Phase 6.1 骨架 / Phase 6.2 支持 YAML 工作流）。
 
     典型用法::
 
@@ -256,6 +119,7 @@ class TaskEngine:
         runtime: 运行时信息来源：``None``（未知）/ 可调用对象（每次取快照）/ 任意对象
             （例如 ``StateMonitor``，按字段提取，见
             :meth:`~src.task.models.RuntimeSnapshot.from_object`）。
+        estop: 紧急停止开关（Phase 6.2，Q-3）；省略时不启用（测试与离线场景）。
     """
 
     def __init__(
@@ -266,15 +130,19 @@ class TaskEngine:
         hooks: HookRegistry | Hook | Iterable[Hook] | None = None,
         action_port: ActionPort | None = None,
         runtime: Any = None,
+        estop: EStop | None = None,
     ) -> None:
         self._clock = clock
         self._now = now
         self._hooks = _coerce_hooks(hooks)
         self._action_port: ActionPort = action_port if action_port is not None else NullActionPort()
         self._runtime_source = runtime
+        self._estop = estop
 
         self._context: TaskContext | None = None
         self._result: TaskResult | None = None
+        self._definition: TaskDefinition | None = None
+        self._runner: WorkflowRunner | None = None
         self._phase = StepPhase.IDLE
         self._support_frames = 0
         self._attempts = 0
@@ -312,8 +180,30 @@ class TaskEngine:
 
     @property
     def phase(self) -> StepPhase:
-        """当前步骤阶段。"""
+        """当前步骤 / 状态的执行阶段。"""
+        if self._runner is not None:
+            return self._runner.phase
         return self._phase
+
+    @property
+    def definition(self) -> TaskDefinition | None:
+        """当前工作流定义（``start(TaskDefinition)`` 模式下存在）。"""
+        return self._definition
+
+    @property
+    def runner(self) -> WorkflowRunner | None:
+        """工作流运行器（``start(TaskDefinition)`` 模式下存在）。"""
+        return self._runner
+
+    @property
+    def estop(self) -> EStop | None:
+        """紧急停止开关（未注入时为 ``None``）。"""
+        return self._estop
+
+    @property
+    def current_state_name(self) -> str | None:
+        """工作流当前状态名（线性任务模式下为 ``None``）。"""
+        return self._runner.state_name if self._runner is not None else None
 
     @property
     def support_frames(self) -> int:
@@ -367,18 +257,25 @@ class TaskEngine:
 
     # ---- 生命周期接口（用户指定） -------------------------------------------
 
-    def start(self, task: Task) -> TaskContext:
+    def start(self, task: Task | TaskDefinition) -> TaskContext:
         """启动一个任务：``CREATED → READY → RUNNING``（运行时不可用时停在 ``BLOCKED``）。
+
+        两种模式（Phase 6.2 起）：
+
+        * ``start(Task)`` —— Phase 6.1 的**线性步骤**定义（Python 声明）；
+        * ``start(TaskDefinition)`` —— Phase 6.2 的**状态机式工作流**（来自 ``configs/tasks/*.yaml``，
+          由 :class:`~src.task.loader.TaskLoader` 加载）。
 
         行为：
 
         1. 若已有活动任务 → :class:`TaskEngineBusyError`；
         2. 建立上下文与状态机，发出 ``TASK_STARTED`` / ``TASK_READY`` 事件；
         3. 依据运行时视图门控：不可用（故障 / 无可用画面）→ ``BLOCKED``（D-5，不消耗预算）；
-        4. 否则进入 ``RUNNING``，并**等待首个状态视图**后才可能派发动作（不盲动）。
+        4. 检查 E-STOP（若注入）；
+        5. 进入 ``RUNNING``；工作流模式会立即进入 ``initial`` 状态并提交其动作。
 
         Args:
-            task: 任务定义。
+            task: 线性任务（:class:`~src.task.models.Task`）或工作流定义（:class:`TaskDefinition`）。
 
         Returns:
             新建立的任务上下文。
@@ -390,10 +287,18 @@ class TaskEngine:
             raise TaskEngineBusyError(
                 f"已有活动任务: {self._context.task.task_id if self._context else 'n/a'}"
             )
+        if isinstance(task, TaskDefinition):
+            return self._start_definition(task)
+        return self._start_task(task)
+
+    def _start_task(self, task: Task) -> TaskContext:
+        """启动线性步骤任务（Phase 6.1 行为，保持不变）。"""
         machine = TaskStateMachine(now=self._now)
         context = TaskContext(task, machine, clock=self._clock, started_at=self._now())
         self._context = context
         self._result = None
+        self._definition = None
+        self._runner = None
         self._reset_step_runtime(phase=StepPhase.PENDING, reset_retries=True)
         self._predicates.clear()
         self._emit(HookKind.TASK_STARTED, context, reason=task.description or "start")
@@ -401,7 +306,53 @@ class TaskEngine:
         self._emit(HookKind.TASK_READY, context, reason="ready")
         if self._apply_runtime_gate(context):
             return context
+        if self._check_estop(context):
+            return context
         machine.start(reason="start")
+        return context
+
+    def _start_definition(self, definition: TaskDefinition) -> TaskContext:
+        """启动状态机式工作流（Phase 6.2）：进入 ``initial`` 状态并提交其动作。"""
+        machine = TaskStateMachine(now=self._now)
+        context = TaskContext(definition, machine, clock=self._clock, started_at=self._now())
+        self._context = context
+        self._result = None
+        self._definition = definition
+        self._runner = WorkflowRunner(
+            definition,
+            port=self._action_port,
+            clock=self._clock,
+            now=self._now,
+            dispatch_guard=self._workflow_dispatch_guard,
+        )
+        self._reset_step_runtime(phase=StepPhase.PENDING, reset_retries=True)
+        self._predicates.clear()
+        self._emit(HookKind.TASK_STARTED, context, reason=definition.description or "start")
+        machine.mark_ready(reason="start")
+        self._emit(HookKind.TASK_READY, context, reason="ready")
+        if self._apply_runtime_gate(context):
+            return context
+        if self._check_estop(context):
+            return context
+        machine.start(reason="start")
+        outcome = self._runner.enter_initial(context=context)
+        self._emit(
+            HookKind.STEP_DISPATCHED,
+            context,
+            step_id=definition.initial,
+            reason=outcome.reason,
+            detail={"action": outcome.kind or "none", "requested": outcome.requested},
+        )
+        if outcome.requested:
+            self._emit(
+                HookKind.ACTION_REQUESTED,
+                context,
+                step_id=definition.initial,
+                reason=outcome.reason,
+                detail={"kind": outcome.kind, "status": "ok" if outcome.ok else "failed"},
+            )
+        if not outcome.ok:
+            self._fail(context, reason=outcome.reason or "action_failure")
         return context
 
     def on_stable(self, result: Any) -> TaskContext | None:
@@ -421,13 +372,18 @@ class TaskEngine:
         context.observe_stable(snapshot)
         if context.state is TaskState.PAUSED:
             return context
+        if self._check_estop(context):
+            return context
         if self._apply_runtime_gate(context):
             return context
         if context.state is not TaskState.RUNNING:
             return context
         try:
-            self._tick_steps(context, snapshot)
-        except TaskEngineError as exc:
+            if self._runner is not None:
+                self._tick_workflow(context, snapshot)
+            else:
+                self._tick_steps(context, snapshot)
+        except TaskError as exc:
             logger.error("任务执行失败: %s", exc)
             self._fail(context, reason=str(exc))
         return context
@@ -446,6 +402,8 @@ class TaskEngine:
             return None
         cycle_id, stamp = self._parse_cycle(timestamp)
         context.observe_cycle(cycle_id=cycle_id, timestamp=stamp)
+        if self._check_estop(context):
+            return context
         if self._apply_runtime_gate(context):
             return context
         if context.state is TaskState.PAUSED:
@@ -455,7 +413,10 @@ class TaskEngine:
         self._check_budget(context)
         if self.is_terminal:
             return context
-        self._check_step_timeout(context)
+        if self._runner is not None:
+            self._tick_workflow_timeout(context)
+        else:
+            self._check_step_timeout(context)
         return context
 
     def pause(self, *, reason: str = "pause") -> TaskContext | None:
@@ -534,10 +495,127 @@ class TaskEngine:
         """清空引擎状态（任务与结果），便于重新启动新任务。"""
         self._context = None
         self._result = None
+        self._definition = None
+        self._runner = None
         self._predicates.clear()
         self._reset_step_runtime(phase=StepPhase.IDLE)
 
     # ---- 决策核心 -----------------------------------------------------------
+
+    # ---- 工作流推进（Phase 6.2） -------------------------------------------
+
+    def _tick_workflow(self, context: TaskContext, snapshot: StateSnapshot) -> None:
+        """工作流模式的 ``on_stable`` 决策：评估转移条件并推进状态。"""
+        runner = self._runner
+        if runner is None:
+            return
+        decision = runner.on_stable(context=context, snapshot=snapshot)
+        self._phase = runner.phase
+        if decision.kind is WorkflowDecisionKind.NONE:
+            return
+        if decision.kind is WorkflowDecisionKind.TRANSITION:
+            transition = decision.transition
+            if transition is None:
+                return
+            self._emit(
+                HookKind.STEP_SATISFIED,
+                context,
+                step_id=transition.from_state,
+                reason=decision.reason,
+                detail={"next": transition.to_state},
+            )
+            self._emit(
+                HookKind.STEP_DISPATCHED,
+                context,
+                step_id=transition.to_state,
+                reason=decision.outcome.reason if decision.outcome is not None else "",
+            )
+            if decision.outcome is not None and decision.outcome.requested:
+                self._emit(
+                    HookKind.ACTION_REQUESTED,
+                    context,
+                    step_id=transition.to_state,
+                    reason=decision.outcome.reason,
+                    detail={
+                        "kind": decision.outcome.kind or "n/a",
+                        "attempt": runner.attempts,
+                    },
+                )
+            return
+        if decision.kind is WorkflowDecisionKind.COMPLETE:
+            transition = decision.transition
+            self._emit(
+                HookKind.STEP_SATISFIED,
+                context,
+                step_id=transition.from_state if transition is not None else None,
+                reason=decision.reason,
+                detail={"next": TERMINAL_STATE_NAME},
+            )
+            self._complete(context, reason=decision.reason or "completed")
+            return
+        if decision.kind is WorkflowDecisionKind.FAILED:
+            self._fail(context, reason=decision.reason)
+
+    def _tick_workflow_timeout(self, context: TaskContext) -> None:
+        """工作流模式的 ``on_cycle`` 处理：超时重试或失败（计时只用 on_cycle，D-2）。"""
+        runner = self._runner
+        if runner is None:
+            return
+        decision = runner.on_cycle(context=context)
+        self._phase = runner.phase
+        if decision.kind is WorkflowDecisionKind.RETRY:
+            self._emit(
+                HookKind.STEP_RETRIED,
+                context,
+                step_id=runner.state_name,
+                reason=decision.reason,
+            )
+            return
+        if decision.kind is WorkflowDecisionKind.FAILED:
+            self._emit(
+                HookKind.STEP_TIMEOUT,
+                context,
+                step_id=runner.state_name,
+                reason=decision.reason,
+            )
+            self._fail(context, reason=decision.reason)
+
+    def _workflow_dispatch_guard(self, context: TaskContext, state_name: str) -> str | None:
+        """工作流派发前检查（预算 / 安全门）：返回原因表示拒绝派发。
+
+        与线性模式一致：**步数预算只在真正派发前检查**（避免"最后一步已派出、正在等待达成"
+        被误判为预算超限）。
+
+        Args:
+            context: 任务上下文。
+            state_name: 即将进入（并派发动作）的状态名。
+
+        Returns:
+            拒绝原因；``None`` 表示允许派发。
+        """
+        budget = context.task.budget
+        if context.steps_dispatched >= budget.max_steps:
+            return (
+                f"budget_steps: 超过 max_steps={budget.max_steps}"
+                f"（state={state_name} 未派发）"
+            )
+        return None
+
+    def _check_estop(self, context: TaskContext) -> bool:
+        """E-STOP 检查（架构决策 Q-3：API + 文件哨兵；**不含热键**）。
+
+        Returns:
+            ``True`` 表示已触发紧急停止（任务已置为失败并停止推进）。
+        """
+        estop = self._estop
+        if estop is None:
+            return False
+        if not estop.check():
+            return False
+        reason = f"estop: {estop.reason or 'triggered'}"
+        logger.error("紧急停止已触发，任务立即失败: %s", reason)
+        self._fail(context, reason=reason)
+        return True
 
     def _tick_steps(self, context: TaskContext, snapshot: StateSnapshot) -> None:
         """推动步骤推进（同一帧内可连续推进多个"本来就满足"的步骤）。
@@ -730,12 +808,12 @@ class TaskEngine:
             return
         self._fail(context, reason="step_timeout")
 
-    def _complete(self, context: TaskContext) -> None:
-        """标记任务完成（全部步骤达成）。"""
+    def _complete(self, context: TaskContext, *, reason: str = "completed") -> None:
+        """标记任务完成（全部步骤达成 / 工作流到达 COMPLETE）。"""
         self._phase = StepPhase.DONE
-        context.machine.complete(reason="completed")
-        self._result = self._build_result(context, reason="completed")
-        self._emit(HookKind.TASK_COMPLETED, context, reason="completed")
+        context.machine.complete(reason=reason)
+        self._result = self._build_result(context, reason=reason)
+        self._emit(HookKind.TASK_COMPLETED, context, reason=reason)
         logger.info("任务完成: %s", self._result.describe())
 
     def _fail(self, context: TaskContext, *, reason: str) -> None:
@@ -891,11 +969,14 @@ class TaskEngine:
     ) -> None:
         """发出引擎事件（审计轨迹）。"""
         step = context.current_step
+        resolved_step_id = step_id or (step.step_id if step is not None else None)
+        if resolved_step_id is None and self._runner is not None:
+            resolved_step_id = self._runner.state_name
         event = HookEvent(
             kind=kind,
             task_id=context.task.task_id,
             timestamp=self._now(),
-            step_id=step_id or (step.step_id if step is not None else None),
+            step_id=resolved_step_id,
             state=context.state.value,
             reason=reason,
             detail=dict(detail or {}),
@@ -906,6 +987,11 @@ class TaskEngine:
         """返回可读描述。"""
         if self._context is None:
             return "TaskEngine(no task)"
+        if self._runner is not None:
+            return (
+                f"TaskEngine({self._context.describe()}, {self._runner.describe()}, "
+                f"estop={self._estop.state.describe() if self._estop is not None else 'n/a'})"
+            )
         return (
             f"TaskEngine({self._context.describe()}, phase={self._phase.value}, "
             f"support={self._support_frames}, attempts={self._attempts})"

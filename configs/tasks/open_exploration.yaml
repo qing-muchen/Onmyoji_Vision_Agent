@@ -1,0 +1,61 @@
+# 任务定义示例：open_exploration（演示更完整的 schema 能力）
+#
+# 与 farming.yaml 的区别：展示
+#   * 语义动作（click 某元素）—— 本阶段仍然**不执行**（NullActionPort 只记录）；
+#   * 结构化条件写法（type / value）；
+#   * 每状态 timeout / retry；
+#   * 多分支转移（按声明顺序，第一个满足者生效）；
+#   * 禁用状态（forbid 语义用"结构化 any 条件"表达）。
+
+name: open_exploration
+description: "示例：在庭院点击进入探索 → 等待探索界面；超时后重试，长时间认不出画面则等待"
+initial: WAIT_YARD
+states:
+  WAIT_YARD:
+    description: "等待庭院稳定（幂等：已满足则不会点击）"
+    on:
+      - condition:
+          type: state_equals
+          value: yard
+        next: OPEN_EXPLORATION
+      - condition: state == battle         # 已在战斗 → 直接跳到等待战斗结束
+        next: WAIT_BATTLE_END
+
+  OPEN_EXPLORATION:
+    description: "点击『探索』按钮（语义目标；真实输入属 Phase 7）"
+    actions:
+      - kind: click
+        target:
+          element: "buttons/explore"
+        timeout: 2
+    on:
+      - condition: state == exploration
+        next: COMPLETE
+      - condition:
+          type: any
+          value:
+            - state == battle
+            - state == transition
+        next: WAIT_BATTLE_END
+    timeout: 20
+    retry: 2
+
+  WAIT_BATTLE_END:
+    description: "等待战斗结束回到已知界面"
+    actions:
+      - target: wait
+        timeout: 30
+    on:
+      - condition: state == yard
+        next: COMPLETE
+      - condition: state == battle_result
+        next: COMPLETE
+    timeout: 120
+budget:
+  max_steps: 50
+  timeout_s: 900
+  max_step_retries: 1
+policies:
+  on_unknown: wait          # 认不出画面时等待，不消耗重试
+  on_runtime_failure: block # 运行时故障 → BLOCKED，不消耗预算（D-5）
+  on_step_timeout: retry

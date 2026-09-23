@@ -1,0 +1,61 @@
+# 任务定义示例：farming（状态机式工作流，Phase 6.2）
+#
+# 字段说明（加载期严格校验：未知字段 / 缺字段 / 悬空 next / 环 / 无出口都会失败）：
+#   name        任务名（必填）
+#   description 人类可读说明（可选）
+#   initial     起始状态（必填，必须出现在 states 中）
+#   states      状态表（必填，非空）
+#     <STATE>:
+#       description     状态说明（可选）
+#       actions         进入该状态时请求的动作列表（可选；本阶段不执行输入）
+#         - kind: click | wait | key | ...     （用 target: wait 简写表示"只等待"）
+#           target: {element: buttons/explore} 语义元素；或 {reference: [x, y]} 参考坐标
+#           timeout: 执行层超时（秒）
+#           params: { ... }                    附加参数
+#       on              转移列表（必填，至少一条；按声明顺序评估）
+#         - condition: state == battle        条件（字符串表达式或结构化写法）
+#           next: IN_BATTLE                   目标状态，或保留字 COMPLETE（成功结束）
+#           name: to_in_battle                转移名（可选，缺省 to_<next>）
+#       timeout         该状态的等待窗口（秒，默认 10）
+#       retry           该状态的重试上限（默认取 budget.max_step_retries）
+#       entry_condition 进入条件（可选）
+#   budget      max_steps / timeout_s（任务时长上限，秒）
+#   policies    on_unknown / on_runtime_failure / on_mismatch / on_step_timeout
+#
+# 条件写法（**禁止 eval / 动态执行字符串**）：
+#   1) 字符串表达式：只支持 `<field> <op> <literal>`（field ∈ state / confidence /
+#      runtime_state / elapsed_s / cycles 等，op ∈ == != >= <= > <）
+#   2) 结构化：{type: state_equals, value: battle} / {type: all, value: [...]} /
+#      {type: any, value: [...]}
+
+name: farming
+description: "示例：等待进入战斗 → 战斗进行中 → 结算收集 → 回到庭院（本阶段不执行任何输入）"
+initial: WAIT_BATTLE
+states:
+  WAIT_BATTLE:
+    description: "等待进入战斗界面"
+    on:
+      - condition: state == battle
+        next: IN_BATTLE
+
+  IN_BATTLE:
+    description: "战斗进行中：只等待，不请求任何输入"
+    actions:
+      - target: wait
+        timeout: 30
+    on:
+      - condition: state == battle_result
+        next: COLLECT
+
+  COLLECT:
+    description: "等待结算 / 奖励结束后回到庭院"
+    on:
+      - condition: state == yard
+        next: COMPLETE
+budget:
+  max_steps: 100
+  timeout_s: 3600
+policies:
+  on_unknown: wait
+  on_runtime_failure: block
+  on_step_timeout: retry

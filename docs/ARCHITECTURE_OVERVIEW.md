@@ -1,8 +1,8 @@
 # Architecture Overview — Onmyoji Vision Agent
 
-> 本文件描述 **Phase 5.4 完成后的架构**：分层职责、依赖方向、数据流、数据模型、
+> 本文件描述 **Phase 6.2 完成后的架构**：分层职责、依赖方向、数据流、数据模型、
 > 四个"置信度"的语义、配置扩展指南与关键不变量。
-> 阶段报告（`docs/PHASE4_*` / `PHASE5*`）是历史记录，**不再修改**；与本文冲突时以本文与源码为准。
+> 阶段报告（`docs/PHASE4_*` / `PHASE5*` / `PHASE6*`）是历史记录，**不再修改**；与本文冲突时以本文与源码为准。
 
 ---
 
@@ -62,9 +62,10 @@
 ## 2. 分层与依赖方向
 
 ```text
-core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ──▶ state ──▶ runtime
-  ▲                                    ▲                       │          │
-  └──────────── 任何层都可依赖 core ─────┘                       └──▶ pipeline（编排）──┘
+core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ──▶ state ──▶ runtime ──▶ task ──▶ (action)
+  ▲                                    ▲                       │          │                  ▲
+  └──────────── 任何层都可依赖 core ─────┘                       └──▶ pipeline（编排）──┘     │
+                                                     task 不依赖 vision / runtime（只消费状态与运行时视图）┘
 ```
 
 | 层 | 包 | 职责 | 明确不做 |
@@ -76,6 +77,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元 | 不做循环 / 采集 / 时间滤波 / 点击 |
 | **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline based 节拍调度、稳定化、事件、历史与运行指标落盘、运行时诊断（`RuntimeHealth` / `UnknownReason`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`） | 不做视觉判定、不抢焦点、不点击 |
+| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` + 严格校验）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，不拥有循环）、`ActionPort`（语义动作端口契约）、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、**不 import** `vision` / `evidence` / `cv2` / `runtime` / `action`、**不执行任何输入**（Phase 6.2 端口为 `NullActionPort`） |
+| **输入层** | `src/action`（Phase 7） | 受控键鼠输入：语义目标 → 坐标（经 `CoordinateTransform`）→ 输入原语 + 安全约束 | 不做判定、不决定"做什么" |
 
 **硬规则**：
 
@@ -171,6 +174,9 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 5.2 | 真实运行时循环接线（真实窗口帧来源 / 前台门控 / deadline 调度 / 运行指标 / 长跑验证） | `PHASE5_2_REAL_RUNTIME_REPORT.md` |
 | Phase 5.3 | Runtime 架构加固（模块边界拆分 + 兼容层 / 运行时诊断 / `unknown` 原因细化 / 指标诊断字段） | `PHASE5_3_RUNTIME_HARDENING_REPORT.md` |
 | Phase 5.4 | Runtime 可靠性与生命周期（采集细节再拆分 / 生命周期状态机 / 资源释放 / 恢复策略 / 指标扩展） | `PHASE5_4_RUNTIME_LIFECYCLE_REPORT.md` |
+| Phase 6.0 | Task Engine 架构 Review（职责链 / ADR D-1~D-6 / 风险 R-1~R-8 / 开放决策点 Q-1~Q-5） | `PHASE6_TASK_ENGINE_ARCHITECTURE_REVIEW.md` |
+| Phase 6.1 | Task Engine 骨架（7 态生命周期 / `TaskContext` / `on_stable`·`on_cycle` 接口 / 谓词与钩子 / 动作端口协议 / AST 依赖边界） | `PHASE6_1_TASK_ENGINE_SKELETON_REPORT.md` |
+| Phase 6.2 | 任务定义加载与工作流执行（`configs/tasks/*.yaml` + 严格校验 / 条件绑定（无 eval）/ `WorkflowRunner` / E-STOP / `models` 包拆分） | `PHASE6_2_TASK_DEFINITION_REPORT.md` |
 
 ---
 

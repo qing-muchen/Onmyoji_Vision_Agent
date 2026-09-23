@@ -252,7 +252,56 @@ Phase 4.6.1 起扩展为完整状态集）：
     `docs/PHASE5_4_RUNTIME_LIFECYCLE_REPORT.md`；`live_runtime_demo.py` 新增
     `--lifecycle-demo`（启动 → 运行 → pause → resume → stop）与 `--recovery` / `--recovery-max-retry`。
 
-### 架构总览（Phase 5.4 完成后的主链路）
+**Phase 6.0 — Task Engine Architecture Review（已完成：只做架构设计）**：产出
+`docs/PHASE6_TASK_ENGINE_ARCHITECTURE_REVIEW.md`（9 章 + 附录），冻结 Task / Action 边界与接口草案
+（**未改动任何代码**）：
+
+79. 明确职责链：Vision 看到什么 → State 现在是什么 → Task 下一步目标是什么 → Action 执行什么操作；
+80. 架构决策（ADR）：Task **不拥有循环**（由 Runtime 回调驱动）、`on_stable` 用于任务决策 /
+    `on_cycle` 用于计时与 timeout、`ActionTarget` 使用**语义目标**（禁止硬编码屏幕坐标）、
+    Task 只能消费 `StateResult` / `StateEvent` / Runtime 生命周期状态、Runtime failure → `BLOCKED`
+    （不消耗任务预算）、任务定义 = YAML 流程 + Python predicate / hook；
+81. 风险清单（R-1~R-8）与开放决策点（Q-1~Q-5）。
+
+**Phase 6.1 — Task Engine Skeleton（已完成：骨架）**：新增 `src/task/`
+（`state_machine` / `models` / `hooks` / `engine`）—— 7 态生命周期
+（`CREATED`/`READY`/`RUNNING`/`PAUSED`/`BLOCKED`/`COMPLETED`/`FAILED`）+ `ALLOWED_TRANSITIONS`
+（非法转换抛 `InvalidTaskTransition`）、`TaskContext`（任务状态 / 当前 `StateResult` 视图 / runtime /
+elapsed / counters）、`TaskEngine.start/on_stable/on_cycle/pause/resume/stop`、谓词与钩子
+（`build_predicate` / `HookRegistry`）、动作端口协议（`ActionPort` / `NullActionPort`：**只记录不执行**）：
+
+82. 依赖边界：`src/task` **禁止** `import vision` / `evidence` / `cv2` / `runtime`，并以 **AST 检查**固化；
+83. 状态与运行时通过**字段视图**（`StateSnapshot` / `RuntimeSnapshot` 的 duck typing）消费，
+    状态名以字符串表达（Q-1）；新增 `tests/test_task_engine.py`（67 用例）与
+    `docs/PHASE6_1_TASK_ENGINE_SKELETON_REPORT.md`。
+
+**Phase 6.2 — Task Definition Loading & Workflow Execution（已完成：本阶段）**：任务定义改为声明式
+`configs/tasks/*.yaml`（状态机式工作流）+ 加载期严格校验 + 工作流执行模型：
+
+84. **模型拆分**（Q-4）：`task/models.py` → `task/models/{definitions,context,result}.py`
+    （对外仍可 `from src.task.models import ...`，旧 import 路径不变）；
+85. **任务定义 schema**（Q-5）：`name` / `description` / `initial` / `states`（每状态含
+    `actions` / `on` / `timeout` / `retry` / `entry_condition`）/ `budget`（`max_steps` / `timeout_s`）
+    / `policies`；转移形如 `{condition: ..., next: ...}`，`next: COMPLETE` 表示工作流成功结束；
+86. **加载期必须失败**（安全要求）：未知字段、缺少 state / condition / next、`initial` 或 `next`
+    指向不存在的状态、**循环引用**、死路状态、无法到达 `COMPLETE`、非法条件表达式与越界取值；
+87. **条件绑定**（D-6）：YAML → `Predicate` 映射 —— 字符串表达式（`state == battle`，
+    走**受限解析器**）、结构化写法（`{type: state_equals, value: battle}`）、`all` / `any` 组合；
+    **禁止 `eval` / `exec` / 动态执行字符串**（未知字段与 `and` / `or` 复杂逻辑在加载期直接失败，
+    AST 测试固化）；
+88. **工作流执行模型**：`StepExecutor`（进入状态 → 提交语义动作 → 评估转移）/ `StepTransition`
+    （跳转记录）/ `WorkflowRunner`（`on_stable` 评估转移、`on_cycle` 处理超时与重试；每轮最多一次状态转移）；
+89. **引擎兼容**：`start(TaskDefinition)` 与 `start(Task)` **并存**（YAML 工作流 / Python 线性步骤），
+    预算与 E-STOP 在两种模式下语义一致（步数预算只在**派发前**检查）；
+90. **E-STOP**（Q-3）：`src/task/estop.py` —— API（`EStop.trigger`）+ **文件哨兵**（`logs/ESTOP`
+    存在即触发），触发后任务立即 `FAILED(reason="estop: ...")` 且不再请求任何动作；
+    **不注册任何全局热键**（AST 测试固化）；
+91. 新增 `configs/tasks/farming.yaml`（等待战斗 → 战斗 → 结算 → `COMPLETE`）与
+    `configs/tasks/open_exploration.yaml`（演示语义 click / 结构化条件 / 重试 / 多分支）、
+    `tests/test_task_loader.py`（63 用例）与 `docs/PHASE6_2_TASK_DEFINITION_REPORT.md`。
+    **本阶段不实现任何输入**（`ActionPort` 保持 `NullActionPort`：只记录请求，不点击、不按键）。
+
+### 架构总览（Phase 6.2 完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -269,6 +318,10 @@ CycleScheduler（deadline based）       runtime：节拍 + late cycle / overrun
 CycleMetrics → RuntimeMetricsRecorder  runtime：逐轮指标（可选 JSONL，无截图 / 无用户数据）
 RuntimeLifecycle                       runtime：INITIALIZING/READY/RUNNING/PAUSED/RECOVERING/STOPPED/FAILED
 RecoveryManager                        runtime：退避重试 + 次数上限（用尽 → FAILED；不会死循环 / 忙等）
+  ↓  TaskEngine.start(TaskDefinition)     task：任务目标（YAML 工作流，Phase 6.2）
+StateSnapshot → 转移条件 → 下一步目标      task：on_stable 决策 / on_cycle 计时（Task 不拥有循环）
+ActionRequest（语义目标）→ ActionPort      task：动作端口（Phase 6.2 = NullActionPort：只记录、不执行）
+E-STOP（API / logs/ESTOP 哨兵）            task：任意轮次触发 → 任务立即 FAILED，且不再请求动作
 ```
 
 | 层 | 包 | 职责 | 明确不做 |
@@ -279,6 +332,7 @@ RecoveryManager                        runtime：退避重试 + 次数上限（�
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释的视觉证据**（可靠度 / 分组 / 解释信息） | 不产出状态、不做时间滤波 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`） | 不做循环 / 采集 / 时间滤波 |
+| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**（Phase 6.2 端口为 `NullActionPort`） |
 | **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`） | 不做视觉判定、不抢焦点、不点击 |
 
 四个"置信度"语义互不混用（详见 `docs/ARCHITECTURE_OVERVIEW.md`）：
@@ -292,8 +346,9 @@ RecoveryManager                        runtime：退避重试 + 次数上限（�
 
 **尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
 Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
-Phase 6 的 Task Engine / Behavior Orchestration、
-Phase 7 的 Action Layer（受控键鼠输入）、
+**Phase 7 的 Action Layer（受控键鼠输入）**——Phase 6.2 的 `ActionPort` 契约与语义目标已就位，
+但端口实现仍为 `NullActionPort`（只记录请求，不点击、不按键），
+Phase 6.3 的运行时自动接线（Task Engine 与 `StateMonitor` 回调的正式对接）、多任务调度与任务库、
 Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，以及任何**基于文字或界面的
 决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
@@ -302,7 +357,10 @@ Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，以及任
 ```
 Onmyoji_Vision_Agent/
 ├── configs/
-│   └── config.yaml               # 唯一的运行期配置来源
+│   ├── config.yaml               # 唯一的运行期配置来源（pydantic 严格校验）
+│   └── tasks/                    # 任务定义（Phase 6.2：声明式工作流，加载期严格校验）
+│       ├── farming.yaml          #   示例：等待战斗 → 战斗 → 结算 → COMPLETE
+│       └── open_exploration.yaml #   示例：语义 click / 结构化条件 / 重试 / 分支
 ├── dataset/                      # 截图/标注数据集（内容不入库）
 │                                 #   scenes/ 场景、templates/ UI 模板、states/ 状态样本
 ├── docs/                         # 设计文档（架构总览 + 各阶段 Review / 报告）
@@ -411,7 +469,17 @@ Onmyoji_Vision_Agent/
 │   │       └── source.py         #     FrameSource / CaptureFrameSource / 轻量前台门控
 │   ├── action/                   # 输入控制层（Phase 7：受控键鼠输入与安全约束）
 │   ├── state/                    # 状态管理层（Phase 8：State Machine）
-│   └── task/                     # 任务调度层（Phase 8：任务编排与重试）
+│   └── task/                     # 任务层（Phase 6.1 骨架 / 6.2 声明式工作流）
+│       ├── models/               #   定义与视图（Phase 6.2 拆分）
+│       │   ├── definitions.py    #     Task / Step / Budget / TaskPolicies + TaskDefinition / WorkflowState / WorkflowTransition / WorkflowAction
+│       │   ├── context.py        #     TaskContext / StateSnapshot / RuntimeSnapshot（字段视图）
+│       │   └── result.py         #     TaskResult
+│       ├── loader.py             #   TaskLoader：configs/tasks/*.yaml 加载 + schema + 图校验（无环 / 可达 COMPLETE）
+│       ├── workflow.py           #   ActionPort 契约 / StepExecutor / StepTransition / WorkflowRunner
+│       ├── engine.py             #   TaskEngine：生命周期、on_stable 决策、on_cycle 计时、预算、门控
+│       ├── state_machine.py      #   TaskState 7 态 + ALLOWED_TRANSITIONS + InvalidTaskTransition
+│       ├── hooks.py              #   HookRegistry / build_condition（YAML → Predicate，**无 eval**）
+│       └── estop.py              #   EStop：API + logs/ESTOP 文件哨兵（禁止全局热键）
 ├── tests/                        # pytest 测试
 ├── requirements.txt              # 运行时依赖
 └── requirements-dev.txt          # 开发/测试依赖
@@ -1615,8 +1683,20 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `runtime_state` / `recovery_count` / `last_recovery_reason`。**Runtime 层自此冻结。**
 - Phase 5.5：运行时优化 —— 检测优化（ROI / 模板数 / 尺度收敛）、多线程或异步 pipeline、
   更高频率循环（真实环境余量约 210–260 ms，见 `docs/PHASE5_2_REAL_RUNTIME_REPORT.md`）。
-- Phase 6：State Integration —— 事件 / 落盘 / 观测与状态语义收敛。
+- **Phase 6.0（已完成：Task Engine 架构 Review）**：`docs/PHASE6_TASK_ENGINE_ARCHITECTURE_REVIEW.md`
+  —— 职责链（Vision → State → Task → Action）、ADR（D-1~D-6）、风险（R-1~R-8）与开放决策点
+  （Q-1~Q-5）。**只做设计，未改动代码。**
+- **Phase 6.1（已完成：Task Engine 骨架）**：`src/task/`（`state_machine` / `models` / `hooks` /
+  `engine`）—— 7 态生命周期 + 转换表、`TaskContext`、`on_stable` / `on_cycle` 双回调接口、
+  谓词与钩子、动作端口协议（`NullActionPort`）。依赖边界（禁止 vision / evidence / cv2 / runtime）
+  由 AST 测试固化。**不实现任何输入。**
+- **Phase 6.2（已完成：任务定义加载与工作流执行）**：`configs/tasks/*.yaml` 声明式工作流 +
+  `TaskLoader` 严格校验（未知字段 / 悬空 `next` / 环 / 死路 / 无出口 / 非法条件一律加载失败）、
+  条件绑定（字符串表达式受限解析 + `type`/`value` 结构 + `all`/`any`，**禁止 eval**）、
+  工作流执行模型（`StepExecutor` / `StepTransition` / `WorkflowRunner`）、`start(TaskDefinition)`
+  与 `start(Task)` 并存、E-STOP（API + `logs/ESTOP` 哨兵，禁止热键）、`models` 包拆分。
+  **`ActionPort` 仍为 `NullActionPort`：只记录请求，不点击、不按键。**
 - Phase 7：Action Planning & Action Engine —— 受控的键鼠输入与安全约束
-  （`src/action`，坐标一律经 `CoordinateTransform` 映射）。
-- Phase 8：State Machine / Task System —— 状态转移建模、任务编排、重试与中断处理
-  （`src/state` / `src/task`）。
+  （`src/action`，坐标一律经 `CoordinateTransform` 映射；消费 Task 的**语义目标**）。
+- Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
+  （`src/state`）。

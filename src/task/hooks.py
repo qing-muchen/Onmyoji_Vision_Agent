@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -21,13 +22,17 @@ from src.task.models import StateSnapshot, TaskContext, TaskDefinitionError
 from src.utils.logger import get_logger
 
 __all__ = [
+    "CONDITION_FIELDS",
+    "CONDITION_TYPE_ALIASES",
     "PREDICATE_BUILDERS",
     "Hook",
     "HookEvent",
     "HookKind",
     "HookRegistry",
     "Predicate",
+    "build_condition",
     "build_predicate",
+    "parse_condition_expression",
 ]
 
 logger = get_logger("task.hooks")
@@ -429,3 +434,262 @@ def _any_of(predicates: Sequence[Predicate]) -> Predicate:
         return any(item(context, snapshot) for item in items)
 
     return predicate
+
+
+# ---- 条件绑定（Phase 6.2：YAML 声明 → Predicate，**禁止 eval**） ---------------
+
+#: 条件左侧允许出现的字段（字段名 → 语义说明；其余一律拒绝，不做任何动态求值）
+CONDITION_FIELDS: Mapping[str, str] = {
+    "state": "当前状态名（Q-1：字符串）",
+    "raw_state": "稳定化前的原始状态名",
+    "source": "判定来源（例如 evidence / fallback）",
+    "confidence": "置信度",
+    "stable": "是否来自稳定化结果",
+    "counted": "本帧是否计入稳定统计",
+    "unknown": "状态是否为 unknown",
+    "runtime_state": "运行时生命周期状态字符串",
+    "runtime_healthy": "运行时是否可用（非阻塞）",
+    "elapsed_s": "任务已运行秒数",
+    "cycles": "已观察到的运行时节拍数",
+}
+
+#: ``condition.type`` 允许的取值（YAML 结构化写法）→ 既有谓词构造器名
+CONDITION_TYPE_ALIASES: Mapping[str, str] = {
+    "state_equals": "state_is",
+    "state_is": "state_is",
+    "state_in": "state_in",
+    "state_not_in": "state_not_in",
+    "confidence_at_least": "min_confidence",
+    "min_confidence": "min_confidence",
+    "counted": "counted",
+    "known_state": "known_state",
+    "runtime_state_equals": "runtime_state_is",
+    "runtime_state_is": "runtime_state_is",
+    "runtime_ok": "runtime_ok",
+    "elapsed_at_least": "elapsed_at_least",
+    "cycles_at_least": "cycles_at_least",
+}
+
+#: 结构化条件里的"组合"类型（其 ``value`` 是条件列表）
+CONDITION_COMPOSITES: frozenset[str] = frozenset({"all", "any"})
+
+#: 受限条件表达式：``<field> <op> <literal>``（**只支持单一比较**）
+_CONDITION_EXPRESSION = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|>=|<=|>|<)\s*(.+?)\s*$"
+)
+
+#: 允许的比较运算符
+COMPARISON_OPERATORS: tuple[str, ...] = ("==", "!=", ">=", "<=", ">", "<")
+
+
+def _as_number(value: Any) -> float | None:
+    """把取值转为数值（不可转时返回 ``None``）。"""
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _compare(actual: Any, operator: str, expected: Any) -> bool:
+    """按运算符比较两个取值（大小比较要求两侧都能转成数值）。"""
+    if operator == "==":
+        return bool(actual == expected)
+    if operator == "!=":
+        return bool(actual != expected)
+    left = _as_number(actual)
+    right = _as_number(expected)
+    if left is None or right is None:
+        return False
+    if operator == ">=":
+        return left >= right
+    if operator == "<=":
+        return left <= right
+    if operator == ">":
+        return left > right
+    return left < right
+
+
+def _literal(text: str, *, name: str = "condition") -> Any:
+    """解析条件右侧字面量（布尔 / 数字 / 引号字符串 / 裸字符串）。
+
+    Raises:
+        TaskDefinitionError: 字面量为空，或裸字符串含空白（多半是把 ``and`` / ``or``
+            写进了表达式）。
+    """
+    token = text.strip()
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {'"', "'"}:
+        return token[1:-1]
+    if not token:
+        raise TaskDefinitionError(f"{name} 缺少比较值（表达式右侧为空）")
+    if any(char.isspace() for char in token):
+        raise TaskDefinitionError(
+            f"{name} 的条件右侧不被支持: {token!r}"
+            f"（裸值不能含空白：逻辑组合请使用 {{'all': [...]}} / {{'any': [...]}}，"
+            f"含空格的字符串请加引号）"
+        )
+    lowered = token.lower()
+    if lowered in {"true", "yes"}:
+        return True
+    if lowered in {"false", "no"}:
+        return False
+    if lowered in {"none", "null"}:
+        return None
+    number = _as_number(token)
+    return number if number is not None else token
+
+
+def _field_value(field: str, context: TaskContext, snapshot: StateSnapshot | None) -> Any:
+    """读取条件左侧字段的当前取值。"""
+    if field == "state":
+        return None if snapshot is None else snapshot.state
+    if field == "raw_state":
+        return None if snapshot is None else snapshot.raw_state
+    if field == "source":
+        return None if snapshot is None else snapshot.source
+    if field == "confidence":
+        return None if snapshot is None else snapshot.confidence
+    if field == "stable":
+        return None if snapshot is None else snapshot.stable
+    if field == "counted":
+        return None if snapshot is None else snapshot.counted
+    if field == "unknown":
+        return None if snapshot is None else snapshot.is_unknown
+    if field == "runtime_state":
+        return context.runtime.state
+    if field == "runtime_healthy":
+        return not context.runtime.is_blocking
+    if field == "elapsed_s":
+        return context.elapsed_s()
+    if field == "cycles":
+        return context.cycles
+    return None
+
+
+def parse_condition_expression(text: str, *, name: str = "condition") -> Predicate:
+    """把受限条件表达式解析为谓词（**不使用 eval / exec**）。
+
+    语法只有一种：``<field> <op> <literal>``，例如
+
+    ```text
+    state == battle
+    confidence >= 0.9
+    runtime_healthy == true
+    elapsed_s >= 30
+    ```
+
+    * ``field`` 必须来自 :data:`CONDITION_FIELDS`；
+    * ``op`` 必须是 :data:`COMPARISON_OPERATORS` 之一；
+    * 逻辑组合（``and`` / ``or`` / 括号）**不支持**——请改用结构化写法
+      （``{"any": [...]}`` / ``{"type": "all", "value": [...]}``）。
+
+    Args:
+        text: 条件表达式。
+        name: 出错提示中使用的字段路径。
+
+    Returns:
+        可调用谓词。
+
+    Raises:
+        TaskDefinitionError: 表达式不受支持（含未知字段 / 运算符 / 复杂逻辑）。
+    """
+    match = _CONDITION_EXPRESSION.match(text)
+    if match is None:
+        raise TaskDefinitionError(
+            f"{name} 不支持的条件表达式: {text!r}"
+            f"（仅支持 '<field> <op> <literal>'，字段可选: "
+            f"{', '.join(sorted(CONDITION_FIELDS))}；"
+            f"逻辑组合请使用 {{'all': [...]}} / {{'any': [...]}}）"
+        )
+    field, operator, raw_literal = match.group(1), match.group(2), match.group(3)
+    if field not in CONDITION_FIELDS:
+        raise TaskDefinitionError(
+            f"{name} 使用了未知条件字段: {field!r}"
+            f"（可选: {', '.join(sorted(CONDITION_FIELDS))}）"
+        )
+    expected = _literal(raw_literal, name=name)
+
+    def predicate(context: TaskContext, snapshot: StateSnapshot | None) -> bool:
+        return _compare(_field_value(field, context, snapshot), operator, expected)
+
+    return predicate
+
+
+def _build_typed(spec: Mapping[Any, Any], *, name: str) -> Predicate:
+    """解析 ``{"type": ..., "value": ...}`` 形式的结构化条件。"""
+    type_name = str(spec.get("type", "")).strip()
+    if "value" not in spec:
+        raise TaskDefinitionError(f"{name} 的结构化条件缺少 value 字段")
+    value = spec["value"]
+    if type_name in CONDITION_COMPOSITES:
+        parts = [
+            build_condition(item, name=f"{name}.{type_name}[{index}]")
+            for index, item in enumerate(_as_sequence(value))
+        ]
+        return _all_of(parts) if type_name == "all" else _any_of(parts)
+    builder_name = CONDITION_TYPE_ALIASES.get(type_name)
+    if builder_name is None:
+        allowed = ", ".join(sorted({*CONDITION_TYPE_ALIASES, *CONDITION_COMPOSITES}))
+        raise TaskDefinitionError(
+            f"{name} 不支持的条件类型: {type_name!r}（可选: {allowed}）"
+        )
+    return PREDICATE_BUILDERS[builder_name](value)
+
+
+def build_condition(spec: Any, *, name: str = "condition") -> Predicate:
+    """把任意条件声明编译为谓词（YAML 与 Python 两种来源统一入口，D-6）。
+
+    支持的写法：
+
+    * ``None`` / ``True`` / ``"always"`` —— 恒真；
+    * ``False`` / ``"never"`` —— 恒假；
+    * 可调用对象 —— 直接使用（Python 扩展点）；
+    * 字符串表达式 —— ``"state == battle"``（见 :func:`parse_condition_expression`）；
+    * 结构化映射 —— ``{"type": "state_equals", "value": "battle"}``（推荐）
+      或 Phase 6.1 的键式写法 ``{"state_is": "battle"}``；
+    * 列表 —— 等价于 ``{"all": [...]}``。
+
+    **禁止** ``eval`` / ``exec`` / 动态执行任何字符串：未知字段、未知类型与复杂表达式都在
+    加载期直接失败（fail fast）。
+
+    Args:
+        spec: 条件声明。
+        name: 出错提示中使用的字段路径。
+
+    Returns:
+        可调用谓词。
+
+    Raises:
+        TaskDefinitionError: 声明不受支持。
+    """
+    if spec is None:
+        return _always
+    if isinstance(spec, bool):
+        return _always if spec else _never
+    if callable(spec):
+        return spec
+    if isinstance(spec, str):
+        token = spec.strip()
+        lowered = token.lower()
+        if lowered in _TRUE_TOKENS:
+            return _always
+        if lowered in _FALSE_TOKENS:
+            return _never
+        return parse_condition_expression(token, name=name)
+    if isinstance(spec, Mapping):
+        if "type" in spec:
+            unknown = sorted(set(spec) - {"type", "value"})
+            if unknown:
+                raise TaskDefinitionError(
+                    f"{name} 的结构化条件出现未知字段: {unknown}（只允许 type / value）"
+                )
+            return _build_typed(spec, name=name)
+        return build_predicate(spec, name=name)
+    if isinstance(spec, Sequence):
+        return build_predicate(spec, name=name)
+    raise TaskDefinitionError(f"{name} 不支持的条件声明: {type(spec).__name__}")
