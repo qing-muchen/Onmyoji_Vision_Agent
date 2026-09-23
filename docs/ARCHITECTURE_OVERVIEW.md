@@ -1,6 +1,6 @@
 # Architecture Overview — Onmyoji Vision Agent
 
-> 本文件描述 **Phase 7.2 完成后的架构**：分层职责、依赖方向、数据流、数据模型、
+> 本文件描述 **Phase 7.3 完成后的架构**：分层职责、依赖方向、数据流、数据模型、
 > 四个"置信度"的语义、配置扩展指南与关键不变量。
 > 阶段报告（`docs/PHASE4_*` / `PHASE5*` / `PHASE6*`）是历史记录，**不再修改**；与本文冲突时以本文与源码为准。
 
@@ -76,7 +76,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释证据**（可靠度、分组、解释信息、状态可信度校准） | 不产出状态、不做时间滤波、不读文件 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`）+ 视觉目标转换（`VisionTargetAdapter`：证据 / 检测 → `VisionTargetCandidate` / `TargetSnapshot`，Phase 7.2） | 不做循环 / 采集 / 时间滤波 / 点击；**不 import** `src.action` / `src.task` / `src.runtime`，不调用 `ActionDispatcher`、不产生输入 |
-| **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline based 节拍调度、稳定化、事件、历史与运行指标落盘、运行时诊断（`RuntimeHealth` / `UnknownReason`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`） | 不做视觉判定、不抢焦点、不点击 |
+| **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`）、**视觉快照桥（`VisionSnapshotBridge`，Phase 7.3：每轮把帧 + 证据推送给 Action 侧 resolver）** | 不做视觉判定、不抢焦点、**不调用 `ActionDispatcher`、不产生任何输入** |
 | **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` + 严格校验）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，不拥有循环）、`ActionPort`（语义动作端口契约）、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、**不 import** `vision` / `evidence` / `cv2` / `runtime` / `action`、**不执行任何输入**（Phase 6.2 端口为 `NullActionPort`） |
 | **输入层** | `src/action` | 语义动作落地：`ActionRequest` / `ActionOutcome`（**无像素坐标**）、`ActionDispatcher`（门控 → 解析 → 坐标换算 → 后端）、`TargetResolver` 两种实现（`RegistryTargetResolver` 静态注册表 / `VisionAwareTargetResolver` 视觉快照 + TTL + 置信度）、`InputBackend`（默认 `DryRunBackend`；Win32 `SendInput` 后端）、`SafetyGuard`（5 道门）+ `EmergencyStop`（API + `logs/ESTOP`） | 不识别界面元素（模板 / OCR / YOLO）、不 import `vision` / `evidence` / `task` / `cv2`、**禁止 fallback click 与猜坐标**、不抢焦点、无全局热键、不主动读取视觉（只接受外部注入的 `VisionTargetCandidate` 快照） |
 
@@ -180,6 +180,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 7 | Action Layer 第一阶段（语义动作模型（无像素坐标）/ 语义目标解析 / Win32 `SendInput` 后端 / 5 道安全门 / `ActionDispatcher`） | `PHASE7_ACTION_LAYER_REPORT.md` |
 | Phase 7.1 | Vision-aware Action Resolver（`VisionTargetCandidate` / `TargetSnapshot` 契约 / `VisionAwareTargetResolver`（TTL + 置信度）/ 失败原因可观测 / 单向注入） | `PHASE7_1_ARCHITECTURE_REVIEW.md`、`PHASE7_1_VISION_ACTION_RESOLVER_REPORT.md` |
 | Phase 7.2 | VisionTargetAdapter（证据 / 检测 → `VisionTargetCandidate`；confidence 映射；`source` / `frame_id` / `timestamp` 传递；乱序保护） | `PHASE7_2_VISION_TARGET_ADAPTER_REPORT.md` |
+| Phase 7.3 | Runtime 视觉快照接入（`VisionSnapshotBridge` / `StateMonitor` 可选接线 / `frame_id = cycles` / fail-safe 失败策略） | `PHASE7_3_RUNTIME_VISION_INTEGRATION_REPORT.md` |
 
 ---
 

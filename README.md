@@ -396,7 +396,35 @@ Action 说"是否允许执行输入"）。**未修改** `runtime/` `task/` `visi
      bbox 与 rect 两条换算路径 / confidence 映射 / 字段传递 / 依赖边界 / 端到端 dry-run），
      `docs/PHASE7_2_VISION_TARGET_ADAPTER_REPORT.md`。**测试与冒烟零真实输入**。
 
-### 架构总览（Phase 7.2 完成后的主链路）
+**Phase 7.3 — Runtime Vision Snapshot Integration（已完成）**：把视觉结果接入 Runtime 生命周期，
+链路贯通为 **`Runtime Cycle → Frame → Vision Pipeline → Evidence → Adapter → TargetSnapshot →
+Resolver.update_snapshot() → ActionDispatcher`**。**Runtime 成为唯一编排层**；
+未修改 `SafetyGuard` / `dispatcher.py` 门控顺序 / `EvidenceResult` / `StateResult` / Runtime 生命周期接口：
+
+115. **新增 `src/runtime/vision_bridge.py`**：`VisionSnapshotBridge` —— 每轮把
+     "帧 + 本轮证据"转换成 `TargetSnapshot` 并**单向推送**给 Action 侧的目标解析器；
+     `VisionBridgeStats` 记录 `updates / published / rejected_stale / push_errors / no_frame /
+     adapter_errors / empty_snapshots / candidates / last_frame_id / last_cycle_id`；
+116. **`StateMonitor` 接线（最小改动）**：新增可选参数 `vision_bridge=None`（**默认不接线，
+     行为与此前完全一致**）；`_classify()` 保存本轮证据到 `last_evidences`（**同一次检测**，
+     不重复 `detect()`）；`run()` 每轮末尾调用 `_publish_vision_snapshot()`（异常隔离）；
+     新增只读属性 `last_evidences` / `vision_bridge`；
+117. **frame_id 来源（解决 Q-7.2-2）**：`frame_id = StateMonitor.cycles`（处理过的帧序号，单调递增）
+     + `cycle_id = CycleSchedule.cycle_id`（节拍轮号）；**由 Runtime 提供**，adapter 不生成；
+     追踪链：`cycle_id / frame_id → TargetSnapshot.frame_id → resolver（乱序拒收）→ ActionOutcome.detail`；
+118. **失败策略（fail-safe）**：capture 失败 → **不更新**（旧快照由 TTL 判定为 `target_expired`）；
+     视觉无结果（`Evidence=[]`）→ 推送**空快照**（禁止保留上一帧目标）；adapter 异常 →
+     日志 + 空快照（不影响主循环）；resolver 拒收旧帧 → 保持 Phase 7.2 的 stale 保护；
+     桥异常 → 隔离（`_publish_vision_snapshot` 捕获）；
+119. **架构边界**：Action 仍不 import vision / runtime / capture / window / cv2 / numpy
+     （本阶段**未触碰 `src/action/**`**，既有 AST 用例继续通过）；Vision 不调用 Action；
+     只有 Runtime 同时依赖 `vision.pipeline` 与 action 侧 resolver（编排方向单向）；
+120. 新增 `tests/test_runtime_vision_bridge.py`（21 用例：正常/连续循环、空结果、capture 失败、
+     旧帧拒收、adapter/resolver 异常隔离、`StateMonitor` 自动推送与未接线行为不变、
+     端到端 dry-run）与 `docs/PHASE7_3_RUNTIME_VISION_INTEGRATION_REPORT.md`。
+     **全部测试与冒烟零真实输入**（`DryRunBackend`，配置默认值未改）。
+
+### 架构总览（Phase 7.3 完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -420,11 +448,13 @@ ActionRequest（语义目标）→ ActionPort      task：动作端口（Phase 6
 SafetyGuard（E-STOP / 窗口 / 前台 / 已解析 / 限流）  action：任一失败 → REJECTED（禁止 fallback）
 Pipeline（编排）                              vision：Frame → 证据 → 状态（Phase 4.7）
   └─ VisionTargetAdapter                     vision：证据 / 检测 → VisionTargetCandidate（Phase 7.2）
-        ▼ 单向 push（TargetSnapshot{frame_id}）  action：拒收乱序旧帧
+        ▲  Runtime 每轮把"帧 + 证据"交给桥              runtime：VisionSnapshotBridge（Phase 7.3）
+        │  ① adapter 转换 ② 构造 TargetSnapshot{frame_id} ③ 单向 push（resolver.update_snapshot）
+        │  capture 失败 → 不更新（等 TTL）；无证据 → 空快照；adapter 异常 → 空快照
+        ▼
 TargetResolver（语义名 → x_ratio,y_ratio）  action：不读 Frame、不调 detector、不猜坐标
   ├─ RegistryTargetResolver（默认）          action：静态注册表（人工标定）
   └─ VisionAwareTargetResolver（Phase 7.1）  action：消费外部注入的 TargetSnapshot（TTL + 置信度）
-        ▲                                   （Vision 单向 push：update_snapshot / update_candidates）
         └── VisionTargetCandidate{名称, x_ratio, y_ratio, confidence, frame_id}  core 契约（vision 可依赖）
 InputBackend（SendInput / DryRun）        action：默认 DryRunBackend（**不产生输入**）
 E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 → 任务 FAILED 且动作 REJECTED
@@ -453,11 +483,10 @@ E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 �
 
 **尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
 Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
-**Vision → Action 的自动接线**（Phase 7.2 已提供 `VisionTargetAdapter`，
-但"谁在何时生成快照并 push 给 resolver"（例如与 Runtime 的 `cycle_id` 对齐）属 Phase 7.3 / 编排层，
-`drag` 动作亦未实现）、
-Phase 6.3 / 7.3 的运行时编排接线（Task Engine ↔ `StateMonitor` 回调、Task ↔ Action 的自动装配）、
-多任务调度与任务库、Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，
+**Task Engine ↔ Runtime 的自动接线**（Phase 7.3 已打通 `Runtime → Vision → Action` 的目标解析链路：
+每轮自动推送 `TargetSnapshot`；但 `StateMonitor.on_stable/on_cycle` 到 `TaskEngine` 的自动装配、
+多任务调度与任务库仍未做；`drag` 动作与 `DetectionResult` 接入快照桥亦未实现）、
+Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，
 以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
 **安全提醒**：`action.enabled` 默认为 `false`（`DryRunBackend`：只记录请求、不产生任何输入），
@@ -566,6 +595,7 @@ Onmyoji_Vision_Agent/
 │   ├── runtime/                  # 运行期编排（Phase 3.1 / 5.2 / 5.3）：时间滤波的唯一归属
 │   │   └── state_monitor/        #   实时状态监控与真实运行时
 │   │       ├── monitor.py        #     StateMonitor（固定节拍循环 + 变化检测 + 诊断接线）
+│   │       │                     #     Phase 7.3：可选 vision_bridge 接线 + last_evidences
 │   │       ├── scheduler.py      #     CycleScheduler（deadline based 节拍 + late cycle 记录）
 │   │       ├── metrics.py        #     CycleMetrics / RuntimeMetricsRecorder（逐轮指标，可选 JSONL）
 │   │       ├── runtime_diagnostics.py # RuntimeHealth / UnknownReason（区分故障与"不知道"，Phase 5.3）
@@ -583,6 +613,7 @@ Onmyoji_Vision_Agent/
 │   │       ├── history.py        #     StateHistoryStore（即时原子写 JSON）
 │   │       ├── timing.py         #     CycleTiming（可选耗时画像）
 │   │       └── source.py         #     FrameSource / CaptureFrameSource / 轻量前台门控
+│   │   ├── vision_bridge.py     #   VisionSnapshotBridge（帧 + 证据 -> TargetSnapshot -> resolver，Phase 7.3）
 │   ├── action/                   # 输入控制层（Phase 7：语义动作 → 受控键鼠输入）
 │   │   ├── models.py             #   ActionRequest / ActionOutcome / ActionStatus / ActionType / ActionTarget
 │   │   │                         #   + SemanticTarget / ResolvedTarget（**禁止像素坐标**）
@@ -1844,7 +1875,13 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `source` / `timestamp` / **`frame_id`** 传递、空结果 / 低置信度 / 非法 bbox / 缺料处理。
   契约新增 `frame_id`，`resolver.update_snapshot` 增加**乱序保护**（拒收更旧的帧）。
   **adapter 属 vision 层**：不 import action / task / runtime，不调用 `ActionDispatcher`，不产生输入。
-- Phase 7.3：编排接线 —— 快照生成与 push 的时机（与 Runtime `cycle_id` 对齐）、
-  Task Engine ↔ `StateMonitor` 回调、Task ↔ ActionDispatcher 自动装配。
+- Phase 7.3（**已完成：Runtime 视觉快照接入**）：新增 `src/runtime/vision_bridge.py`
+  （`VisionSnapshotBridge`）—— Runtime 成为唯一编排层：每轮把"帧 + 本轮证据"转换成
+  `TargetSnapshot{frame_id=monitor.cycles}` 并**单向推送**给 Action 侧 resolver；
+  `StateMonitor` 新增**可选** `vision_bridge` 接线（默认关闭，行为不变）与只读属性
+  `last_evidences`（**同一次检测**的产物，不重复 `detect()`）；fail-safe 策略：
+  capture 失败→不更新（等 TTL 过期）、无证据→空快照（不保留旧目标）、adapter/resolver 异常→隔离。
+- Phase 7.4：Task ↔ Runtime 接线 —— `StateMonitor.on_stable/on_cycle` → `TaskEngine`
+  自动装配、`DetectionResult` 接入快照桥、`drag` 语义与多任务调度。
 - Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
   （`src/state`）。

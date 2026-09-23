@@ -29,6 +29,9 @@
   （``source.get_frame() is None``），循环跳过该轮并继续，原因写入运行指标
   （``metrics`` 的 ``skip_reason``）；
 * **不进 Action 层**：本模块只采集、判定、记录；不点击、不键入、不切换窗口、不抢焦点；
+  （Phase 7.3 起可**可选**接线 :class:`~src.runtime.vision_bridge.VisionSnapshotBridge`：
+  它只把"本轮的视觉结果"转换成数据快照推送给 Action 侧的 resolver，仍然**不调用**
+  ``ActionDispatcher``、不产生任何输入；未接线时行为与此前完全一致。）
 * **不吞其余异常**：只捕获 ``KeyboardInterrupt`` 以正常收尾（中断时也会落盘），
   历史写入失败等真实错误向上传播（见 :class:`~src.core.exceptions.MonitorError`）。
 
@@ -40,6 +43,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 from src.core.config import AppConfig, RuntimeStabilizationConfig, RuntimeStateMonitorConfig
 from src.core.exceptions import OnmyojiVisionError
@@ -126,7 +130,37 @@ class StateMonitor:
         on_event: Callable[[StateEvent], None] | None = None,
         on_stable: Callable[[StableStateResult], None] | None = None,
         on_cycle: Callable[[CycleSchedule], None] | None = None,
+        vision_bridge: Any | None = None,
     ) -> None:
+        """（Phase 7.3 新增参数见末尾说明。）
+
+        Args:
+            classifier: 分类器或证据流水线（见类文档）。
+            source: 帧来源。
+            config: 监控配置。
+            processor: 证据流水线（优先级最高）。
+            stabilizer: 状态稳定化器。
+            history: 状态历史存储。
+            scheduler: 节拍调度器。
+            metrics: 逐轮指标记录器。
+            lifecycle: 生命周期状态机。
+            recovery: 失败恢复管理器。
+            clock: 单调时钟。
+            sleep: 睡眠函数。
+            now: 时间戳函数。
+            timing: 是否采集耗时画像。
+            on_result: 每帧原始结果回调。
+            on_event: 状态变化事件回调。
+            on_stable: 每帧稳定结果回调。
+            on_cycle: 每轮结束（含跳过轮）回调。
+            vision_bridge: **可选**的视觉快照桥（Phase 7.3）。传入后，``run()`` 会在每轮末尾
+                把"本轮的帧 + 本轮检测到的证据 + 帧号（``cycles``）+ 轮号（``cycle_id``）"
+                交给它，由它转换成 ``TargetSnapshot`` 并单向推送给 Action 侧的 resolver。
+                **默认 ``None`` = 完全不接线**（行为与 Phase 5.4 / 7.2 一致）。
+                接入原因：Runtime 是唯一能同时看到"帧 / 视觉结果 / 动作端口"的编排层
+                （Action 不 import vision、Vision 不 import action），因此由本层完成编排。
+                该桥**只推送快照数据**，既不调用 ``ActionDispatcher``、也不产生任何输入。
+        """
         # 渐进迁移（Phase 5）：第一个位置参数既可以是证据流水线（推荐），也可以是状态分类器
         # （Phase 3.0 旧行为）；显式传入的 ``processor`` 优先级最高。
         active_processor = processor
@@ -167,6 +201,7 @@ class StateMonitor:
         self._on_event = on_event
         self._on_stable = on_stable
         self._on_cycle = on_cycle
+        self._vision_bridge = vision_bridge
         self._events: list[StateEvent] = []
         self._current_state: StateName | None = None
         self._last_result: StateResult | None = None
@@ -176,6 +211,8 @@ class StateMonitor:
         self._skipped = 0
         self._errors = 0
         self._last_evidence_hits: int | None = None
+        # Phase 7.3：最近一轮的证据结果（供视觉快照桥消费；不在本层做任何动作）
+        self._last_evidences: list[Any] | None = None
 
     @classmethod
     def from_config(
@@ -320,6 +357,21 @@ class StateMonitor:
     def last_evidence_hits(self) -> int | None:
         """最近一轮命中的证据条数（Phase 5.3；帧路径或尚未判定时为 ``None``）。"""
         return self._last_evidence_hits
+
+    @property
+    def last_evidences(self) -> tuple[Any, ...]:
+        """最近一轮检测到的证据结果（Phase 7.3）。
+
+        由 :meth:`step` → :meth:`_classify` 在**同一次检测**中顺带保留（不重复检测），
+        供 :class:`~src.runtime.vision_bridge.VisionSnapshotBridge` 消费；
+        没有走证据路径或判定失败时为空元组。**只读**，本层不据此做任何动作。
+        """
+        return tuple(self._last_evidences or ())
+
+    @property
+    def vision_bridge(self) -> Any | None:
+        """当前接线的视觉快照桥（Phase 7.3；未接线时为 ``None``）。"""
+        return self._vision_bridge
 
     @property
     def lifecycle(self) -> RuntimeLifecycle:
@@ -520,14 +572,18 @@ class StateMonitor:
                 if profile:
                     state_ms = (time.perf_counter() - started) * 1000.0
                 self._last_evidence_hits = sum(1 for item in evidence if item.detected)
+                # Phase 7.3：保留本轮证据（同一次检测的产物，供视觉快照桥消费）
+                self._last_evidences = list(evidence)
                 return result, detect_ms, state_ms
             assert self._classifier is not None
             result = self._classifier.classify(frame)
             self._last_evidence_hits = None  # 帧路径不提供证据计数
+            self._last_evidences = None  # 帧路径没有证据结果
             return result, detect_ms, state_ms
         except OnmyojiVisionError as exc:
             self._errors += 1
             self._last_evidence_hits = None
+            self._last_evidences = None  # 判定失败：本轮证据不可信
             logger.error("状态判定失败（第 %d 次），本帧降级为 unknown: %s", self._errors, exc)
             return (
                 StateResult(
@@ -720,9 +776,39 @@ class StateMonitor:
         self._errors = 0
         self._paused_cycles = 0
         self._last_evidence_hits = None
+        self._last_evidences = None
         self._stabilizer.reset()
         self._diagnostics.reset()
         self._recovery.reset()
+
+    def _publish_vision_snapshot(
+        self, *, frame: Frame | None, schedule: CycleSchedule, timestamp: str
+    ) -> None:
+        """把本轮的视觉结果推送给 Action 侧的快照桥（Phase 7.3）。
+
+        设计要点：
+
+        * **未接线即空操作**（``vision_bridge=None`` 时立即返回，零开销、零行为变化）；
+        * **同一次检测**：使用 :attr:`last_evidences`（``_classify`` 已检测好的证据），
+          本层不重复调用 ``detect()``；
+        * **帧号来自 Runtime**：``frame_id = self._cycles``（本轮的轮次序号；capture 失败轮
+          不推送，因此帧号只增不减），``cycle_id`` 取自 ``CycleSchedule.cycle_id`` 以便追踪；
+        * **异常隔离**：桥或 Action 侧抛出的任何异常都在此被捕获并记录，
+          绝不影响监控主循环（后续帧照常处理）。
+        """
+        bridge = self._vision_bridge
+        if bridge is None:
+            return
+        try:
+            bridge.update(
+                frame=frame,
+                evidences=self._last_evidences or (),
+                frame_id=self._cycles,
+                cycle_id=schedule.cycle_id,
+                timestamp=frame.timestamp if frame is not None else None,
+            )
+        except Exception as exc:  # noqa: BLE001 - 桥的异常绝不影响主循环
+            logger.error("推送视觉快照失败（已隔离，不影响监控循环）: %s", exc)
 
     def _start_source(self) -> None:
         """启动帧来源（若其提供 ``start()``；幂等，异常不致命）。"""
@@ -892,6 +978,10 @@ class StateMonitor:
                 )
                 if self._on_cycle is not None:
                     self._on_cycle(schedule)
+                # Phase 7.3：把本轮的视觉结果推送给 Action 侧（未接线时是空操作）
+                self._publish_vision_snapshot(
+                    frame=frame, schedule=schedule, timestamp=timestamp
+                )
                 if exhausted:
                     stop_reason = StopReason.RECOVERY_EXHAUSTED
                     break
