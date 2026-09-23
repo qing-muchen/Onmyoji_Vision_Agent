@@ -338,6 +338,7 @@ class VisionAwareTargetResolver:
         self._trust_explicit_ratio = bool(trust_explicit_ratio)
         self._snapshot: TargetSnapshot | None = snapshot
         self._updates = 0
+        self._stale_snapshots = 0
 
     # ---- 只读 ---------------------------------------------------------------
 
@@ -366,17 +367,47 @@ class VisionAwareTargetResolver:
         """快照更新次数（观测用）。"""
         return self._updates
 
+    @property
+    def stale_snapshots(self) -> int:
+        """被拒收的乱序快照数量（观测用；Phase 7.2）。"""
+        return self._stale_snapshots
+
     # ---- 注入（单向：Vision → Resolver）-------------------------------------
 
-    def update_snapshot(self, snapshot: TargetSnapshot | None) -> TargetSnapshot | None:
-        """替换当前视觉快照。
+    def update_snapshot(
+        self,
+        snapshot: TargetSnapshot | None,
+        *,
+        accept_out_of_order: bool = False,
+    ) -> TargetSnapshot | None:
+        """替换当前视觉快照（**单向注入**：Vision → Resolver）。
+
+        乱序保护（Phase 7.2）：若新旧快照都带 ``frame_id`` 且新快照**更旧**，
+        默认拒收并保留较新的快照（避免"迟到的旧帧"把有效位置冲掉）。调用方若确实需要
+        覆盖（例如手动调试），可传 ``accept_out_of_order=True``。
 
         Args:
             snapshot: 新快照；``None`` 表示清空（等价于"没有视觉结果"）。
+            accept_out_of_order: 是否接受更旧的帧（默认 ``False``）。
 
         Returns:
-            被接受的快照。
+            当前生效的快照（被拒收时返回原有快照）。
         """
+        if (
+            not accept_out_of_order
+            and snapshot is not None
+            and self._snapshot is not None
+            and snapshot.frame_id is not None
+            and self._snapshot.frame_id is not None
+            and snapshot.frame_id < self._snapshot.frame_id
+        ):
+            self._stale_snapshots += 1
+            logger.warning(
+                "拒收乱序快照: 收到 frame=%s，当前 frame=%s（保留较新者）",
+                snapshot.frame_id,
+                self._snapshot.frame_id,
+            )
+            return self._snapshot
         self._snapshot = snapshot
         self._updates += 1
         if snapshot is None:
@@ -391,6 +422,8 @@ class VisionAwareTargetResolver:
         *,
         captured_at: str | None = None,
         captured_monotonic: float | None = None,
+        frame_id: int | None = None,
+        accept_out_of_order: bool = False,
     ) -> TargetSnapshot:
         """用候选集合构造并替换快照（便捷入口）。
 
@@ -398,11 +431,15 @@ class VisionAwareTargetResolver:
             candidates: 候选序列或 ``{名称: 候选}`` 映射。
             captured_at: 覆盖快照的 ISO 时间戳（默认取当前时间）。
             captured_monotonic: 覆盖快照的单调时钟时间（默认取 :attr:`_clock`）。
+            frame_id: 来源帧序号（乱序保护用）。
+            accept_out_of_order: 是否接受更旧的帧（默认 ``False``）。
 
         Returns:
-            新建的快照。
+            新建（或被接受）的快照。
         """
-        snapshot = TargetSnapshot.create(candidates, clock=self._clock, now=now_iso)
+        snapshot = TargetSnapshot.create(
+            candidates, frame_id=frame_id, clock=self._clock, now=now_iso
+        )
         if captured_at is not None or captured_monotonic is not None:
             snapshot = TargetSnapshot(
                 candidates=snapshot.candidates,
@@ -412,8 +449,10 @@ class VisionAwareTargetResolver:
                     if captured_monotonic is not None
                     else snapshot.captured_monotonic
                 ),
+                frame_id=snapshot.frame_id,
             )
-        return self.update_snapshot(snapshot)  # type: ignore[return-value]
+        result = self.update_snapshot(snapshot, accept_out_of_order=accept_out_of_order)
+        return result if result is not None else snapshot
 
     def clear(self) -> None:
         """清空快照（目标将无法解析；不删除已配置的别名与阈值）。"""
@@ -531,6 +570,7 @@ class VisionAwareTargetResolver:
             f"min_confidence={self._minimum_confidence}, "
             f"trust_vision_targets={self._trust_vision_targets}, "
             f"aliases={len(self._aliases)}, "
+            f"updates={self._updates}, stale={self._stale_snapshots}, "
             f"snapshot={'none' if snapshot is None else snapshot.count})"
         )
 

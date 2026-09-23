@@ -368,7 +368,35 @@ Action 说"是否允许执行输入"）。**未修改** `runtime/` `task/` `visi
      `docs/PHASE7_1_ARCHITECTURE_REVIEW.md`（先于代码的架构审查）与
      `docs/PHASE7_1_VISION_ACTION_RESOLVER_REPORT.md`。**测试过程零真实输入**。
 
-### 架构总览（Phase 7.1 完成后的主链路）
+**Phase 7.2 — VisionTargetAdapter（已完成）**：把既有视觉输出转换成 `core.vision_target` 契约，
+链路贯通为 **`Evidence/Detection → Adapter → TargetSnapshot → VisionAwareTargetResolver → ActionDispatcher`**。
+**未修改** `EvidenceResult` / `StateResult` / Runtime，**未修改** `src/action` 的依赖边界
+（Action 仍不 import vision）；真实输入仍默认关闭（`enabled=false` + `dry_run`）：
+
+108. **Adapter 位置与职责**（新增 `src/vision/pipeline/target_adapter.py`，pipeline 编排层）：
+     证据路径 `EvidenceResult.bbox`（帧像素）→ `ratio_from_rect(bbox, frame_size)`；
+     检测路径 `DetectionResult.rect`（参考分辨率）→ 既有
+     `CoordinateTransform.reference_rect_to_current` → 比例。**只做转换**：不 import
+     `src.action` / `src.task` / `src.runtime`，不调用 `ActionDispatcher`，不产生输入（AST 固化）；
+109. **输出契约**：只产出 `VisionTargetCandidate` / `TargetSnapshot`。越界**不裁剪**（如实上报，
+     由 Action 侧判 `invalid_target`）；缺帧尺寸 / 缺坐标变换 / 无 bbox / 未检出 → **跳过该条**
+     （绝不猜尺寸或默认坐标）；单条失败不影响同批其它条目；
+110. **confidence 映射**：`raw`（默认）或 `weighted`（`confidence × reliability`）；
+     过滤只在显式 `min_confidence > 0` 时发生——权威阈值仍只有 Action 侧一个；
+111. **source / frame_id / timestamp 传递**：`source` 忠实传递（`template` / `ocr` / `roi` /
+     `fused` / `detector`，可用 `source_override` 统一）；`timestamp` 与 `frame_id` 写入候选；
+     `metadata` 只搬运**标量**（避免把数组 / 图像带进契约）；
+112. **乱序保护**（契约新增 `frame_id`）：`TargetSnapshot.create(..., frame_id=…)` +
+     `resolver.update_snapshot(..., accept_out_of_order=False)` —— 较旧的帧晚到时被**拒收**
+     （记入 `stale_snapshots`），避免"迟到旧帧"覆盖有效位置；无 `frame_id` 的快照不受影响
+     （向后兼容 Phase 7.1）；
+113. **adapter 无状态**：不缓存快照、不持有 resolver；快照由调用方（编排层）持有并在合适时机
+     push（接线时机与 `cycle_id` 对齐属 Phase 7.3）；
+114. 新增 `tests/test_vision_target_adapter.py`（31 用例：乱序 / 空结果 / 低置信度 / 非法 bbox /
+     bbox 与 rect 两条换算路径 / confidence 映射 / 字段传递 / 依赖边界 / 端到端 dry-run），
+     `docs/PHASE7_2_VISION_TARGET_ADAPTER_REPORT.md`。**测试与冒烟零真实输入**。
+
+### 架构总览（Phase 7.2 完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -390,11 +418,14 @@ StateSnapshot → 转移条件 → 下一步目标      task：on_stable 决策 
 ActionRequest（语义目标）→ ActionPort      task：动作端口（Phase 6.2 = NullActionPort，只记录）
   ↓  ActionDispatcher                     action：门控 → 解析 → 坐标换算 → 后端（Phase 7）
 SafetyGuard（E-STOP / 窗口 / 前台 / 已解析 / 限流）  action：任一失败 → REJECTED（禁止 fallback）
+Pipeline（编排）                              vision：Frame → 证据 → 状态（Phase 4.7）
+  └─ VisionTargetAdapter                     vision：证据 / 检测 → VisionTargetCandidate（Phase 7.2）
+        ▼ 单向 push（TargetSnapshot{frame_id}）  action：拒收乱序旧帧
 TargetResolver（语义名 → x_ratio,y_ratio）  action：不读 Frame、不调 detector、不猜坐标
   ├─ RegistryTargetResolver（默认）          action：静态注册表（人工标定）
   └─ VisionAwareTargetResolver（Phase 7.1）  action：消费外部注入的 TargetSnapshot（TTL + 置信度）
         ▲                                   （Vision 单向 push：update_snapshot / update_candidates）
-        └── VisionTargetCandidate{名称, x_ratio, y_ratio, confidence}  core 契约（vision 可依赖）
+        └── VisionTargetCandidate{名称, x_ratio, y_ratio, confidence, frame_id}  core 契约（vision 可依赖）
 InputBackend（SendInput / DryRun）        action：默认 DryRunBackend（**不产生输入**）
 E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 → 任务 FAILED 且动作 REJECTED
 ```
@@ -422,10 +453,10 @@ E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 �
 
 **尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
 Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
-**Vision → Action 的自动接线**（Phase 7.1 已提供契约与 `VisionAwareTargetResolver`，
-但把 `EvidenceResult` 转成 `VisionTargetCandidate` 并 push 给 resolver 的 adapter 属编排层，
+**Vision → Action 的自动接线**（Phase 7.2 已提供 `VisionTargetAdapter`，
+但"谁在何时生成快照并 push 给 resolver"（例如与 Runtime 的 `cycle_id` 对齐）属 Phase 7.3 / 编排层，
 `drag` 动作亦未实现）、
-Phase 6.3 / 7.2 的运行时编排接线（Task Engine ↔ `StateMonitor` 回调、Task ↔ Action 的自动装配）、
+Phase 6.3 / 7.3 的运行时编排接线（Task Engine ↔ `StateMonitor` 回调、Task ↔ Action 的自动装配）、
 多任务调度与任务库、Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，
 以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
@@ -529,8 +560,9 @@ Onmyoji_Vision_Agent/
 │   │   │   ├── classifier.py     #     StateClassifier（证据驱动；帧路径自 4.6.5 只判转场）
 │   │   │   ├── transition/       #     转场判定：dataset / extractor / matcher / classifier
 │   │   │   └── yard/             #     庭院视觉组件（Phase 4.6.5 起不参与状态判定）
-│   │   └── pipeline/             #   编排层（Phase 4.7）：Frame -> 证据 -> StateResult
-│   │       └── frame_processor.py#     EvidenceFrameProcessor（供 Phase 5 Runtime 接线）
+│   │   └── pipeline/             #   编排层（Phase 4.7 / 7.2）：Frame -> 证据 -> StateResult
+│   │       ├── frame_processor.py#     EvidenceFrameProcessor（供 Phase 5 Runtime 接线）
+│   │       └── target_adapter.py #     VisionTargetAdapter（证据 / 检测 -> VisionTargetCandidate，Phase 7.2）
 │   ├── runtime/                  # 运行期编排（Phase 3.1 / 5.2 / 5.3）：时间滤波的唯一归属
 │   │   └── state_monitor/        #   实时状态监控与真实运行时
 │   │       ├── monitor.py        #     StateMonitor（固定节拍循环 + 变化检测 + 诊断接线）
@@ -1806,7 +1838,13 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   失败原因经 `resolve_detail()` 暴露为 `target_not_found` / `target_expired` / `low_confidence` /
   `invalid_target` 等）。**Dispatcher 不知道 Vision 存在**，Action 层仍不依赖 vision / runtime / task，
   默认 `resolver=registry` + `dry_run`（真实输入默认关闭）。
-- Phase 7.2：编排接线 —— Vision adapter（`EvidenceResult` → `VisionTargetCandidate`）落地、
+- Phase 7.2（**已完成：VisionTargetAdapter**）：新增 `src/vision/pipeline/target_adapter.py`
+  —— 把 `EvidenceResult`（`bbox` 帧像素）与 `DetectionResult`（`rect` 参考分辨率）转换为
+  `VisionTargetCandidate` / `TargetSnapshot`；含 confidence 映射（`raw` / `weighted`）、
+  `source` / `timestamp` / **`frame_id`** 传递、空结果 / 低置信度 / 非法 bbox / 缺料处理。
+  契约新增 `frame_id`，`resolver.update_snapshot` 增加**乱序保护**（拒收更旧的帧）。
+  **adapter 属 vision 层**：不 import action / task / runtime，不调用 `ActionDispatcher`，不产生输入。
+- Phase 7.3：编排接线 —— 快照生成与 push 的时机（与 Runtime `cycle_id` 对齐）、
   Task Engine ↔ `StateMonitor` 回调、Task ↔ ActionDispatcher 自动装配。
 - Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
   （`src/state`）。

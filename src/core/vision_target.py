@@ -128,6 +128,8 @@ class VisionTargetCandidate:
         bbox: 可选定位框（**帧像素坐标**，仅供审计 / 调试；Action 不使用它定位）。
         source: 来源标记（``evidence`` / ``detector`` / ``template`` / ``ocr`` …）。
         timestamp: 产生时刻（``time.monotonic()`` 秒；TTL 判定用）。
+        frame_id: 来源帧序号（可选；用于**乱序保护**——见
+            :meth:`~src.action.resolver.VisionAwareTargetResolver.update_snapshot`）。
         metadata: 只读附加信息（OCR 文本、模板 ID、分组…）；**不含图像与用户数据**。
 
     Raises:
@@ -141,6 +143,7 @@ class VisionTargetCandidate:
     bbox: Rect | None = None
     source: str = DEFAULT_VISION_TARGET_SOURCE
     timestamp: float = 0.0
+    frame_id: int | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -194,14 +197,16 @@ class VisionTargetCandidate:
             "bbox": list(self.bbox.to_ltrb()) if self.bbox is not None else None,
             "source": self.source,
             "timestamp": float(self.timestamp),
+            "frame_id": self.frame_id,
         }
 
     def describe(self) -> str:
         """返回可读描述。"""
+        frame = f", frame={self.frame_id}" if self.frame_id is not None else ""
         return (
             f"VisionTargetCandidate({self.target_name}, x_ratio={float(self.x_ratio):.4f}, "
             f"y_ratio={float(self.y_ratio):.4f}, confidence={float(self.confidence):.2f}, "
-            f"source={self.source})"
+            f"source={self.source}{frame})"
         )
 
 
@@ -213,6 +218,7 @@ class TargetSnapshot:
         candidates: 已按规范化名称（``casefold``）索引的候选映射。
         captured_at: 快照生成时刻（ISO 8601；审计用）。
         captured_monotonic: 快照生成时刻（单调时钟秒；TTL 判定用）。
+        frame_id: 该快照对应的帧序号（可选；用于**乱序保护**）。
 
     Raises:
         ValueError: 候选列表为空或含非法类型。
@@ -221,6 +227,7 @@ class TargetSnapshot:
     candidates: Mapping[str, VisionTargetCandidate] = field(default_factory=dict)
     captured_at: str = ""
     captured_monotonic: float = 0.0
+    frame_id: int | None = None
 
     def __post_init__(self) -> None:
         normalized: dict[str, VisionTargetCandidate] = {}
@@ -235,6 +242,7 @@ class TargetSnapshot:
         cls,
         candidates: Iterable[VisionTargetCandidate] | Mapping[str, Any],
         *,
+        frame_id: int | None = None,
         clock: Any = monotonic,
         now: Any = _now_iso,
     ) -> TargetSnapshot:
@@ -242,6 +250,7 @@ class TargetSnapshot:
 
         Args:
             candidates: 候选序列，或 ``{名称: VisionTargetCandidate}`` 映射。
+            frame_id: 来源帧序号（可选；乱序保护用）。
             clock: 单调时钟函数（TTL 判定基准；可注入）。
             now: 时间戳函数（ISO 8601；可注入）。
 
@@ -257,6 +266,7 @@ class TargetSnapshot:
             candidates={item.key: item for item in items},
             captured_at=str(now()),
             captured_monotonic=float(clock()),
+            frame_id=frame_id,
         )
 
     @property
@@ -291,14 +301,16 @@ class TargetSnapshot:
         return {
             "captured_at": self.captured_at,
             "captured_monotonic": float(self.captured_monotonic),
+            "frame_id": self.frame_id,
             "count": self.count,
             "names": list(self.names),
         }
 
     def describe(self) -> str:
         """返回可读描述。"""
+        frame = f", frame={self.frame_id}" if self.frame_id is not None else ""
         return (
-            f"TargetSnapshot(count={self.count}, captured_at={self.captured_at or 'n/a'}, "
+            f"TargetSnapshot(count={self.count}, captured_at={self.captured_at or 'n/a'}{frame}, "
             f"names={list(self.names)})"
         )
 
