@@ -335,6 +335,9 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             已换算回**帧坐标系**。
         """
         cropped, roi_rect = self.crop_roi(frame)
+        if cropped.size == 0:
+            # Phase 5.1：极小/异常帧可能裁不出像素——按"未检出"处理，而不是让 OpenCV 抛错
+            return None, roi_rect
         if not self._templates:
             return None, roi_rect
         frame_gray = self._matcher.prepare(cropped)

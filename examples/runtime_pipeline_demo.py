@@ -147,6 +147,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="按 interval 真实等待（默认只模拟节拍、不等待）",
     )
+    parser.add_argument(
+        "--timing",
+        action="store_true",
+        help="打印每轮耗时分解（frame / detect / state / stabilize，Phase 5.1）",
+    )
     parser.add_argument("--log-level", default=None, help="覆盖配置中的日志级别")
     return parser
 
@@ -215,7 +220,12 @@ def build_monitor(
     if args.interval_ms is not None:
         monitor_config = monitor_config.model_copy(update={"interval_ms": args.interval_ms})
 
-    shared: dict[str, object] = {"monitor": None, "event": None, "index": 0}
+    shared: dict[str, object] = {
+        "monitor": None,
+        "event": None,
+        "index": 0,
+        "timing": args.timing,
+    }
 
     def on_stable(stable: StableStateResult) -> None:
         monitor = shared["monitor"]
@@ -233,6 +243,10 @@ def build_monitor(
             event=pending if isinstance(pending, StateEvent) else None,
         )
         shared["event"] = None
+        if bool(shared.get("timing")) and isinstance(monitor, StateMonitor):
+            timing = monitor.last_timing
+            if timing is not None:
+                print(f"           {timing.describe()}")
 
     def on_event(event: StateEvent) -> None:
         shared["event"] = event
@@ -243,6 +257,7 @@ def build_monitor(
         monitor_config,
         clock=time.monotonic,
         sleep=time.sleep if args.real_time else _no_wait,
+        timing=args.timing,
         on_event=on_event,
         on_stable=on_stable,
     )

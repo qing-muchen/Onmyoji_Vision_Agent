@@ -24,6 +24,8 @@
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from src.core.config import AppConfig
@@ -38,9 +40,34 @@ from src.vision.evidence import (
 )
 from src.vision.state import StateClassifier, StateResult
 
-__all__ = ["EvidenceFrameProcessor", "build_transition_probe"]
+__all__ = ["EvidenceFrameProcessor", "ProcessTiming", "build_transition_probe"]
 
 logger = get_logger("vision.pipeline.frame_processor")
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessTiming:
+    """一次判定的耗时分解（Phase 5.1，仅在 ``profile=True`` 时采集）。
+
+    Attributes:
+        detect_ms: 证据检测耗时（毫秒）。
+        classify_ms: 状态判定耗时（毫秒；含规则聚合、可靠度加权与状态可信度校准）。
+    """
+
+    detect_ms: float
+    classify_ms: float
+
+    @property
+    def total_ms(self) -> float:
+        """判定总耗时（毫秒）。"""
+        return self.detect_ms + self.classify_ms
+
+    def describe(self) -> str:
+        """返回可读描述。"""
+        return (
+            f"detect={self.detect_ms:.2f}ms classify={self.classify_ms:.2f}ms "
+            f"total={self.total_ms:.2f}ms"
+        )
 
 
 def build_transition_probe(config: AppConfig) -> TransitionProbe | None:
@@ -88,6 +115,7 @@ class EvidenceFrameProcessor:
             )
         self._registry = registry
         self._classifier = classifier
+        self._last_timing: ProcessTiming | None = None
 
     @classmethod
     def from_config(
@@ -149,11 +177,13 @@ class EvidenceFrameProcessor:
         """
         return self._registry.detect_all(frame)
 
-    def process(self, frame: Frame) -> StateResult:
+    def process(self, frame: Frame, *, profile: bool = False) -> StateResult:
         """判定一帧的状态（``Frame → [EvidenceResult] → StateResult``）。
 
         Args:
             frame: 待判定的帧。
+            profile: 是否采集耗时分解（Phase 5.1，默认 ``False`` = 零额外开销）；
+                采集结果写入 :attr:`last_timing`。
 
         Returns:
             状态结果；``source`` 为 ``StateSource.EVIDENCE``，并带有 ``reason`` / ``evidence``。
@@ -162,10 +192,26 @@ class EvidenceFrameProcessor:
             ValueError: 证据集导致的状态名非法（配置校验已在加载阶段拦截，此处为兜底）。
             TypeError: 证据内部类型异常（detector 契约被破坏）。
         """
+        if profile:
+            started = time.perf_counter()
+            evidence = self._registry.detect_all(frame, profile=True)
+            detect_ms = (time.perf_counter() - started) * 1000.0
+            started = time.perf_counter()
+            result = self._classifier.classify(evidence)
+            classify_ms = (time.perf_counter() - started) * 1000.0
+            self._last_timing = ProcessTiming(detect_ms=detect_ms, classify_ms=classify_ms)
+            logger.debug("证据流水线判定耗时：%s", self._last_timing.describe())
+            return result
+
         evidence = self.detect(frame)
         result = self._classifier.classify(evidence)
         logger.debug("证据流水线判定：%s", result.describe())
         return result
+
+    @property
+    def last_timing(self) -> ProcessTiming | None:
+        """最近一次 ``profile=True`` 的耗时分解；未采集时为 ``None``。"""
+        return self._last_timing
 
     def describe(self) -> str:
         """返回可读描述。"""

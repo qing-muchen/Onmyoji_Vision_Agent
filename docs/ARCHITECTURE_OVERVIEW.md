@@ -148,6 +148,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 4.6.6 | 置信度校准 | `PHASE4_6_6_CONFIDENCE_CALIBRATION_REPORT.md` |
 | Phase 4.7 | 架构收敛 | `PHASE4_7_ARCHITECTURE_CLEANUP_REPORT.md` |
 | Phase 5 | Runtime 证据流水线接入（`StateMonitor` 判定入口 / 失败降级 / 首次性能测量） | `PHASE5_RUNTIME_PIPELINE_REPORT.md`、`PHASE5_RUNTIME_PERFORMANCE_REPORT.md` |
+| Phase 5.1 | 性能优化与真实采集测量（模板金字塔缓存 / profiling / 缓存 / 耗时画像 / 健壮性） | `PHASE5_1_PERFORMANCE_OPTIMIZATION_REPORT.md`、`PHASE5_1_REAL_RUNTIME_REPORT.md` |
 
 ---
 
@@ -155,8 +156,9 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 
 | 项 | 现状 | 归属 |
 | --- | --- | --- |
-| 实时循环（真实采集） | 证据流水线已接线（`StateMonitor` 默认走 `EvidenceFrameProcessor`，含转场证据与失败降级）；**真实 500ms 截图循环仍未实现** | Phase 5.1 |
-| 计算性能 | `detect` mean 356 ms / p95 514 ms → **500 ms 周期不可行**；瓶颈为 `bottom_menu_exploration`(32.7%) + `bottom_menu_yard`(26.8%) + `chapter_panel`(15.1%) | Phase 5.1（优化前先缩小 ROI / 降模板数与尺度） |
+| 实时循环（真实采集） | 证据流水线已接线（`StateMonitor` 默认走 `EvidenceFrameProcessor`，含转场证据与失败降级），性能已达标（`detect` mean ≈185 ms / p95 ≈276 ms）；**真实 500 ms 截图循环（dxcam/mss + 前台门控）与长跑验证仍未实现** | Phase 5.2 |
+| 计算性能 | `detect` 占链路 99.97%（优化后 mean 185–197 ms / p95 274–301 ms，500 ms 周期可行）；瓶颈为 `bottom_menu_exploration` + `bottom_menu_yard` + `chapter_panel`（合计 74.6%）；`scale 1.1/1.2` 在现有样本上从未命中（样本单一，**未删除**） | Phase 5.2（如需压缩预算：缩小 ROI / 降模板数与尺度，属配置决策） |
+| 观测能力 | `detect_all(profile=True)`、`EvidenceRegistry(cache_size=N)`、`StateMonitor(timing=True)`、`TemplateMatcher.scale_hits` 均为**默认关闭**的可选能力 | 需要时按报告启用 |
 | `EvidenceHistory` | 已 deprecated、无生产调用方；连同 `evidence.history` 配置段可删除 | 独立清理项 |
 | `config.py` | 单文件承载全部配置模型（含 evidence / state / runtime 段），拆分方案见 Phase 4.7 报告 | Phase 5+（可选） |
 | 计算性能 | 单帧 ≈ 170 次 `matchTemplate`（10 detector）；未做性能优化与预算验证 | Phase 5（接线前先测） |

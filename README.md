@@ -162,7 +162,23 @@ Phase 4.6.1 起扩展为完整状态集）：
     （瓶颈：`bottom_menu_exploration` 32.7% + `bottom_menu_yard` 26.8% + `chapter_panel` 15.1%）；
     按阶段要求**未做优化**（详见 `docs/PHASE5_RUNTIME_PERFORMANCE_REPORT.md`）。
 
-### 架构总览（Phase 5 完成后的主链路）
+**Phase 5.1 — Real Runtime Loop & Performance Optimization（已完成：优化与测量）**：
+
+55. **模板金字塔缓存**（唯一的显著优化）：模板的灰度化与各 scale 缩放从"每帧每模板重算"
+    改为首次使用后缓存 → `detect` **mean 356 → 197 ms（−44.7%）**、**p95 514 → 301 ms（−41.3%）**；
+    与"逐帧重算"的朴素实现**逐字段完全一致**（有测试证明）；
+56. **真实采集测量**：`dxcam` 0.42 ms / `mss` 29.83 ms（2560×1600 整屏）；链路
+    `capture + detect + classify + stabilize ≈ 185 ms (mean) / 276 ms (p95)` → **500 ms 周期可行**
+    （详见 `docs/PHASE5_1_REAL_RUNTIME_REPORT.md`）；
+57. **可选观测能力（默认关闭、零开销）**：`detect_all(profile=True)`（每 detector 耗时 + 模板数 +
+    ROI 像素尺寸）、`EvidenceRegistry(cache_size=N)`（**帧内容指纹**缓存）、
+    `StateMonitor(timing=True)`（`CycleTiming`：frame / detect / state / stabilize / total）、
+    `TemplateMatcher.scale_hits`（scale 命中统计）；
+58. **健壮性修复**：极小/异常帧不再让 `Roi.to_rect` 越界裁出空数组（原会触发 `cv2.error`
+    并崩溃监控循环）；
+59. 新增 `tests/test_phase51_performance.py`（14 个用例）与两份报告。
+
+### 架构总览（Phase 5.1 完成后的主链路）
 
 ```text
 Frame                                  采集：Window → Foreground → Calibration → Capture
@@ -197,8 +213,9 @@ StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json
 | `evidence.aggregator.rules[*].state_confidence.min` | **状态可信度下限**（可选校准；`rule_based`） |
 | `runtime.stabilization.confidence_threshold` | 稳定化门槛（消费**状态可信度**） |
 
-**尚未实现**：**真实采集的实时循环**（Phase 5 已完成证据流水线接线与离线节拍 Demo；
-真实 500ms 截图循环、前台门控接线与性能预算仍待办——当前 `detect` p95 ≈ 514 ms 已超周期）、
+**尚未实现**：**真实采集的实时循环**（Phase 5/5.1 已完成证据流水线接线、性能优化与离线节拍 Demo，
+`detect` mean ≈ 185 ms / p95 ≈ 276 ms 已可在 500 ms 周期内运行；**尚未接线真实 500ms 截图循环
+（dxcam/mss + 前台门控）与长跑验证**）、
 Phase 6/7/8 的 State Integration /
 Action /
 State Machine / Task System、YOLO 与深度学习模型、鼠标点击与键盘输入，以及任何**基于文字或界面的
@@ -375,6 +392,7 @@ python examples/evidence_state_demo.py --image dataset/raw/battle_result/battle_
 # 13. Demo：Runtime 证据流水线（固定节拍 → 证据 → 状态 → 稳定 → 事件，Phase 5）
 python examples/runtime_pipeline_demo.py
 python examples/runtime_pipeline_demo.py --interval-ms 500 --real-time
+python examples/runtime_pipeline_demo.py --timing     # 每轮耗时分解（frame/detect/state/stabilize，Phase 5.1）
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -1379,8 +1397,12 @@ Stable Changes: 0            # 首次确认是基线，不算变化
 - **Phase 5（已完成：链路接线）**：Runtime Evidence Pipeline Integration —— `StateMonitor` 判定入口
   迁移到 `EvidenceFrameProcessor`（processor 优先、旧 `classifier` 兼容、判定失败降级不崩溃）、
   固定节拍 Demo 与首次性能测量（`detect` p95 ≈ 514 ms，500 ms 周期**尚不可行**）。
-- Phase 5.1（待办）：真实采集的实时循环 —— 500ms 截图循环 + 前台门控接线 + 性能预算
-  （需先处理 `bottom_menu` / `chapter_panel` 的检测耗时，见 `docs/PHASE5_RUNTIME_PERFORMANCE_REPORT.md`）。
+- **Phase 5.1（已完成：优化与测量）**：模板金字塔缓存（`detect` mean 356 → 197 ms、p95 514 → 301 ms，
+  逐字段等价）、真实采集测量（dxcam 0.42 ms / mss 29.83 ms）、可选 profiling / 帧指纹缓存 /
+  每轮耗时画像、极小帧健壮性修复 → **500 ms 周期已可行**。
+- Phase 5.2（待办）：真实采集的实时循环 —— 500ms 截图循环 + 前台门控接线 + 长跑验证
+  （`detect` 仍占链路的 99.97%；如需进一步压缩预算，见
+  `docs/PHASE5_1_PERFORMANCE_OPTIMIZATION_REPORT.md` 第 7 节的配置级建议）。
 - Phase 6：State Integration —— 事件 / 落盘 / 观测与状态语义收敛。
 - Phase 7：Action Planning & Action Engine —— 受控的键鼠输入与安全约束
   （`src/action`，坐标一律经 `CoordinateTransform` 映射）。

@@ -46,9 +46,11 @@ from src.runtime.state_monitor.source import (
     make_foreground_gate,
 )
 from src.runtime.state_monitor.stabilizer import StableStateResult, StateStabilizer
+from src.runtime.state_monitor.timing import CycleTiming
 
 __all__ = [
     "CaptureFrameSource",
+    "CycleTiming",
     "ForegroundGate",
     "FrameSource",
     "MonitorReport",

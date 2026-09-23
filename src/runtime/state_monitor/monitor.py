@@ -36,6 +36,7 @@ from src.runtime.state_monitor.history import StateHistoryStore
 from src.runtime.state_monitor.report import MonitorReport, StopReason, local_now_iso
 from src.runtime.state_monitor.source import FrameSource
 from src.runtime.state_monitor.stabilizer import StableStateResult, StateStabilizer
+from src.runtime.state_monitor.timing import CycleTiming
 from src.utils.logger import get_logger
 from src.vision.capture.models import Frame
 from src.vision.pipeline.frame_processor import EvidenceFrameProcessor, build_transition_probe
@@ -61,6 +62,7 @@ class StateMonitor:
         processor: 证据流水线；显式传入时优先于 ``classifier``（渐进迁移）。
         stabilizer / history: 稳定器与历史存储；省略时按各自配置创建。
         clock / sleep / now: 时钟、等待与时间戳函数（可在测试中注入）。
+        timing: 是否采集每轮耗时画像（Phase 5.1；默认 ``False`` = 零额外开销）。
         on_result / on_event / on_stable: 识别 / 稳定状态变化 / 稳定化处理回调。
     """
 
@@ -76,6 +78,7 @@ class StateMonitor:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = local_now_iso,
+        timing: bool = False,
         on_result: Callable[[StateResult], None] | None = None,
         on_event: Callable[[StateEvent], None] | None = None,
         on_stable: Callable[[StableStateResult], None] | None = None,
@@ -100,6 +103,8 @@ class StateMonitor:
         self._clock = clock
         self._sleep = sleep
         self._now = now
+        self._timing_enabled = timing
+        self._last_timing: CycleTiming | None = None
         self._on_result = on_result
         self._on_event = on_event
         self._on_stable = on_stable
@@ -125,6 +130,7 @@ class StateMonitor:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = local_now_iso,
+        timing: bool = False,
         on_result: Callable[[StateResult], None] | None = None,
         on_event: Callable[[StateEvent], None] | None = None,
         on_stable: Callable[[StableStateResult], None] | None = None,
@@ -138,7 +144,9 @@ class StateMonitor:
                 （含转场证据；转场数据集不可用时自动降级，不会抛异常）。
             classifier: 显式使用状态分类器（帧路径，Phase 3.x 行为）；仅在 ``processor`` 省略时生效。
             stabilizer / history: 省略时按 ``config`` 自动创建。
-            clock / sleep / now / on_result / on_event / on_stable: 见 :meth:`__init__`。
+            clock / sleep / now: 时钟、等待与时间戳函数（可在测试中注入）。
+            timing: 是否采集每轮耗时画像（Phase 5.1；默认 ``False``）。
+            on_result / on_event / on_stable: 见 :meth:`__init__`。
 
         Returns:
             监控器实例。
@@ -165,6 +173,7 @@ class StateMonitor:
             clock=clock,
             sleep=sleep,
             now=now,
+            timing=timing,
             on_result=on_result,
             on_event=on_event,
             on_stable=on_stable,
@@ -252,7 +261,7 @@ class StateMonitor:
         """事件数量。"""
         return len(self._events)
 
-    def step(self, frame: Frame) -> StateResult:
+    def step(self, frame: Frame, *, frame_ms: float = 0.0) -> StateResult:
         """处理一帧：识别 → 稳定化 → 变化检测 → 记录事件（可独立测试）。
 
         事件只由稳定状态驱动（首次确认只建立基线）；返回本帧的原始识别结果，
@@ -260,12 +269,17 @@ class StateMonitor:
 
         Args:
             frame: 待识别的帧。
+            frame_ms: 取帧耗时（由 :meth:`run` 传入；**仅**用于耗时画像，默认 ``0.0``）。
         """
+        judge_started = time.perf_counter()
         result = self._classify(frame)
+        judge_ms = (time.perf_counter() - judge_started) * 1000.0
         self._last_result = result
         self._classified += 1
 
+        stabilize_started = time.perf_counter()
         stable = self._stabilizer.update(result)
+        stabilize_ms = (time.perf_counter() - stabilize_started) * 1000.0
         self._last_stable = stable
 
         if self._current_state is None and stable.is_confirmed and stable.state_name is not None:
@@ -291,7 +305,44 @@ class StateMonitor:
             self._on_stable(stable)
         if self._on_result is not None:
             self._on_result(result)
+        if self._timing_enabled:
+            self._record_timing(frame_ms, judge_ms, stabilize_ms, result)
         return result
+
+    def _record_timing(
+        self,
+        frame_ms: float,
+        judge_ms: float,
+        stabilize_ms: float,
+        result: StateResult,
+    ) -> None:
+        """记录本轮耗时画像（Phase 5.1；不参与任何判定与事件逻辑）。
+
+        ``detect_ms`` / ``state_ms`` 来自 :attr:`EvidenceFrameProcessor.last_timing`
+        （仅在 ``timing=True`` 时采集）；帧路径下两者为 ``0.0``。
+        """
+        detect_ms = 0.0
+        state_ms = 0.0
+        if self._processor is not None and self._processor.last_timing is not None:
+            timing = self._processor.last_timing
+            detect_ms = timing.detect_ms
+            state_ms = timing.classify_ms
+        self._last_timing = CycleTiming(
+            cycle=self._cycles + 1,
+            frame_ms=frame_ms,
+            detect_ms=detect_ms,
+            state_ms=state_ms,
+            judge_ms=judge_ms,
+            stabilize_ms=stabilize_ms,
+            total_ms=frame_ms + judge_ms + stabilize_ms,
+            state=result.state_name,
+        )
+        logger.debug("本轮耗时画像：%s", self._last_timing.describe())
+
+    @property
+    def last_timing(self) -> CycleTiming | None:
+        """最近一轮的耗时画像；未启用 ``timing`` 时为 ``None``。"""
+        return self._last_timing
 
     def _classify(self, frame: Frame) -> StateResult:
         """判定一帧的状态：证据流水线优先，失败降级为 ``unknown``（Phase 5）。
@@ -309,6 +360,9 @@ class StateMonitor:
         """
         try:
             if self._processor is not None:
+                if self._timing_enabled:
+                    # 采集耗时分解（Phase 5.1）；不影响判定结果
+                    return self._processor.process(frame, profile=True)
                 return self._processor.process(frame)
             assert self._classifier is not None
             return self._classifier.classify(frame)
@@ -368,12 +422,14 @@ class StateMonitor:
                     stop_reason = StopReason.DURATION
                     break
 
+                frame_started = time.perf_counter()
                 frame = self._source.get_frame()
+                frame_ms = (time.perf_counter() - frame_started) * 1000.0
                 if frame is None:
                     self._skipped += 1
                     logger.debug("本轮无可用帧，跳过（累计 %d）", self._skipped)
                 else:
-                    self.step(frame)
+                    self.step(frame, frame_ms=frame_ms)
 
                 self._cycles += 1
                 self._history.update_progress(

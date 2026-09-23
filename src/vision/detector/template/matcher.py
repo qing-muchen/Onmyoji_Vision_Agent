@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 import cv2
@@ -76,6 +77,12 @@ class TemplateMatcher:
         self._method = getattr(cv2, config.method, None)
         if self._method is None:
             raise ValueError(f"OpenCV 不支持的模板匹配方法: {config.method}")
+        #: 模板 × scale 的灰度金字塔缓存（Phase 5.1）：模板与其缩放结果都是确定性的，
+        #: 逐帧重算只是浪费；键包含 scales 元组，配置变化不会复用旧缓存。
+        self._template_pyramids: dict[tuple[str, str, tuple[float, ...]], tuple[tuple[float, np.ndarray], ...]] = {}
+        #: 各 scale 被选为**最佳匹配**的次数（Phase 5.1 统计，不改变判定逻辑）
+        self._scale_hits: Counter[float] = Counter()
+        self._pyramid_cache_hits = 0
 
     @property
     def config(self) -> TemplateDetectorConfig:
@@ -106,8 +113,55 @@ class TemplateMatcher:
         """
         return to_grayscale(frame_image)
 
+    def template_pyramid(
+        self, template: TemplateInfo
+    ) -> tuple[tuple[float, np.ndarray], ...]:
+        """返回模板在各 scale 下的灰度图（**构造期缓存**，Phase 5.1）。
+
+        等价性：原实现每帧对每个模板重算 ``to_grayscale`` 与 ``resize_image``；
+        模板及其缩放结果都是确定性的，缓存只是避免重复计算，**不改变任何匹配结果**。
+        缓存键包含模板标识与 scale 元组，因此配置变化不会复用旧缓存。
+
+        Args:
+            template: 待匹配的模板。
+
+        Returns:
+            ``((scale, 缩放后的灰度模板), ...)``，顺序与 :attr:`scales` 完全一致。
+        """
+        key = (template.template_id, str(template.path), self.scales)
+        cached = self._template_pyramids.get(key)
+        if cached is not None:
+            self._pyramid_cache_hits += 1
+            return cached
+        gray = to_grayscale(template.image)
+        pyramid = tuple((scale, resize_image(gray, scale)) for scale in self.scales)
+        self._template_pyramids[key] = pyramid
+        return pyramid
+
+    @property
+    def scale_hits(self) -> dict[float, int]:
+        """各 scale 被选为**最佳匹配**的次数（Phase 5.1 统计，不改变判定逻辑）。"""
+        return dict(self._scale_hits)
+
+    @property
+    def pyramid_cache_size(self) -> int:
+        """已缓存的模板金字塔数量。"""
+        return len(self._template_pyramids)
+
+    @property
+    def pyramid_cache_hits(self) -> int:
+        """命中模板金字塔缓存的次数（每个模板第二次起为命中）。"""
+        return self._pyramid_cache_hits
+
+    def reset_statistics(self) -> None:
+        """清空 scale 命中统计（不影响金字塔缓存）。"""
+        self._scale_hits.clear()
+
     def match(self, frame_gray: np.ndarray, template: TemplateInfo) -> TemplateMatch | None:
         """在灰度帧中查找单个模板的最佳位置。
+
+        Phase 5.1：模板的灰度图与各 scale 缩放图来自 :meth:`template_pyramid` 缓存
+        （不再逐帧重算），匹配与选择逻辑保持不变。
 
         Args:
             frame_gray: 与帧同源的灰度图（见 :meth:`prepare`）。
@@ -116,12 +170,10 @@ class TemplateMatcher:
         Returns:
             最佳匹配结果；未达阈值或模板大于帧时返回 ``None``。
         """
-        template_gray = to_grayscale(template.image)
         frame_height, frame_width = frame_gray.shape[:2]
         best: TemplateMatch | None = None
 
-        for scale in self.scales:
-            scaled = resize_image(template_gray, scale)
+        for scale, scaled in self.template_pyramid(template):
             height, width = scaled.shape[:2]
             if height > frame_height or width > frame_width:
                 logger.debug(
@@ -145,6 +197,7 @@ class TemplateMatcher:
 
         if best is None:
             return None
+        self._scale_hits[best.scale] += 1
         if best.confidence < self._config.threshold:
             return None
         return best

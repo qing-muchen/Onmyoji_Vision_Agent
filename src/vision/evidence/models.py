@@ -384,19 +384,25 @@ class Roi:
         return cls(x0=values[0], y0=values[1], x1=values[2], y1=values[3])
 
     def to_rect(self, width: int, height: int) -> Rect:
-        """把相对比例换算为该尺寸下的像素矩形（至少 1 像素）。
+        """把相对比例换算为该尺寸下的像素矩形（至少 1 像素，且**不越出图像边界**）。
+
+        Phase 5.1 起做了边界裁剪：极小图像（例如 2×2 的异常帧）下，纯比例换算可能落到
+        图像之外并裁出**空数组**（随后 OpenCV 会报错）。正常尺寸下比例本身已落在
+        ``[0, 1]`` 内，裁剪不改变任何结果。
 
         Args:
             width: 目标图像宽度。
             height: 目标图像高度。
 
         Returns:
-            像素坐标系下的矩形。
+            像素坐标系下的矩形（宽高 ≥ 1 且完全位于图像内）。
         """
-        left = round(width * self.x0)
-        top = round(height * self.y0)
-        right = max(left + 1, round(width * self.x1))
-        bottom = max(top + 1, round(height * self.y1))
+        max_x = max(0, width - 1)
+        max_y = max(0, height - 1)
+        left = min(max(0, round(width * self.x0)), max_x)
+        top = min(max(0, round(height * self.y0)), max_y)
+        right = min(width, max(left + 1, round(width * self.x1)))
+        bottom = min(height, max(top + 1, round(height * self.y1)))
         return Rect(x=left, y=top, width=right - left, height=bottom - top)
 
     def describe(self) -> str:
