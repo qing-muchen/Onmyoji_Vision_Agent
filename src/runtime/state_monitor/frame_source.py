@@ -1,26 +1,28 @@
-"""真实窗口帧采集（Phase 5.3 从 ``window_source.py`` 拆出）。
+"""真实窗口帧来源（Phase 5.4：编排层）。
 
-职责边界（本模块只做"把目标窗口客户区采集成 :class:`~src.vision.capture.models.Frame`"）：
+本模块只做**编排**：把"目标窗口解析 → 前台门控 → 采集后端 → 帧"串起来，并把可预期的问题
+转成"可解释的跳过"而不是崩溃；具体能力分布如下（Phase 5.4 拆分的边界）：
+
+| 关注点 | 模块 |
+| --- | --- |
+| 窗口查找 / 绑定 / 几何刷新 | :mod:`~src.runtime.state_monitor.window_binding` |
+| hwnd 校验 / 采集区域 / 缩放检测 / 查找冷却 | :mod:`~src.runtime.state_monitor.window_capture` |
+| 前台门控（只检查、不抢占） + ``SkipReason`` | :mod:`~src.runtime.state_monitor.foreground_guard` |
+| 采集后端（dxcam 优先 / mss 回退 / 重建 / 释放） | :mod:`~src.runtime.state_monitor.capture_backend` |
+| **编排 + 重试 + 状态**（本模块） | :class:`WindowFrameSource` |
 
 ```text
-FrameSource.get_frame()
-   ├─ 窗口绑定（window_binding.OnmyojiWindowSource：查找 / 几何 / 失效重绑，带冷却）
-   ├─ 前台门控（foreground_guard.ForegroundGuard：只检查、不抢占，失焦即跳过）
-   └─ 采集后端（create_capture_backend：dxcam 优先、mss 回退；窗口移动即重建区域）
-        │  任一环节不可用 → None + CaptureStatus（含原因与诊断信息），**不崩溃**
+WindowFrameSource.get_frame()
+   ├─ target.resolve()          窗口 + 区域 + 坐标映射（不可用 → SkipReason）
+   ├─ guard.verdict()           前台门控（只检查，不抢占）
+   ├─ backend.ensure(...)       后端创建 / 复用 / 重建（失败 → SkipReason）
+   └─ backend.grab()            抓帧（异常 → 释放后端，下轮重建重试）
+        │  任一环节不可用 → None + CaptureStatus，**不崩溃**（``strict=True`` 才抛）
         ▼
 Frame（image + timestamp + source 元数据 + coordinate_transform）
 ```
 
-设计约束（Phase 5.2 安全边界，本阶段保持不变）：
-
-* **不崩溃**：``get_frame()`` 把窗口与采集层的可预期异常统一转成 ``None`` + 状态
-  （:class:`CaptureStatus`），Runtime 只需按"本轮无帧"处理；``strict=True`` 时才向上抛出
-  （由 Runtime 决定如何处置）；
-* **不抢焦点、不切换窗口**：本模块不包含任何激活/置前调用；
-* **不改视觉层**：帧仍是 :class:`~src.vision.capture.models.Frame`；窗口元数据留在本层
-  （:attr:`WindowFrameSource.window` / :attr:`WindowFrameSource.status`），不污染视觉层数据结构；
-* **不做判定**：本模块不 detect、不 aggregate、不判定状态、不做时间滤波。
+行为与 Phase 5.2/5.3 完全一致；本模块不判定状态、不做时间滤波、不抢焦点。
 """
 
 from __future__ import annotations
@@ -33,23 +35,25 @@ from src.core.config import AppConfig, CalibrationConfig, CaptureConfig
 from src.core.exceptions import CaptureError, OnmyojiVisionError, WindowNotFoundError
 from src.core.geometry import Rect
 from src.utils.logger import get_logger
-from src.vision.calibration import CalibrationResolver
-from src.vision.capture import CaptureBackend, Frame, create_capture_backend
+from src.vision.capture import Frame
 from src.vision.window import WindowInfo
 
+from src.runtime.state_monitor.capture_backend import RuntimeCaptureBackend
 from src.runtime.state_monitor.foreground_guard import (
     ForegroundGuard,
     GuardVerdict,  # noqa: F401 - 供类型注解与向后兼容的导入方使用
     SkipReason,
 )
 from src.runtime.state_monitor.window_binding import OnmyojiWindowSource
+from src.runtime.state_monitor.window_capture import (
+    DEFAULT_RETRY_INTERVAL_S,
+    WindowCaptureTarget,
+    WindowResolution,
+)
 
 __all__ = ["CaptureStatus", "DEFAULT_RETRY_INTERVAL_S", "WindowFrameSource"]
 
 logger = get_logger("runtime.state_monitor.frame_source")
-
-#: 窗口不可用时的重新查找冷却（秒）：避免"游戏没开"时每轮都枚举全部窗口
-DEFAULT_RETRY_INTERVAL_S: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +90,7 @@ class WindowFrameSource:
     并额外报告本轮跳过原因（``last_skip_reason``），供 Runtime 记录指标。
 
     后端选择：``capture.backend`` 为 ``auto`` 时 **dxcam 优先、mss 回退**
-    （由 :func:`~src.vision.capture.factory.create_capture_backend` 实现，本层不重复实现）。
+    （由 :mod:`~src.runtime.state_monitor.capture_backend` 委托 ``vision`` 工厂实现）。
     窗口被移动/缩放导致采集区域变化时，会自动重建后端以跟随新区域。
 
     Args:
@@ -114,20 +118,20 @@ class WindowFrameSource:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._binding = binding
-        self._capture = capture
-        self._calibration = calibration
-        self._resolver = CalibrationResolver.from_config(calibration)
+        self._target = WindowCaptureTarget(
+            binding,
+            calibration=calibration,
+            retry_interval_s=retry_interval_s,
+            clock=clock,
+        )
+        self._backend = RuntimeCaptureBackend(capture)
         self._guard = guard if guard is not None else ForegroundGuard(enabled=guard_enabled)
         self._strict = bool(strict)
-        self._retry_interval_s = max(0.0, float(retry_interval_s))
         self._clock = clock
 
         self._running = False
-        self._backend: CaptureBackend | None = None
-        self._backend_region: Rect | None = None
         self._status: CaptureStatus | None = None
         self._last_logged_reason: SkipReason | None = None
-        self._next_lookup_at: float | None = None
         self._frames = 0
         self._skips: dict[str, int] = {}
 
@@ -189,6 +193,16 @@ class WindowFrameSource:
         return self._binding
 
     @property
+    def target(self) -> WindowCaptureTarget:
+        """窗口目标解析器（窗口 / 区域 / 坐标映射 / 缩放检测）。"""
+        return self._target
+
+    @property
+    def backend(self) -> RuntimeCaptureBackend:
+        """采集后端句柄（创建 / 复用 / 重建 / 释放）。"""
+        return self._backend
+
+    @property
     def guard(self) -> ForegroundGuard:
         """前台门控。"""
         return self._guard
@@ -201,12 +215,12 @@ class WindowFrameSource:
     @property
     def backend_name(self) -> str | None:
         """当前采集后端名称；未就绪时为 ``None``。"""
-        return self._backend.name if self._backend is not None else None
+        return self._backend.name
 
     @property
     def capture_region(self) -> Rect | None:
         """当前采集区域；未就绪时为 ``None``。"""
-        return self._backend_region
+        return self._backend.region
 
     @property
     def is_running(self) -> bool:
@@ -247,31 +261,46 @@ class WindowFrameSource:
         if self._running:
             return
         self._running = True
-        window = self._binding.window
-        if window is None:
-            window = self._lookup_window()
-        else:
-            self._apply_window(window)
-        if window is None:
+        resolution = self._target.resolve()
+        if not resolution.ok:
             logger.warning(
                 "真实窗口帧来源已启动，但当前无法采集：%s",
-                self._status.describe() if self._status is not None else "unknown",
+                resolution.message or (self._status.describe() if self._status else "unknown"),
+            )
+            self._record_resolution_failure(resolution)
+            return
+
+        window = resolution.window
+        assert window is not None
+        self._apply_window(window)
+        result = self._backend.ensure(
+            window=window, region=resolution.region, transform=resolution.transform
+        )
+        if not result.ok:
+            self._fail(
+                result.reason or SkipReason.BACKEND_UNAVAILABLE,
+                result.message,
+                window=window,
+                exc=result.error,
             )
             return
-        self._ensure_backend(window)
         logger.info(
             "真实窗口帧来源已启动：window=%s backend=%s region=%s",
             window.describe(),
             self.backend_name or "n/a",
-            self._backend_region.describe() if self._backend_region is not None else "n/a",
+            self._backend.region.describe() if self._backend.region is not None else "n/a",
         )
 
     def stop(self) -> None:
-        """停止帧来源并释放采集后端（幂等）。"""
-        if not self._running:
+        """停止帧来源并释放采集资源（幂等，异常安全）。
+
+        释放动作：关闭采集后端（dxcam 会话与内部线程随之结束 / mss 会话关闭），
+        并清空区域缓存；窗口绑定保留（便于重新 ``start()``）。
+        """
+        if not self._running and not self._backend.is_ready:
             return
         self._running = False
-        self._drop_backend()
+        self._backend.release()
         logger.info(
             "真实窗口帧来源已停止：frames=%d skips=%s",
             self._frames,
@@ -302,9 +331,12 @@ class WindowFrameSource:
 
     def _acquire(self) -> Frame | None:
         """执行一轮采集：窗口 → 前台门控 → 后端 → 帧。"""
-        window = self._resolve_window()
-        if window is None:
-            return None
+        resolution = self._target.resolve()
+        if not resolution.ok:
+            return self._record_resolution_failure(resolution)
+        window = resolution.window
+        assert window is not None
+        self._apply_window(window)
 
         guard = self._guard
         foreground: bool | None = None
@@ -318,26 +350,33 @@ class WindowFrameSource:
                 )
             foreground = True
 
-        if not self._ensure_backend(window):
-            return None
+        result = self._backend.ensure(
+            window=window, region=resolution.region, transform=resolution.transform
+        )
+        if not result.ok:
+            return self._fail(
+                result.reason or SkipReason.BACKEND_UNAVAILABLE,
+                result.message,
+                window=window,
+                exc=result.error,
+            )
 
-        backend = self._backend
-        assert backend is not None
+        name = result.name or "capture"
         try:
-            frame = backend.get_frame()
+            frame = self._backend.grab()
         except OnmyojiVisionError as exc:
-            self._drop_backend()
+            self._backend.release()
             return self._fail(
                 SkipReason.CAPTURE_FAILED,
-                f"{backend.name} 抓帧失败: {exc}",
+                f"{name} 抓帧失败: {exc}",
                 window=window,
                 exc=exc,
             )
         except OSError as exc:
-            self._drop_backend()
+            self._backend.release()
             return self._fail(
                 SkipReason.CAPTURE_FAILED,
-                f"{backend.name} 抓帧失败（系统错误）: {exc}",
+                f"{name} 抓帧失败（系统错误）: {exc}",
                 window=window,
                 exc=exc,
             )
@@ -345,7 +384,7 @@ class WindowFrameSource:
         if frame is None:
             return self._fail(
                 SkipReason.NO_FRAME,
-                f"{backend.name} 本轮没有产出帧（画面无更新或设备未就绪）",
+                f"{name} 本轮没有产出帧（画面无更新或设备未就绪）",
                 window=window,
                 foreground=foreground,
             )
@@ -358,129 +397,23 @@ class WindowFrameSource:
             message="ok",
             window=window,
             foreground=foreground,
-            backend=backend.name,
+            backend=name,
         )
         return frame
 
-    def _resolve_window(self) -> WindowInfo | None:
-        """确定本轮可采集的窗口；不可用时返回 ``None`` 并记录原因。"""
-        binding = self._binding
-        window = binding.window
-        if window is not None and window.is_real_window:
-            if binding.is_minimized():
-                return self._fail(
-                    SkipReason.WINDOW_MINIMIZED,
-                    f"目标窗口已最小化，客户区无尺寸: {window.describe()}",
-                    window=window,
-                )
-            if not binding.is_alive():
-                logger.info("目标窗口已失效（已关闭或不可见），重新查找: %s", window.describe())
-                binding.clear()
-                return self._lookup_window()
-            try:
-                updated = binding.require()
-            except WindowNotFoundError as exc:
-                binding.clear()
-                return self._lookup_window(f"读取窗口几何失败: {exc}")
-            self._apply_window(updated)
-            return updated
-        return self._lookup_window()
-
-    def _lookup_window(self, detail: str | None = None) -> WindowInfo | None:
-        """重新查找并绑定窗口（带冷却，避免无窗口时每轮枚举）。"""
-        if not self._lookup_allowed():
-            message = "目标窗口当前不可用，处于重新查找冷却期内"
-            if detail:
-                message = f"{message}（{detail}）"
-            return self._fail(SkipReason.WINDOW_NOT_FOUND, message)
-        self._defer_lookup()
-        try:
-            window = self._binding.find(refresh=True)
-        except OnmyojiVisionError as exc:
-            return self._fail(SkipReason.WINDOW_NOT_FOUND, f"窗口查找失败: {exc}", exc=exc)
-        if window is None:
-            message = (
-                f"未找到标题匹配 {list(self._binding.keywords)} 的窗口"
-                f"（模式={self._binding.match_mode}）"
-            )
-            if detail:
-                message = f"{message}；{detail}"
-            return self._fail(SkipReason.WINDOW_NOT_FOUND, message)
-        self._next_lookup_at = None
-        self._apply_window(window)
-        logger.info("已绑定目标窗口: %s", window.describe())
-        return window
+    def _record_resolution_failure(self, resolution: WindowResolution) -> None:
+        """把"窗口层面无法解析"记为一次跳过（``None`` 供调用方直接返回）。"""
+        reason = resolution.reason or SkipReason.WINDOW_NOT_FOUND
+        if reason is SkipReason.WINDOW_MINIMIZED:
+            return self._fail(reason, resolution.message, window=resolution.window)
+        return self._fail(reason, resolution.message)
 
     def _apply_window(self, window: WindowInfo) -> None:
         """把窗口信息同步到门控（并让下轮重新评估采集区域）。"""
         if self._guard is not None and window.is_real_window:
             self._guard.retarget(window.hwnd)
 
-    def _ensure_backend(self, window: WindowInfo) -> bool:
-        """确保采集后端可用（窗口移动/缩放时重建）。
-
-        Returns:
-            ``True`` 表示后端就绪。
-        """
-        region = window.rect
-        if self._backend is not None and self._backend_region == region:
-            return True
-        if self._backend is not None:
-            logger.info(
-                "采集区域变化（%s -> %s），重建采集后端",
-                self._backend_region.describe() if self._backend_region is not None else "n/a",
-                region.describe(),
-            )
-            self._drop_backend()
-
-        transform = self._resolver.calibrate_window(window).transform
-        try:
-            backend = create_capture_backend(self._capture, window=window, transform=transform)
-            backend.start()
-        except OnmyojiVisionError as exc:
-            self._drop_backend()
-            self._fail(SkipReason.BACKEND_UNAVAILABLE, f"采集后端不可用: {exc}", window=window, exc=exc)
-            return False
-        except OSError as exc:
-            self._drop_backend()
-            self._fail(
-                SkipReason.CAPTURE_FAILED,
-                f"采集后端启动失败（系统错误）: {exc}",
-                window=window,
-                exc=exc,
-            )
-            return False
-
-        self._backend = backend
-        self._backend_region = region
-        logger.info(
-            "采集后端就绪: backend=%s region=%s（dxcam 优先 / mss 回退，由 capture.backend 决定）",
-            backend.name,
-            region.describe(),
-        )
-        return True
-
-    def _drop_backend(self) -> None:
-        """释放当前采集后端（幂等，清理路径不抛异常）。"""
-        backend = self._backend
-        self._backend = None
-        self._backend_region = None
-        if backend is None:
-            return
-        try:
-            backend.stop()
-        except Exception as exc:  # noqa: BLE001 - 清理路径：设备异常不应影响主循环
-            logger.warning("采集后端停止异常（已忽略）: %s", exc)
-
-    # ---- 冷却与失败处理 -----------------------------------------------------
-
-    def _lookup_allowed(self) -> bool:
-        """当前是否允许重新枚举窗口（冷却期内不再枚举）。"""
-        return self._next_lookup_at is None or self._clock() >= self._next_lookup_at
-
-    def _defer_lookup(self) -> None:
-        """推迟下一次窗口枚举（找不到窗口时避免忙枚举）。"""
-        self._next_lookup_at = self._clock() + self._retry_interval_s
+    # ---- 失败处理 -----------------------------------------------------------
 
     def _fail(
         self,
@@ -533,9 +466,10 @@ class WindowFrameSource:
         """返回可读描述。"""
         window = self._binding.window
         status = self._status.describe() if self._status is not None else "尚未取帧"
+        region = self._backend.region
         return (
             f"WindowFrameSource(backend={self.backend_name or 'n/a'}, "
-            f"region={self._backend_region.describe() if self._backend_region else 'n/a'}, "
+            f"region={region.describe() if region is not None else 'n/a'}, "
             f"window={window.title if window is not None else 'n/a'}, status={status})"
         )
 

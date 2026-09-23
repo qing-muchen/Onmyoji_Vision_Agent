@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -42,8 +43,11 @@ from src.runtime.state_monitor import (  # noqa: E402
     CycleSchedule,
     CycleScheduler,
     CycleStatus,
+    InvalidRuntimeTransition,
     MonitorReport,
     OnmyojiWindowSource,
+    RecoveryManager,
+    RecoveryPolicy,
     RuntimeMetricsRecorder,
     StateEvent,
     StateMonitor,
@@ -95,6 +99,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-metrics", action="store_true", help="不写运行指标文件（仅内存统计）")
     parser.add_argument("--timing", action="store_true", help="打印每轮耗时分解（Phase 5.1）")
+    parser.add_argument(
+        "--lifecycle-demo",
+        action="store_true",
+        help="演示生命周期：运行中自动 pause → resume → stop（Phase 5.4）",
+    )
+    parser.add_argument(
+        "--recovery",
+        action="store_true",
+        help="启用失败恢复策略（退避重试 + 次数上限；默认关闭 = Phase 5.2/5.3 行为）",
+    )
+    parser.add_argument(
+        "--recovery-max-retry",
+        type=int,
+        default=3,
+        help="连续失败重试上限（0 = 不放弃；仅在 --recovery 时生效）",
+    )
     parser.add_argument("--log-level", default=None, help="覆盖配置中的日志级别")
     return parser
 
@@ -143,6 +163,103 @@ def build_metrics(config: AppConfig, args: argparse.Namespace) -> RuntimeMetrics
     return RuntimeMetricsRecorder(path=path)
 
 
+def build_recovery(config: AppConfig, args: argparse.Namespace) -> RecoveryManager:
+    """按 CLI 开关构造恢复策略（默认关闭 = 保持 Phase 5.2/5.3 行为）。"""
+    if not args.recovery:
+        return RecoveryManager(RecoveryPolicy(), sleep=time.sleep)
+    recovery_config = config.runtime.recovery.model_copy(
+        update={"enabled": True, "max_retry": args.recovery_max_retry}
+    )
+    policy = RecoveryPolicy.from_config(recovery_config)
+    print(f"recovery:   {policy.describe()}", flush=True)
+    return RecoveryManager(policy, sleep=time.sleep)
+
+
+class LifecycleScript:
+    """按时间表驱动 ``pause`` → ``resume`` → ``stop`` 的演示控制器（Phase 5.4）。
+
+    Args:
+        monitor: 目标监控器。
+        pause_after: 启动后多少秒暂停。
+        resume_after: 启动后多少秒恢复。
+        stop_after: 启动后多少秒停止（结束后主循环随即退出）。
+        print_fn: 输出函数（默认 ``print``）。
+    """
+
+    def __init__(
+        self,
+        monitor: StateMonitor,
+        *,
+        pause_after: float = 2.0,
+        resume_after: float = 4.0,
+        stop_after: float = 7.0,
+        print_fn: object = print,
+    ) -> None:
+        self._monitor = monitor
+        self._steps: tuple[tuple[float, str], ...] = (
+            (pause_after, "pause"),
+            (resume_after, "resume"),
+            (stop_after, "stop"),
+        )
+        self._print = print_fn
+        self._cancelled = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> threading.Thread:
+        """启动控制线程（守护线程）。
+
+        Returns:
+            已启动的线程对象。
+        """
+        thread = threading.Thread(target=self._run, name="live-lifecycle-script", daemon=True)
+        thread.start()
+        self._thread = thread
+        return thread
+
+    def cancel(self) -> None:
+        """请求线程尽快退出（幂等）。"""
+        self._cancelled = True
+
+    def join(self, timeout: float | None = 5.0) -> None:
+        """等待控制线程结束（保证**线程结束**、不泄漏）。"""
+        thread = self._thread
+        if thread is None:
+            return
+        self.cancel()
+        thread.join(timeout=timeout)
+
+    @property
+    def is_alive(self) -> bool:
+        """控制线程是否仍在运行。"""
+        return self._thread is not None and self._thread.is_alive()
+
+    def _run(self) -> None:
+        """按时间表执行生命周期动作（分片等待以便及时取消）。"""
+        started = time.monotonic()
+        for offset, action in self._steps:
+            while not self._cancelled:
+                remaining = offset - (time.monotonic() - started)
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.05, remaining))
+            if self._cancelled:
+                return
+            try:
+                if action == "pause":
+                    self._monitor.pause()
+                elif action == "resume":
+                    self._monitor.resume()
+                else:
+                    self._monitor.stop()
+            except InvalidRuntimeTransition as exc:
+                self._print(f"[lifecycle] {action} 被拒绝: {exc}", flush=True)
+                continue
+            self._print(
+                f"[lifecycle] {action} -> state={self._monitor.runtime_state.value}",
+                flush=True,
+            )
+
+
 def build_monitor(
     config: AppConfig,
     args: argparse.Namespace,
@@ -165,7 +282,11 @@ def build_monitor(
 
     def on_cycle(schedule: CycleSchedule) -> None:
         monitor = shared["monitor"]
-        record = monitor.metrics.last if isinstance(monitor, StateMonitor) and monitor.metrics else None
+        record = (
+            monitor.metrics.last
+            if isinstance(monitor, StateMonitor) and monitor.metrics
+            else None
+        )
         pending = shared["event"]
         print_cycle_line(record, schedule, pending if isinstance(pending, StateEvent) else None)
         shared["event"] = None
@@ -179,6 +300,7 @@ def build_monitor(
         stabilizer=StateStabilizer(config.runtime.stabilization),
         scheduler=CycleScheduler(interval_ms),
         metrics=metrics,
+        recovery=build_recovery(config, args),
         timing=args.timing,
         on_event=on_event,
         on_cycle=on_cycle,
@@ -198,7 +320,7 @@ def print_header(
     window = source.window
     separator = "-" * _SEPARATOR_WIDTH
     print("=" * _SEPARATOR_WIDTH)
-    print("Live Runtime Demo（真实窗口实时循环，Phase 5.2）")
+    print("Live Runtime Demo（真实窗口实时循环，Phase 5.2 / 5.4）")
     print("=" * _SEPARATOR_WIDTH)
     if window is not None:
         print(f"window:     {window.title}")
@@ -224,6 +346,9 @@ def print_header(
     )
     print(f"history:    {config.runtime.state_monitor.history_path}")
     print(f"metrics:    {metrics.path if metrics.path is not None else '<memory only>'}")
+    print(f"lifecycle:  {monitor.runtime_state.value}"
+          f"（{'pause/resume/stop 演示' if args.lifecycle_demo else '由 run() 驱动'}）")
+    print(f"recovery:   {monitor.recovery.policy.describe()}")
     print(separator)
     if window is None:
         print(
@@ -253,6 +378,8 @@ def print_summary(
     )
     print(f"  capture: frames={source.frames} skips={source.skip_counts or {}}")
     print(f"  health:  {monitor.health.describe()}")
+    print(f"  runtime: {monitor.lifecycle.describe()}")
+    print(f"  recover: {monitor.recovery.describe()}")
     print(f"  metrics write errors: {metrics.write_errors}")
     if metrics.path is not None:
         print(f"  metrics file: {metrics.path}")
@@ -273,7 +400,16 @@ def run(args: argparse.Namespace, config: AppConfig) -> int:
 
     with source:
         print_header(args, config, source, monitor, metrics)
-        report = monitor.run(duration_s=args.duration, max_cycles=args.max_cycles)
+        script: LifecycleScript | None = None
+        if args.lifecycle_demo:
+            script = LifecycleScript(monitor)
+            script.start()
+            print("[lifecycle] 演示脚本已启动：2s 后 pause、4s 后 resume、7s 后 stop", flush=True)
+        try:
+            report = monitor.run(duration_s=args.duration, max_cycles=args.max_cycles)
+        finally:
+            if script is not None:
+                script.join(timeout=5.0)
         print_summary(monitor, source, metrics, report)
     return EXIT_OK
 

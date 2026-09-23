@@ -98,6 +98,11 @@ MILLISECONDS_PER_SECOND: float = 1000.0
 DEFAULT_STABILIZER_MIN_FRAMES: int = 3
 #: 默认的稳定化置信度阈值（低于该值的已知状态不计入稳定计数）
 DEFAULT_STABILIZER_CONFIDENCE_THRESHOLD: float = 0.85
+#: 恢复策略默认值（Phase 5.4）：连续失败重试上限 / 首次退避 / 倍数 / 退避上限
+DEFAULT_RECOVERY_MAX_RETRY: int = 3
+DEFAULT_RECOVERY_BACKOFF_S: float = 0.5
+DEFAULT_RECOVERY_BACKOFF_FACTOR: float = 2.0
+DEFAULT_RECOVERY_MAX_BACKOFF_S: float = 8.0
 #: 稳定窗口的合法上限（防止配置成几乎不会确认的数值）
 MAX_STABILIZER_MIN_FRAMES: int = 60
 #: 关闭稳定化时使用的确认帧数（每帧立即确认）
@@ -1063,8 +1068,31 @@ class RuntimeStabilizationConfig(StrictModel):
         return self.min_frames if self.enabled else IDENTITY_STABILIZATION_FRAMES
 
 
+class RuntimeRecoveryConfig(StrictModel):
+    """失败恢复策略配置（Phase 5.4）。
+
+    长时间运行时"暂时采不到"是常态（游戏未启动、窗口最小化、设备会话失效）。本段描述
+    Runtime 应如何重试：连续失败按指数退避重试，超过 ``max_retry`` 后结束当前运行并进入
+    ``FAILED``（见 :class:`~src.runtime.state_monitor.runtime_lifecycle.RuntimeState`）。
+
+    Attributes:
+        enabled: 是否启用恢复策略。**默认 ``False``** = 保持 Phase 5.2/5.3 的既有行为
+            （失败只记入 ``skipped`` 并继续下一轮，不结束运行）。长跑场景建议开启。
+        max_retry: 连续失败的最大重试次数；``0`` 表示不放弃（无限退避，仍不会忙等）。
+        backoff_s: 首次重试前的等待时长（秒）。
+        backoff_factor: 退避倍数（指数增长）。
+        max_backoff_s: 单次等待上限（秒）。
+    """
+
+    enabled: bool = False
+    max_retry: int = Field(default=DEFAULT_RECOVERY_MAX_RETRY, ge=0)
+    backoff_s: float = Field(default=DEFAULT_RECOVERY_BACKOFF_S, ge=0.0)
+    backoff_factor: float = Field(default=DEFAULT_RECOVERY_BACKOFF_FACTOR, ge=1.0)
+    max_backoff_s: float = Field(default=DEFAULT_RECOVERY_MAX_BACKOFF_S, ge=0.0)
+
+
 class RuntimeConfig(StrictModel):
-    """运行期编排配置（Phase 3.0 / 3.1 / 3.2）。"""
+    """运行期编排配置（Phase 3.0 / 3.1 / 3.2 / 5.4）。"""
 
     state_monitor: RuntimeStateMonitorConfig = Field(
         default_factory=RuntimeStateMonitorConfig
@@ -1072,6 +1100,7 @@ class RuntimeConfig(StrictModel):
     stabilization: RuntimeStabilizationConfig = Field(
         default_factory=RuntimeStabilizationConfig
     )
+    recovery: RuntimeRecoveryConfig = Field(default_factory=RuntimeRecoveryConfig)
 
 
 class AppConfig(StrictModel):

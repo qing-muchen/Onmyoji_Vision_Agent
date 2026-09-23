@@ -41,12 +41,13 @@ from src.runtime.state_monitor import (
     ForegroundOutcome,
     OnmyojiWindowSource,
     RuntimeMetricsRecorder,
+    RuntimeState,
     SkipReason,
     StateMonitor,
     StateStabilizer,
     WindowFrameSource,
 )
-from src.runtime.state_monitor import frame_source as frame_source_module
+from src.runtime.state_monitor import capture_backend as capture_backend_module
 from src.utils.logger import get_logger
 from src.vision.capture import CaptureBackend, Frame
 from src.vision.evidence import BaseEvidenceDetector, EvidenceRegistry, EvidenceResult
@@ -212,7 +213,7 @@ def fake_backend_factory(
         region = window.rect if window is not None else Rect(x=0, y=0, width=8, height=8)
         return FakeBackend(region=region)
 
-    monkeypatch.setattr(frame_source_module, "create_capture_backend", factory)
+    monkeypatch.setattr(capture_backend_module, "create_capture_backend", factory)
     return calls
 
 
@@ -484,7 +485,7 @@ def test_capture_failure_is_reported_and_recovers(
         region = window.rect if window is not None else Rect(x=0, y=0, width=8, height=8)
         return FakeBackend(region=region, fail_times=1 if created["count"] == 1 else 0)
 
-    monkeypatch.setattr(frame_source_module, "create_capture_backend", factory)
+    monkeypatch.setattr(capture_backend_module, "create_capture_backend", factory)
 
     with source:
         first = source.get_frame()
@@ -515,7 +516,7 @@ def test_backend_unavailable_is_reported(
     ) -> object:
         raise CaptureError("所有候选采集后端均不可用")
 
-    monkeypatch.setattr(frame_source_module, "create_capture_backend", factory)
+    monkeypatch.setattr(capture_backend_module, "create_capture_backend", factory)
 
     with source:
         report = monitor.run(max_cycles=2)
@@ -783,7 +784,7 @@ def test_stabilizer_confidence_threshold_still_applied(tmp_path: Path) -> None:
 
 
 def test_metrics_records_required_fields(tmp_path: Path) -> None:
-    """指标字段齐全（含 Phase 5.3 诊断字段），且不含截图与用户数据。"""
+    """指标字段齐全（含 Phase 5.3 诊断与 Phase 5.4 生命周期字段），且不含截图与用户数据。"""
     metrics_path = tmp_path / "runtime_metrics.jsonl"
     recorder = RuntimeMetricsRecorder(path=metrics_path)
     monitor, _ = build_scripted_monitor([StateName.YARD], tmp_path, metrics=recorder)
@@ -810,6 +811,10 @@ def test_metrics_records_required_fields(tmp_path: Path) -> None:
         "capture_status",
         "foreground_status",
         "unknown_reason",
+        # Phase 5.4 追加的生命周期 / 恢复字段
+        "runtime_state",
+        "recovery_count",
+        "last_recovery_reason",
     }
     assert first["cycle_id"] == 1
     assert first["state"] == StateName.YARD.value
@@ -818,6 +823,9 @@ def test_metrics_records_required_fields(tmp_path: Path) -> None:
     assert first["capture_status"] == CaptureOutcome.OK.value
     assert first["foreground_status"] == ForegroundOutcome.NOT_CHECKED.value
     assert first["unknown_reason"] is None  # 状态明确 → 无 unknown 诊断
+    assert first["runtime_state"] == RuntimeState.RUNNING.value
+    assert first["recovery_count"] == 0
+    assert first["last_recovery_reason"] is None
     # 不保存截图 / 图像内容 / 窗口标题等用户数据
     assert "image" not in first
     assert "screenshot" not in first

@@ -229,7 +229,30 @@ Phase 4.6.1 起扩展为完整状态集）：
     capture 失败不崩、前台跳过、五类 `unknown` 原因、metrics schema 兼容）与
     `docs/PHASE5_3_RUNTIME_HARDENING_REPORT.md`。
 
-### 架构总览（Phase 5.3 完成后的主链路）
+**Phase 5.4 — Runtime Reliability & Lifecycle Management（已完成：可靠性收敛）**：只做长时间运行
+可靠性（**不进入任务系统、不实现点击**，未改 detector / evidence rule / `StateResult` /
+`StateClassifier` / dataset）：
+
+73. **采集细节再拆分**：`frame_source.py` → `capture_backend.py`（dxcam/mss 后端的创建、复用、
+    区域变化重建与释放）+ `window_capture.py`（hwnd 校验 / 采集区域 / 几何刷新 / 缩放检测 /
+    查找冷却）+ `frame_source.py`（编排 + 重试 + 状态）；
+74. **生命周期状态机** `runtime_lifecycle.py`：`RuntimeState`（`INITIALIZING` / `READY` /
+    `RUNNING` / `PAUSED` / `RECOVERING` / `STOPPED` / `FAILED`）+ 显式转换表
+    （非法转换抛 `InvalidRuntimeTransition`）+ 转换历史；
+75. **StateMonitor 生命周期入口**：`initialize()` / `start()` / `pause()` / `resume()` / `stop()`；
+    暂停 = **停止处理新帧**（节拍照常推进）；`step()` / `run()` 签名与行为**完全未变**
+    （未调用时零影响）；
+76. **恢复策略** `recovery.py`：`RecoveryPolicy`（`max_retry` / `backoff_s` / `factor` / 上限）→
+    指数退避重试，用尽后结束运行并进入 `FAILED`（**不会死循环、不会忙等**）；
+    默认关闭（保持 Phase 5.2/5.3 行为），`max_retry: 0` 表示不放弃（等游戏窗口出现）；
+77. **资源释放**：`stop()` → 帧来源 `stop()` → 后端 `release()`（dxcam 会话与取帧线程结束 /
+    mss 会话关闭）；幂等、异常安全、未启动也可安全调用；demo 的生命周期演示线程显式 join；
+78. **指标扩展**（JSONL 兼容）：追加 `runtime_state` / `recovery_count` / `last_recovery_reason`；
+    新增 `tests/test_phase54_runtime_lifecycle.py`（44 个用例）与
+    `docs/PHASE5_4_RUNTIME_LIFECYCLE_REPORT.md`；`live_runtime_demo.py` 新增
+    `--lifecycle-demo`（启动 → 运行 → pause → resume → stop）与 `--recovery` / `--recovery-max-retry`。
+
+### 架构总览（Phase 5.4 完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -244,6 +267,8 @@ StateResult                            state_name / confidence / source / reason
 StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json）
 CycleScheduler（deadline based）       runtime：节拍 + late cycle / overrun 记录
 CycleMetrics → RuntimeMetricsRecorder  runtime：逐轮指标（可选 JSONL，无截图 / 无用户数据）
+RuntimeLifecycle                       runtime：INITIALIZING/READY/RUNNING/PAUSED/RECOVERING/STOPPED/FAILED
+RecoveryManager                        runtime：退避重试 + 次数上限（用尽 → FAILED；不会死循环 / 忙等）
 ```
 
 | 层 | 包 | 职责 | 明确不做 |
@@ -254,7 +279,7 @@ CycleMetrics → RuntimeMetricsRecorder  runtime：逐轮指标（可选 JSONL�
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释的视觉证据**（可靠度 / 分组 / 解释信息） | 不产出状态、不做时间滤波 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`） | 不做循环 / 采集 / 时间滤波 |
-| **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`） | 不做视觉判定、不抢焦点、不点击 |
+| **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`） | 不做视觉判定、不抢焦点、不点击 |
 
 四个"置信度"语义互不混用（详见 `docs/ARCHITECTURE_OVERVIEW.md`）：
 
@@ -265,11 +290,11 @@ CycleMetrics → RuntimeMetricsRecorder  runtime：逐轮指标（可选 JSONL�
 | `evidence.aggregator.rules[*].state_confidence.min` | **状态可信度下限**（可选校准；`rule_based`） |
 | `runtime.stabilization.confidence_threshold` | 稳定化门槛（消费**状态可信度**） |
 
-**尚未实现**：Phase 5.4 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
-Phase 5.3 只做工程化收敛，未做提前优化）、
-Phase 6/7/8 的 State Integration /
-Action /
-State Machine / Task System、YOLO 与深度学习模型、鼠标点击与键盘输入，以及任何**基于文字或界面的
+**尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
+Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
+Phase 6 的 Task Engine / Behavior Orchestration、
+Phase 7 的 Action Layer（受控键鼠输入）、
+Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，以及任何**基于文字或界面的
 决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
 ## 目录结构
@@ -370,9 +395,13 @@ Onmyoji_Vision_Agent/
 │   │       ├── scheduler.py      #     CycleScheduler（deadline based 节拍 + late cycle 记录）
 │   │       ├── metrics.py        #     CycleMetrics / RuntimeMetricsRecorder（逐轮指标，可选 JSONL）
 │   │       ├── runtime_diagnostics.py # RuntimeHealth / UnknownReason（区分故障与"不知道"，Phase 5.3）
+│   │       ├── runtime_lifecycle.py  # RuntimeState / RuntimeLifecycle（显式状态机，Phase 5.4）
+│   │       ├── recovery.py       #     RecoveryPolicy / RecoveryManager（退避 + 上限，Phase 5.4）
 │   │       ├── window_binding.py #     窗口查找/绑定/几何（OnmyojiWindowSource，Phase 5.3 拆出）
 │   │       ├── foreground_guard.py #   前台门控 + SkipReason（只检查不抢占，Phase 5.3 拆出）
-│   │       ├── frame_source.py   #     采集编排：dxcam 优先 / mss 回退（WindowFrameSource）
+│   │       ├── window_capture.py #     hwnd/区域/几何刷新/缩放检测/查找冷却（Phase 5.4 拆出）
+│   │       ├── capture_backend.py #    dxcam/mss 后端创建/复用/重建/释放（Phase 5.4 拆出）
+│   │       ├── frame_source.py   #     采集编排 + 重试 + 状态（WindowFrameSource）
 │   │       ├── window_source.py  #     兼容层：重新导出上述符号（旧 import 路径仍可用）
 │   │       ├── stabilizer.py     #     StateStabilizer（逐帧 -> 稳定状态）
 │   │       ├── report.py         #     MonitorReport / StopReason（运行摘要）
@@ -459,6 +488,8 @@ python examples/live_runtime_demo.py                          # 前台门控 + �
 python examples/live_runtime_demo.py --duration 600           # 10 分钟长跑（写 logs/runtime_metrics.jsonl）
 python examples/live_runtime_demo.py --max-cycles 20 --timing # 短跑 + 每轮耗时分解
 python examples/live_runtime_demo.py --allow-background       # 诊断：关闭前台门控（截图可能含遮挡窗口）
+python examples/live_runtime_demo.py --lifecycle-demo         # 生命周期演示：pause → resume → stop（Phase 5.4）
+python examples/live_runtime_demo.py --duration 600 --recovery --recovery-max-retry 0   # 长跑 + 无限退避恢复
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -1429,7 +1460,7 @@ Stable Changes: 0            # 首次确认是基线，不算变化
   例如 `victory_icon` / `reward_panel` 各只有 1 张正样本（置信度被折价到 `0.70`），
   靠 Phase 4.6.6 的**状态可信度校准**（`state_confidence`）补偿才达到稳定门槛。
 
-## 真实运行时循环（Phase 5.2 / 5.3）
+## 真实运行时循环（Phase 5.2 / 5.3 / 5.4）
 
 把 Runtime 接到**真实阴阳师桌面窗口**：窗口绑定 → 前台门控 → dxcam/mss 采集 → 证据 → 状态 →
 稳定化 → 事件，按 deadline based 500 ms 节拍持续运行。本层只做"截图、窗口识别、循环调度、
@@ -1485,6 +1516,37 @@ Stable Changes: 0            # 首次确认是基线，不算变化
 
 `StateResult` 契约**未改动**：分类只作为 Runtime 侧 metadata（运行指标 + `RuntimeHealth`）。
 
+### 生命周期与失败恢复（Phase 5.4）
+
+长时间运行需要能**说清楚自己处于什么状态**，并在暂时采不到画面时**退避重试而不是死循环**：
+
+```text
+INITIALIZING ──initialize──▶ READY ──start──▶ RUNNING ⇄ PAUSED
+                                   │              │
+                             capture failure      └──stop──▶ STOPPED
+                                   ▼
+                              RECOVERING ──recovered──▶ RUNNING
+                                   │
+                            retry exhausted ──▶ FAILED
+```
+
+| API / 组件 | 说明 |
+| --- | --- |
+| `StateMonitor.initialize()` / `start()` / `pause()` / `resume()` / `stop()` | 显式生命周期入口；**暂停 = 停止处理新帧**（节拍照常推进）；未调用时对 `step()` / `run()` **零影响** |
+| `RuntimeLifecycle` / `RuntimeState` | 转换表驱动（非法转换抛 `InvalidRuntimeTransition`）+ 转换历史；`STOPPED` / `FAILED` 可重新 `initialize()` |
+| `RecoveryManager` / `RecoveryPolicy` | `runtime.recovery`：`max_retry`（0 = 不放弃）+ 指数退避（`backoff_s × factor^n`，封顶 `max_backoff_s`）；用尽 → 结束运行并进入 `FAILED` |
+| `stop()` 资源释放 | 帧来源 → 后端 `release()`（dxcam 会话与取帧线程结束 / mss 会话关闭）；幂等、异常安全 |
+| 指标 | 追加 `runtime_state` / `recovery_count` / `last_recovery_reason`（旧字段不变） |
+
+```powershell
+# 演示"启动 → 运行 → pause → resume → stop"（2s 暂停、4s 恢复、7s 停止）
+python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recovery --recovery-max-retry 0
+```
+
+> 真实演示输出（截取）：`[lifecycle] pause -> state=paused` → 暂停期间**没有新的 cycle 行**
+> （节拍空转）→ `[lifecycle] resume -> state=running` → `[lifecycle] stop -> state=stopped`，
+> 摘要 `stop=stop_requested`、`late: 0/15`（12 处理轮 + 3 暂停轮）。
+
 ### 真实 10 分钟数据（2 × 1200 轮）
 
 | 口径 | cycles | ok | skipped | latency mean | p95 | fps | late cycle |
@@ -1495,7 +1557,8 @@ Stable Changes: 0            # 首次确认是基线，不算变化
 两段均 0 崩溃、0 判定失败、0 metrics 写入失败；环境（i7-14650HX / RTX 5050 Laptop / Windows 11）、
 真实环境差异（detect ≈240–289 ms vs 离线 185 ms）、判定恒为 `unknown` 的数据侧原因与全部局限，
 见 `docs/PHASE5_2_REAL_RUNTIME_REPORT.md`；模块拆分与诊断层的设计、API 兼容与风险见
-`docs/PHASE5_3_RUNTIME_HARDENING_REPORT.md`。
+`docs/PHASE5_3_RUNTIME_HARDENING_REPORT.md`；生命周期 / 恢复策略 / 资源释放与测试见
+`docs/PHASE5_4_RUNTIME_LIFECYCLE_REPORT.md`。
 
 ## 代码规范
 
@@ -1545,9 +1608,13 @@ Stable Changes: 0            # 首次确认是基线，不算变化
   vision unknown）、`unknown` 原因细化（`no_evidence` / `unsupported_scene` / `detector_failure` /
   `not_foreground` / `skipped`）、运行指标追加诊断字段（JSONL 兼容）。
   **行为完全一致**（896 passed）、未改视觉判定、未做性能优化。
-- Phase 5.4：运行时优化 —— 检测优化（ROI / 模板数 / 尺度收敛）、多线程或异步 pipeline、
-  更高频率循环（真实环境余量约 210–260 ms，见 `docs/PHASE5_2_REAL_RUNTIME_REPORT.md`；
-  `frame_source.py` 的进一步拆分也在此阶段评估）。
+- **Phase 5.4（已完成：运行时可靠性与生命周期）**：采集细节再拆分（`capture_backend` /
+  `window_capture` / `frame_source`）、生命周期状态机（`RuntimeState` + 转换表 + 转换历史）、
+  `StateMonitor.initialize/start/pause/resume/stop`、失败恢复策略（退避 + 次数上限，用尽 → `FAILED`）、
+  `stop()` 资源释放（后端关闭 / 线程结束 / 异常安全）、指标追加
+  `runtime_state` / `recovery_count` / `last_recovery_reason`。**Runtime 层自此冻结。**
+- Phase 5.5：运行时优化 —— 检测优化（ROI / 模板数 / 尺度收敛）、多线程或异步 pipeline、
+  更高频率循环（真实环境余量约 210–260 ms，见 `docs/PHASE5_2_REAL_RUNTIME_REPORT.md`）。
 - Phase 6：State Integration —— 事件 / 落盘 / 观测与状态语义收敛。
 - Phase 7：Action Planning & Action Engine —— 受控的键鼠输入与安全约束
   （`src/action`，坐标一律经 `CoordinateTransform` 映射）。

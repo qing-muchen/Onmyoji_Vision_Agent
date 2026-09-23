@@ -346,6 +346,20 @@ runtime:
     min_frames: 3
     # 置信度阈值：已知状态低于该值的帧不计入稳定计数（unknown 豁免，因其置信度恒为 0）
     confidence_threshold: 0.85
+  # 失败恢复策略（Phase 5.4）：长时间运行时"暂时采不到"是常态（游戏未启动、窗口最小化、
+  # 设备会话失效）。启用后：连续失败按指数退避重试，超过 max_retry 后结束运行并进入 FAILED
+  # （不会死循环、不会忙等）。未启用时保持 Phase 5.2/5.3 行为：失败只记 skipped 并继续下一轮。
+  recovery:
+    # 默认关闭；长跑建议开启（等游戏窗口出现时用 max_retry: 0 表示不放弃）
+    enabled: false
+    # 连续失败重试上限；0 = 不放弃（仍受 max_backoff_s 限制，不会忙等）
+    max_retry: 3
+    # 首次退避时长（秒）
+    backoff_s: 0.5
+    # 退避倍数（指数增长）
+    backoff_factor: 2.0
+    # 单次退避上限（秒）
+    max_backoff_s: 8.0
 
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL

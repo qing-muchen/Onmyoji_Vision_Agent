@@ -51,10 +51,21 @@ from src.runtime.state_monitor.metrics import (
     RuntimeMetricsRecorder,
 )
 from src.runtime.state_monitor.report import MonitorReport, StopReason, local_now_iso
+from src.runtime.state_monitor.recovery import (
+    RecoveryAction,
+    RecoveryDecision,
+    RecoveryManager,
+    RecoveryPolicy,
+)
 from src.runtime.state_monitor.runtime_diagnostics import (
     CycleDiagnosis,
     RuntimeDiagnostics,
     RuntimeHealth,
+)
+from src.runtime.state_monitor.runtime_lifecycle import (
+    LifecycleTransition,
+    RuntimeLifecycle,
+    RuntimeState,
 )
 from src.runtime.state_monitor.scheduler import CycleSchedule, CycleScheduler
 from src.runtime.state_monitor.source import FrameSource, StatusAwareSource
@@ -105,6 +116,8 @@ class StateMonitor:
         history: StateHistoryStore | None = None,
         scheduler: CycleScheduler | None = None,
         metrics: RuntimeMetricsRecorder | None = None,
+        lifecycle: RuntimeLifecycle | None = None,
+        recovery: RecoveryManager | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = local_now_iso,
@@ -138,6 +151,14 @@ class StateMonitor:
         )
         self._metrics = metrics
         self._diagnostics = RuntimeDiagnostics()
+        self._lifecycle = (
+            lifecycle if lifecycle is not None else RuntimeLifecycle(now=now)
+        )
+        self._recovery = (
+            recovery if recovery is not None else RecoveryManager(RecoveryPolicy(), sleep=sleep)
+        )
+        self._stop_requested = False
+        self._paused_cycles = 0
         self._clock = clock
         self._now = now
         self._timing_enabled = timing
@@ -168,6 +189,8 @@ class StateMonitor:
         history: StateHistoryStore | None = None,
         scheduler: CycleScheduler | None = None,
         metrics: RuntimeMetricsRecorder | None = None,
+        lifecycle: RuntimeLifecycle | None = None,
+        recovery: RecoveryManager | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = local_now_iso,
@@ -213,6 +236,13 @@ class StateMonitor:
             if metrics is not None
             else RuntimeMetricsRecorder.from_config(config.runtime.state_monitor)
         )
+        active_recovery = (
+            recovery
+            if recovery is not None
+            else RecoveryManager(
+                RecoveryPolicy.from_config(config.runtime.recovery), sleep=sleep
+            )
+        )
         return cls(
             entry,
             source,
@@ -222,6 +252,8 @@ class StateMonitor:
             history=history,
             scheduler=scheduler,
             metrics=active_metrics,
+            lifecycle=lifecycle,
+            recovery=active_recovery,
             clock=clock,
             sleep=sleep,
             now=now,
@@ -288,6 +320,31 @@ class StateMonitor:
     def last_evidence_hits(self) -> int | None:
         """最近一轮命中的证据条数（Phase 5.3；帧路径或尚未判定时为 ``None``）。"""
         return self._last_evidence_hits
+
+    @property
+    def lifecycle(self) -> RuntimeLifecycle:
+        """生命周期状态机（Phase 5.4：``INITIALIZING`` / ``READY`` / ``RUNNING`` / …）。"""
+        return self._lifecycle
+
+    @property
+    def recovery(self) -> RecoveryManager:
+        """失败恢复策略管理器（Phase 5.4）。"""
+        return self._recovery
+
+    @property
+    def runtime_state(self) -> RuntimeState:
+        """当前运行时状态（等价于 ``monitor.lifecycle.state``）。"""
+        return self._lifecycle.state
+
+    @property
+    def paused_cycles(self) -> int:
+        """暂停期间空转的节拍数（不计入 ``cycles``）。"""
+        return self._paused_cycles
+
+    @property
+    def stop_requested(self) -> bool:
+        """是否已请求停止（``stop()`` 后为 ``True``，直到下次 ``run()``）。"""
+        return self._stop_requested
 
     @property
     def source(self) -> FrameSource:
@@ -541,6 +598,9 @@ class StateMonitor:
                 capture_status=diagnosis.capture_status if diagnosis is not None else None,
                 foreground_status=diagnosis.foreground_status if diagnosis is not None else None,
                 unknown_reason=diagnosis.unknown_reason if diagnosis is not None else None,
+                runtime_state=self._lifecycle.state.value,
+                recovery_count=self._recovery.count,
+                last_recovery_reason=self._recovery.last_reason,
             ),
             overrun_ms=schedule.overrun_ms,
         )
@@ -569,6 +629,155 @@ class StateMonitor:
         passed = getattr(status, "foreground", None) is True
         return checked, passed
 
+    # ---- 生命周期（Phase 5.4） ----------------------------------------------
+
+    def initialize(self) -> RuntimeState:
+        """初始化运行时：重置统计、启动帧来源，状态 ``INITIALIZING``/``STOPPED`` → ``READY``。
+
+        幂等；``step()`` / ``run()`` 的行为不受影响（``run()`` 自己也会重置统计）。
+
+        Returns:
+            转换后的运行时状态。
+        """
+        self._reset_runtime()
+        state = self._lifecycle.initialize()
+        self._start_source()
+        logger.info("运行时已初始化：%s", self._lifecycle.describe())
+        return state
+
+    def start(self) -> RuntimeState:
+        """启动运行：状态 → ``RUNNING``（幂等，不阻塞）。
+
+        循环本身仍由 :meth:`run` 驱动；本方法用于显式表达"开始运行"并把帧来源投入工作
+        （``FrameSource`` 提供 ``start()`` 时调用）。
+
+        Returns:
+            转换后的运行时状态。
+        """
+        if self._lifecycle.state in (
+            RuntimeState.INITIALIZING,
+            RuntimeState.STOPPED,
+            RuntimeState.FAILED,
+        ):
+            self._reset_runtime()
+            self._lifecycle.initialize(reason="auto-initialize")
+        state = self._lifecycle.start()
+        self._stop_requested = False
+        self._start_source()
+        logger.info("运行时已启动：%s", self._lifecycle.describe())
+        return state
+
+    def pause(self) -> RuntimeState:
+        """暂停：停止**处理新帧**（节拍与 ``duration`` 计时继续推进）。
+
+        Returns:
+            转换后的运行时状态。
+
+        Raises:
+            InvalidRuntimeTransition: 当前状态不是 ``RUNNING``。
+        """
+        state = self._lifecycle.pause()
+        logger.info("运行时已暂停（不再处理新帧）：%s", self._lifecycle.describe())
+        return state
+
+    def resume(self) -> RuntimeState:
+        """恢复：从 ``PAUSED`` 回到 ``RUNNING``（幂等）。
+
+        Returns:
+            转换后的运行时状态。
+        """
+        state = self._lifecycle.resume()
+        logger.info("运行时已恢复：%s", self._lifecycle.describe())
+        return state
+
+    def stop(self) -> RuntimeState:
+        """停止：请求循环退出并**释放采集资源**（幂等、异常安全）。
+
+        * 设置停止请求：``run()`` 会在下一轮检测到并结束（``StopReason.STOP_REQUESTED``）；
+        * 立即释放帧来源（``FrameSource`` 提供 ``stop()`` 时调用）→ dxcam 会话与内部线程结束、
+          mss 会话关闭；
+        * 状态 → ``STOPPED``（可用 :meth:`initialize` / :meth:`start` 重新开始）。
+
+        Returns:
+            转换后的运行时状态。
+        """
+        self._stop_requested = True
+        state = self._lifecycle.stop()
+        self._stop_source()
+        logger.info("运行时已停止（资源已释放）：%s", self._lifecycle.describe())
+        return state
+
+    @property
+    def lifecycle_transitions(self) -> tuple[LifecycleTransition, ...]:
+        """生命周期转换历史（便于诊断 / 测试）。"""
+        return self._lifecycle.transitions
+
+    def _reset_runtime(self) -> None:
+        """重置一次运行的全部累积状态（事件、计数、稳定化、诊断、恢复）。"""
+        self._events.clear()
+        self._current_state = self._last_result = self._last_stable = None
+        self._cycles = self._classified = self._skipped = 0
+        self._errors = 0
+        self._paused_cycles = 0
+        self._last_evidence_hits = None
+        self._stabilizer.reset()
+        self._diagnostics.reset()
+        self._recovery.reset()
+
+    def _start_source(self) -> None:
+        """启动帧来源（若其提供 ``start()``；幂等，异常不致命）。"""
+        starter = getattr(self._source, "start", None)
+        if not callable(starter):
+            return
+        try:
+            starter()
+        except Exception as exc:  # noqa: BLE001 - 启动失败由采集层按"跳过"处理
+            logger.warning("帧来源启动失败（将继续按轮次重试）：%s", exc)
+
+    def _stop_source(self) -> None:
+        """停止帧来源并释放资源（若其提供 ``stop()``；异常安全）。"""
+        stopper = getattr(self._source, "stop", None)
+        if not callable(stopper):
+            return
+        try:
+            stopper()
+        except Exception as exc:  # noqa: BLE001 - 清理路径不应影响停止流程
+            logger.warning("帧来源停止异常（已忽略）：%s", exc)
+
+    def _handle_recovery(self, *, frame_ok: bool, reason: str | None) -> bool:
+        """按恢复策略处理本轮结果。
+
+        Args:
+            frame_ok: 本轮是否取到帧。
+            reason: 失败原因（``SkipReason`` 值或 ``judge_failure``）。
+
+        Returns:
+            ``True`` 表示重试已用尽（调用方应结束本次运行）。
+        """
+        if not self._recovery.enabled:
+            return False
+        if frame_ok:
+            if self._recovery.register_success():
+                self._lifecycle.finish_recovery()
+            return False
+
+        decision: RecoveryDecision = self._recovery.register_failure(reason)
+        if decision.action is RecoveryAction.RETRY:
+            if self._lifecycle.is_running:
+                self._lifecycle.begin_recovery(reason or "capture_failure")
+            return False
+        if decision.action is RecoveryAction.EXHAUSTED:
+            if not self._lifecycle.is_terminal:
+                self._lifecycle.fail(reason=reason or "recovery exhausted")
+            self._stop_source()
+            logger.error(
+                "恢复重试用尽，结束本次运行（连续失败 %d 次，原因=%s）",
+                self._recovery.attempts,
+                reason or "unknown",
+            )
+            return True
+        return False
+
     def run(
         self,
         *,
@@ -585,12 +794,17 @@ class StateMonitor:
             运行摘要（含事件、跳过次数与停止原因）；历史写入失败时抛
             :class:`~src.core.exceptions.MonitorError`。
         """
-        self._events.clear()
-        self._current_state = self._last_result = self._last_stable = None
-        self._cycles = self._classified = self._skipped = 0
-        self._errors = 0
-        self._stabilizer.reset()
-        self._diagnostics.reset()
+        self._reset_runtime()
+        # 生命周期同步（Phase 5.4）：run() 始终可运行，因此必要时自动初始化并进入 RUNNING
+        if self._lifecycle.state in (
+            RuntimeState.INITIALIZING,
+            RuntimeState.STOPPED,
+            RuntimeState.FAILED,
+        ):
+            self._lifecycle.initialize(reason="auto-initialize")
+        if not self._lifecycle.is_running:
+            self._lifecycle.start(reason="run")
+        self._stop_requested = False
 
         started_at = self._now()
         self._history.start(timestamp=started_at, interval_ms=self._config.interval_ms)
@@ -607,12 +821,22 @@ class StateMonitor:
         )
         try:
             while True:
+                if self._stop_requested:
+                    stop_reason = StopReason.STOP_REQUESTED
+                    break
                 if max_cycles is not None and self._cycles >= max_cycles:
                     stop_reason = StopReason.MAX_CYCLES
                     break
                 if duration_s is not None and (self._clock() - start_clock) >= duration_s:
                     stop_reason = StopReason.DURATION
                     break
+                if self._lifecycle.is_paused:
+                    # 暂停：保持节拍，但**不处理新帧**（不计轮次、不判定、不写指标）
+                    paused_started = self._scheduler.begin()
+                    self._scheduler.finish(paused_started)
+                    logger.debug("已暂停，本轮不处理新帧（累计暂停轮次 %d）", self._paused_cycles + 1)
+                    self._paused_cycles += 1
+                    continue
 
                 cycle_started = self._scheduler.begin()
                 errors_before = self._errors
@@ -650,6 +874,12 @@ class StateMonitor:
                     backend=frame.source if frame is not None else None,
                     evidence_hits=self._last_evidence_hits if frame is not None else None,
                 )
+                # 失败恢复（Phase 5.4）：仅当策略启用时生效；退避发生在耗时统计之后，
+                # 因此不会污染本轮 latency，但本轮指标能反映恢复后的状态
+                exhausted = self._handle_recovery(
+                    frame_ok=frame is not None,
+                    reason=skip_reason or ("judge_failure" if failed else None),
+                )
                 self._record_metrics(
                     schedule=schedule,
                     timestamp=timestamp,
@@ -662,6 +892,9 @@ class StateMonitor:
                 )
                 if self._on_cycle is not None:
                     self._on_cycle(schedule)
+                if exhausted:
+                    stop_reason = StopReason.RECOVERY_EXHAUSTED
+                    break
         except KeyboardInterrupt:
             stop_reason = StopReason.INTERRUPT
             logger.warning("收到中断信号（Ctrl+C），正在收尾并保存历史")
@@ -669,6 +902,9 @@ class StateMonitor:
         ended_at = self._now()
         self._history.update_progress(cycles=self._cycles, skipped=self._skipped, timestamp=ended_at)
         self._history.save()
+        if self._lifecycle.is_running or self._lifecycle.is_recovering:
+            # 一次运行结束（未显式 stop）：回到 READY，可再次 run()
+            self._lifecycle.transition(RuntimeState.READY, reason="run finished")
         if self._scheduler.late_cycles:
             logger.warning(
                 "本轮运行有 %d/%d 个 late cycle（单轮耗时超过 %dms）：累计超时 %.1fms，最大 %.1fms",

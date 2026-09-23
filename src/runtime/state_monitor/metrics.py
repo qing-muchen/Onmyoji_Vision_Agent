@@ -100,10 +100,16 @@ class CycleMetrics:
         foreground_status: 前台门控结果（``ok`` / ``blocked`` / ``n/a``，Phase 5.3 诊断字段）。
         unknown_reason: ``unknown`` 的细分原因（``no_evidence`` / ``unsupported_scene`` /
             ``detector_failure`` / ``not_foreground`` / ``skipped``）；状态明确时为 ``None``。
+        runtime_state: 本轮结束后运行时的生命周期状态（Phase 5.4，例如 ``running`` /
+            ``paused`` / ``recovering``）。
+        recovery_count: 截至本轮的累计恢复次数（Phase 5.4）。
+        last_recovery_reason: 最近一次恢复原因（Phase 5.4；未发生过恢复时为 ``None``）。
 
     字段兼容性：``cycle_id / timestamp / state / confidence / stable_state / latency_ms /
-    frame_ms / status / skip_reason / frame_source`` 为既有字段（格式与含义不变），
-    诊断字段为 Phase 5.3 **追加**，旧消费者忽略即可。
+    frame_ms / status / skip_reason / frame_source`` 为 Phase 5.2 既有字段（格式与含义不变），
+    ``capture_status / foreground_status / unknown_reason`` 为 Phase 5.3 追加，
+    ``runtime_state / recovery_count / last_recovery_reason`` 为 Phase 5.4 追加；
+    旧消费者忽略新增键即可。
     """
 
     cycle_id: int
@@ -120,6 +126,9 @@ class CycleMetrics:
     capture_status: CaptureOutcome | None = None
     foreground_status: ForegroundOutcome | None = None
     unknown_reason: UnknownReason | None = None
+    runtime_state: str | None = None
+    recovery_count: int = 0
+    last_recovery_reason: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """返回可 JSON 序列化的字典（枚举转字符串，不含图像与用户数据）。"""
@@ -143,6 +152,9 @@ class CycleMetrics:
             "unknown_reason": (
                 self.unknown_reason.value if self.unknown_reason is not None else None
             ),
+            "runtime_state": self.runtime_state,
+            "recovery_count": self.recovery_count,
+            "last_recovery_reason": self.last_recovery_reason,
         }
 
     def describe(self) -> str:
@@ -151,9 +163,10 @@ class CycleMetrics:
         stable = self.stable_state.value if self.stable_state is not None else "pending"
         reason = f" reason={self.skip_reason}" if self.skip_reason else ""
         unknown = f" unknown_due_to={self.unknown_reason.value}" if self.unknown_reason else ""
+        runtime = f" runtime={self.runtime_state}" if self.runtime_state else ""
         return (
             f"cycle={self.cycle_id} latency={self.latency_ms:.1f}ms frame={self.frame_ms:.1f}ms "
-            f"state={state} stable={stable} status={self.status.value}{reason}{unknown}"
+            f"state={state} stable={stable} status={self.status.value}{reason}{unknown}{runtime}"
         )
 
 

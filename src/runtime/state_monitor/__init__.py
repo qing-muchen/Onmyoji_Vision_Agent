@@ -39,6 +39,14 @@
 * :class:`~src.runtime.state_monitor.runtime_diagnostics.RuntimeHealth` /
   :class:`~src.runtime.state_monitor.runtime_diagnostics.UnknownReason` —— 运行时诊断：
   区分 **runtime failure** 与 **vision unknown**（Phase 5.3）；
+* :class:`~src.runtime.state_monitor.runtime_lifecycle.RuntimeState` /
+  :class:`~src.runtime.state_monitor.runtime_lifecycle.RuntimeLifecycle` —— 生命周期状态机
+  （Phase 5.4：``INITIALIZING`` / ``READY`` / ``RUNNING`` / ``PAUSED`` / ``RECOVERING`` /
+  ``STOPPED`` / ``FAILED``，转换表驱动）与 :class:`~src.runtime.state_monitor.monitor.StateMonitor`
+  的 ``initialize`` / ``start`` / ``pause`` / ``resume`` / ``stop`` 入口；
+* :class:`~src.runtime.state_monitor.recovery.RecoveryPolicy` /
+  :class:`~src.runtime.state_monitor.recovery.RecoveryManager` —— 失败恢复
+  （退避重试 + 次数上限；用尽 → ``FAILED``，不会死循环 / 忙等，Phase 5.4）；
 * :class:`~src.runtime.state_monitor.monitor.MonitorReport` —— 一次运行的摘要；
 * :class:`~src.runtime.state_monitor.events.StateEvent` —— 状态变化事件；
 * :class:`~src.runtime.state_monitor.history.StateHistoryStore` —— 历史记录（JSON）；
@@ -51,6 +59,10 @@
 """
 
 from src.runtime.state_monitor.events import StateEvent
+from src.runtime.state_monitor.capture_backend import (
+    BackendResult,
+    RuntimeCaptureBackend,
+)
 from src.runtime.state_monitor.foreground_guard import (
     ForegroundGuard,
     GuardVerdict,
@@ -69,6 +81,12 @@ from src.runtime.state_monitor.metrics import (
     RuntimeMetricsSummary,
 )
 from src.runtime.state_monitor.monitor import StateMonitor
+from src.runtime.state_monitor.recovery import (
+    RecoveryAction,
+    RecoveryDecision,
+    RecoveryManager,
+    RecoveryPolicy,
+)
 from src.runtime.state_monitor.report import MonitorReport, StopReason, local_now_iso
 from src.runtime.state_monitor.runtime_diagnostics import (
     CaptureOutcome,
@@ -78,6 +96,13 @@ from src.runtime.state_monitor.runtime_diagnostics import (
     RuntimeHealth,
     UnknownReason,
     resolve_unknown_reason,
+)
+from src.runtime.state_monitor.runtime_lifecycle import (
+    ALLOWED_TRANSITIONS,
+    InvalidRuntimeTransition,
+    LifecycleTransition,
+    RuntimeLifecycle,
+    RuntimeState,
 )
 from src.runtime.state_monitor.scheduler import CycleSchedule, CycleScheduler
 from src.runtime.state_monitor.source import (
@@ -90,8 +115,14 @@ from src.runtime.state_monitor.source import (
 from src.runtime.state_monitor.stabilizer import StableStateResult, StateStabilizer
 from src.runtime.state_monitor.timing import CycleTiming
 from src.runtime.state_monitor.window_binding import OnmyojiWindowSource
+from src.runtime.state_monitor.window_capture import (
+    WindowCaptureTarget,
+    WindowResolution,
+)
 
 __all__ = [
+    "ALLOWED_TRANSITIONS",
+    "BackendResult",
     "CaptureFrameSource",
     "CaptureOutcome",
     "CaptureStatus",
@@ -107,12 +138,21 @@ __all__ = [
     "ForegroundOutcome",
     "FrameSource",
     "GuardVerdict",
+    "InvalidRuntimeTransition",
+    "LifecycleTransition",
     "MonitorReport",
     "OnmyojiWindowSource",
+    "RecoveryAction",
+    "RecoveryDecision",
+    "RecoveryManager",
+    "RecoveryPolicy",
+    "RuntimeCaptureBackend",
     "RuntimeDiagnostics",
     "RuntimeHealth",
+    "RuntimeLifecycle",
     "RuntimeMetricsRecorder",
     "RuntimeMetricsSummary",
+    "RuntimeState",
     "SkipReason",
     "StableStateResult",
     "StateEvent",
@@ -122,7 +162,9 @@ __all__ = [
     "StatusAwareSource",
     "StopReason",
     "UnknownReason",
+    "WindowCaptureTarget",
     "WindowFrameSource",
+    "WindowResolution",
     "local_now_iso",
     "make_foreground_gate",
     "resolve_unknown_reason",

@@ -41,6 +41,7 @@ from src.runtime.state_monitor import (
     ForegroundOutcome,
     RuntimeDiagnostics,
     RuntimeMetricsRecorder,
+    RuntimeState,
     SkipReason,
     StateMonitor,
     StateStabilizer,
@@ -48,7 +49,12 @@ from src.runtime.state_monitor import (
     WindowFrameSource,
     resolve_unknown_reason,
 )
-from src.runtime.state_monitor import foreground_guard, frame_source, window_binding
+from src.runtime.state_monitor import (
+    capture_backend,
+    foreground_guard,
+    frame_source,
+    window_binding,
+)
 from src.runtime.state_monitor import window_source as legacy_window_source
 from src.vision.capture import CaptureBackend, Frame
 from src.vision.evidence import BaseEvidenceDetector, EvidenceRegistry, EvidenceResult
@@ -176,7 +182,7 @@ def fake_backend(monkeypatch: pytest.MonkeyPatch) -> None:
         region = window.rect if window is not None else Rect(x=0, y=0, width=8, height=8)
         return MiniBackend(region=region)
 
-    monkeypatch.setattr(frame_source, "create_capture_backend", factory)
+    monkeypatch.setattr(capture_backend, "create_capture_backend", factory)
 
 
 def scenario_foreground() -> int:
@@ -416,7 +422,7 @@ def test_backend_unavailable_does_not_crash_loop(
     ) -> object:
         raise CaptureError("所有候选采集后端均不可用")
 
-    monkeypatch.setattr(frame_source, "create_capture_backend", factory)
+    monkeypatch.setattr(capture_backend, "create_capture_backend", factory)
 
     with source:
         report = monitor.run(max_cycles=3)
@@ -710,10 +716,18 @@ LEGACY_METRIC_KEYS: frozenset[str] = frozenset(
 DIAGNOSTIC_METRIC_KEYS: frozenset[str] = frozenset(
     {"capture_status", "foreground_status", "unknown_reason"}
 )
+#: Phase 5.4 追加的生命周期 / 恢复字段
+LIFECYCLE_METRIC_KEYS: frozenset[str] = frozenset(
+    {"runtime_state", "recovery_count", "last_recovery_reason"}
+)
+#: 当前完整 schema（旧键名与含义始终不变）
+CURRENT_METRIC_KEYS: frozenset[str] = (
+    LEGACY_METRIC_KEYS | DIAGNOSTIC_METRIC_KEYS | LIFECYCLE_METRIC_KEYS
+)
 
 
 def test_metrics_schema_is_backward_compatible(tmp_path: Path) -> None:
-    """JSONL 同时包含既有字段（含义不变）与追加的诊断字段。"""
+    """JSONL 同时包含既有字段（含义不变）与后续阶段追加的字段。"""
     metrics_path = tmp_path / "metrics.jsonl"
     recorder = RuntimeMetricsRecorder(path=metrics_path)
     binding = MiniBinding(window=make_window())
@@ -727,19 +741,22 @@ def test_metrics_schema_is_backward_compatible(tmp_path: Path) -> None:
     payload = json.loads(metrics_path.read_text(encoding="utf-8").splitlines()[0])
     assert LEGACY_METRIC_KEYS <= set(payload)
     assert DIAGNOSTIC_METRIC_KEYS <= set(payload)
-    assert set(payload) == LEGACY_METRIC_KEYS | DIAGNOSTIC_METRIC_KEYS
+    assert LIFECYCLE_METRIC_KEYS <= set(payload)
+    assert set(payload) == CURRENT_METRIC_KEYS
     assert payload["status"] == CycleStatus.OK.value
     assert payload["state"] == StateName.UNKNOWN.value
     assert payload["capture_status"] == CaptureOutcome.OK.value
     assert payload["foreground_status"] == ForegroundOutcome.NOT_CHECKED.value
     assert payload["unknown_reason"] == UnknownReason.NO_EVIDENCE.value
+    assert payload["runtime_state"] == RuntimeState.RUNNING.value
+    assert payload["recovery_count"] == 0
     # 仍然不保存截图 / 用户数据
     assert "image" not in payload
     assert "window" not in payload
 
 
 def test_cycle_metrics_legacy_construction_still_valid() -> None:
-    """旧构造方式（不传诊断字段）仍然可用，且序列化出完整 schema。"""
+    """旧构造方式（不传诊断 / 生命周期字段）仍然可用，且序列化出完整 schema。"""
     metrics = CycleMetrics(
         cycle_id=7,
         timestamp="2025-01-01T00:00:00+08:00",
@@ -755,10 +772,13 @@ def test_cycle_metrics_legacy_construction_still_valid() -> None:
     payload = metrics.to_dict()
 
     assert LEGACY_METRIC_KEYS <= set(payload)
-    assert set(payload) == LEGACY_METRIC_KEYS | DIAGNOSTIC_METRIC_KEYS
+    assert set(payload) == CURRENT_METRIC_KEYS
     assert payload["capture_status"] is None
     assert payload["foreground_status"] is None
     assert payload["unknown_reason"] is None
+    assert payload["runtime_state"] is None
+    assert payload["recovery_count"] == 0
+    assert payload["last_recovery_reason"] is None
     assert payload["skip_reason"] is None
 
 

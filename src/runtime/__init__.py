@@ -2,9 +2,10 @@
 
 职责：把"视觉能力"与"真实窗口"组织成**可持续运行的过程**：
 
-* :mod:`src.runtime.state_monitor` —— 真实窗口帧来源（窗口绑定 / 前台门控 / dxcam+mss 采集）、
-  deadline based 节拍、状态识别与稳定化、状态变化事件、历史与运行指标落盘、
-  运行时诊断（`RuntimeHealth`：区分 runtime failure 与 vision unknown）。
+* :mod:`src.runtime.state_monitor` —— 真实窗口帧来源（窗口绑定 / 前台门控 / 采集区域 /
+  dxcam+mss 后端 / 采集编排）、deadline based 节拍、状态识别与稳定化、状态变化事件、
+  历史与运行指标落盘、运行时诊断（`RuntimeHealth`：区分 runtime failure 与 vision unknown）
+  以及生命周期与失败恢复（`RuntimeLifecycle` / `RecoveryManager`，Phase 5.4）。
 
 与其他层的关系：
 

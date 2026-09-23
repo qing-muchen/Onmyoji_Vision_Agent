@@ -25,6 +25,10 @@ class StopReason(StrEnum):
     DURATION = "duration"
     #: 收到中断信号（Ctrl+C）
     INTERRUPT = "interrupt"
+    #: 显式调用了 ``StateMonitor.stop()``（Phase 5.4）
+    STOP_REQUESTED = "stop_requested"
+    #: 恢复重试次数用尽（Phase 5.4；见 ``runtime.recovery``）
+    RECOVERY_EXHAUSTED = "recovery_exhausted"
 
 
 def local_now_iso() -> str:
