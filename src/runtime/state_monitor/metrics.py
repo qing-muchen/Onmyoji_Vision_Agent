@@ -30,6 +30,12 @@ from src.core.paths import resolve_from_project_root
 from src.utils.logger import get_logger
 from src.vision.state.models import StateName
 
+from src.runtime.state_monitor.runtime_diagnostics import (
+    CaptureOutcome,
+    ForegroundOutcome,
+    UnknownReason,
+)
+
 __all__ = [
     "CycleMetrics",
     "CycleStatus",
@@ -90,6 +96,14 @@ class CycleMetrics:
         status: 本轮结果（ok / skipped / error）。
         skip_reason: 跳过原因（仅 ``status=skipped`` 时非 ``None``）。
         frame_source: 采集后端名称（例如 ``dxcam``）；跳过时为 ``None``。
+        capture_status: 采集结果（``ok`` / ``skipped``，Phase 5.3 诊断字段）。
+        foreground_status: 前台门控结果（``ok`` / ``blocked`` / ``n/a``，Phase 5.3 诊断字段）。
+        unknown_reason: ``unknown`` 的细分原因（``no_evidence`` / ``unsupported_scene`` /
+            ``detector_failure`` / ``not_foreground`` / ``skipped``）；状态明确时为 ``None``。
+
+    字段兼容性：``cycle_id / timestamp / state / confidence / stable_state / latency_ms /
+    frame_ms / status / skip_reason / frame_source`` 为既有字段（格式与含义不变），
+    诊断字段为 Phase 5.3 **追加**，旧消费者忽略即可。
     """
 
     cycle_id: int
@@ -103,6 +117,9 @@ class CycleMetrics:
     status: CycleStatus
     skip_reason: str | None = None
     frame_source: str | None = None
+    capture_status: CaptureOutcome | None = None
+    foreground_status: ForegroundOutcome | None = None
+    unknown_reason: UnknownReason | None = None
 
     def to_dict(self) -> dict[str, object]:
         """返回可 JSON 序列化的字典（枚举转字符串，不含图像与用户数据）。"""
@@ -117,6 +134,15 @@ class CycleMetrics:
             "status": self.status.value,
             "skip_reason": self.skip_reason,
             "frame_source": self.frame_source,
+            "capture_status": (
+                self.capture_status.value if self.capture_status is not None else None
+            ),
+            "foreground_status": (
+                self.foreground_status.value if self.foreground_status is not None else None
+            ),
+            "unknown_reason": (
+                self.unknown_reason.value if self.unknown_reason is not None else None
+            ),
         }
 
     def describe(self) -> str:
@@ -124,9 +150,10 @@ class CycleMetrics:
         state = self.state.value if self.state is not None else "-"
         stable = self.stable_state.value if self.stable_state is not None else "pending"
         reason = f" reason={self.skip_reason}" if self.skip_reason else ""
+        unknown = f" unknown_due_to={self.unknown_reason.value}" if self.unknown_reason else ""
         return (
             f"cycle={self.cycle_id} latency={self.latency_ms:.1f}ms frame={self.frame_ms:.1f}ms "
-            f"state={state} stable={stable} status={self.status.value}{reason}"
+            f"state={state} stable={stable} status={self.status.value}{reason}{unknown}"
         )
 
 

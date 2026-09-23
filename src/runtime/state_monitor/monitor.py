@@ -51,6 +51,11 @@ from src.runtime.state_monitor.metrics import (
     RuntimeMetricsRecorder,
 )
 from src.runtime.state_monitor.report import MonitorReport, StopReason, local_now_iso
+from src.runtime.state_monitor.runtime_diagnostics import (
+    CycleDiagnosis,
+    RuntimeDiagnostics,
+    RuntimeHealth,
+)
 from src.runtime.state_monitor.scheduler import CycleSchedule, CycleScheduler
 from src.runtime.state_monitor.source import FrameSource, StatusAwareSource
 from src.runtime.state_monitor.stabilizer import StableStateResult, StateStabilizer
@@ -132,6 +137,7 @@ class StateMonitor:
             else CycleScheduler(config.interval_ms, clock=clock, sleep=sleep)
         )
         self._metrics = metrics
+        self._diagnostics = RuntimeDiagnostics()
         self._clock = clock
         self._now = now
         self._timing_enabled = timing
@@ -148,6 +154,7 @@ class StateMonitor:
         self._classified = 0
         self._skipped = 0
         self._errors = 0
+        self._last_evidence_hits: int | None = None
 
     @classmethod
     def from_config(
@@ -268,6 +275,21 @@ class StateMonitor:
         return self._scheduler.last
 
     @property
+    def diagnostics(self) -> RuntimeDiagnostics:
+        """运行时诊断收集器（Phase 5.3；逐轮累积，供 :attr:`health` 使用）。"""
+        return self._diagnostics
+
+    @property
+    def health(self) -> RuntimeHealth:
+        """运行时健康快照（区分 runtime failure 与 vision unknown，Phase 5.3）。"""
+        return self._diagnostics.health
+
+    @property
+    def last_evidence_hits(self) -> int | None:
+        """最近一轮命中的证据条数（Phase 5.3；帧路径或尚未判定时为 ``None``）。"""
+        return self._last_evidence_hits
+
+    @property
     def source(self) -> FrameSource:
         """使用的帧来源。"""
         return self._source
@@ -333,7 +355,7 @@ class StateMonitor:
             frame_ms: 取帧耗时（由 :meth:`run` 传入；**仅**用于耗时画像，默认 ``0.0``）。
         """
         judge_started = time.perf_counter()
-        result = self._classify(frame)
+        result, detect_ms, state_ms = self._classify(frame, profile=self._timing_enabled)
         judge_ms = (time.perf_counter() - judge_started) * 1000.0
         self._last_result = result
         self._classified += 1
@@ -367,7 +389,7 @@ class StateMonitor:
         if self._on_result is not None:
             self._on_result(result)
         if self._timing_enabled:
-            self._record_timing(frame_ms, judge_ms, stabilize_ms, result)
+            self._record_timing(frame_ms, judge_ms, stabilize_ms, result, detect_ms, state_ms)
         return result
 
     def _record_timing(
@@ -376,18 +398,15 @@ class StateMonitor:
         judge_ms: float,
         stabilize_ms: float,
         result: StateResult,
+        detect_ms: float = 0.0,
+        state_ms: float = 0.0,
     ) -> None:
         """记录本轮耗时画像（Phase 5.1；不参与任何判定与事件逻辑）。
 
-        ``detect_ms`` / ``state_ms`` 来自 :attr:`EvidenceFrameProcessor.last_timing`
-        （仅在 ``timing=True`` 时采集）；帧路径下两者为 ``0.0``。
+        ``detect_ms`` / ``state_ms`` 由 :meth:`_classify` 在同一次判定中采集
+        （与 :meth:`~src.vision.pipeline.frame_processor.EvidenceFrameProcessor.process`
+        的 ``profile=True`` 同口径）；帧路径下两者为 ``0.0``。
         """
-        detect_ms = 0.0
-        state_ms = 0.0
-        if self._processor is not None and self._processor.last_timing is not None:
-            timing = self._processor.last_timing
-            detect_ms = timing.detect_ms
-            state_ms = timing.classify_ms
         self._last_timing = CycleTiming(
             cycle=self._cycles + 1,
             frame_ms=frame_ms,
@@ -405,7 +424,9 @@ class StateMonitor:
         """最近一轮的耗时画像；未启用 ``timing`` 时为 ``None``。"""
         return self._last_timing
 
-    def _classify(self, frame: Frame) -> StateResult:
+    def _classify(
+        self, frame: Frame, *, profile: bool = False
+    ) -> tuple[StateResult, float, float]:
         """判定一帧的状态：证据流水线优先，失败降级为 ``unknown``（Phase 5）。
 
         Runtime 的职责是**调度**，不负责 detect / aggregate / OCR / 模板匹配；
@@ -413,29 +434,54 @@ class StateMonitor:
         :class:`~src.core.exceptions.OnmyojiVisionError`）在此被捕获——该帧降级为
         ``unknown`` 并记录失败原因，**绝不让监控循环崩溃**（后续帧照常处理）。
 
+        证据路径下本方法显式走 ``detect → classify`` 两步（与
+        :meth:`~src.vision.pipeline.frame_processor.EvidenceFrameProcessor.process`
+        内部完全一致，**不重复检测**），唯一目的是在同一次检测中统计"命中了多少条证据"，
+        供 Phase 5.3 的 ``unknown`` 原因细化使用（``no_evidence`` 与
+        ``unsupported_scene`` 的区分点）。
+
         Args:
             frame: 待判定的帧。
+            profile: 是否采集 ``detect`` / ``classify`` 耗时分解（Phase 5.1；
+                默认 ``False`` = 不额外计时）。
 
         Returns:
-            状态结果；判定失败时为 ``unknown``（``reason`` / ``detail`` 含失败原因）。
+            ``(状态结果, detect_ms, state_ms)``；判定失败时为 ``unknown``
+            （``reason`` / ``detail`` 含失败原因），两个耗时均为 ``0.0``。
+            本轮命中的证据条数见 :attr:`last_evidence_hits`。
         """
+        detect_ms = 0.0
+        state_ms = 0.0
         try:
             if self._processor is not None:
-                if self._timing_enabled:
-                    # 采集耗时分解（Phase 5.1）；不影响判定结果
-                    return self._processor.process(frame, profile=True)
-                return self._processor.process(frame)
+                started = time.perf_counter()
+                evidence = self._processor.detect(frame)
+                if profile:
+                    detect_ms = (time.perf_counter() - started) * 1000.0
+                    started = time.perf_counter()
+                result = self._processor.classifier.classify(evidence)
+                if profile:
+                    state_ms = (time.perf_counter() - started) * 1000.0
+                self._last_evidence_hits = sum(1 for item in evidence if item.detected)
+                return result, detect_ms, state_ms
             assert self._classifier is not None
-            return self._classifier.classify(frame)
+            result = self._classifier.classify(frame)
+            self._last_evidence_hits = None  # 帧路径不提供证据计数
+            return result, detect_ms, state_ms
         except OnmyojiVisionError as exc:
             self._errors += 1
+            self._last_evidence_hits = None
             logger.error("状态判定失败（第 %d 次），本帧降级为 unknown: %s", self._errors, exc)
-            return StateResult(
-                state_name=StateName.UNKNOWN,
-                confidence=MIN_CONFIDENCE,
-                source=StateSource.FALLBACK,
-                detail=f"state resolution failed: {exc}",
-                reason=f"evidence pipeline failure: {exc}",
+            return (
+                StateResult(
+                    state_name=StateName.UNKNOWN,
+                    confidence=MIN_CONFIDENCE,
+                    source=StateSource.FALLBACK,
+                    detail=f"state resolution failed: {exc}",
+                    reason=f"evidence pipeline failure: {exc}",
+                ),
+                detect_ms,
+                state_ms,
             )
 
     def _record_metrics(
@@ -447,6 +493,8 @@ class StateMonitor:
         frame: Frame | None,
         result: StateResult | None,
         failed: bool,
+        skip_reason: str | None = None,
+        diagnosis: CycleDiagnosis | None = None,
     ) -> None:
         """记录本轮运行指标（Phase 5.2；未启用 ``metrics`` 时是空操作）。
 
@@ -455,6 +503,9 @@ class StateMonitor:
         :class:`~src.runtime.state_monitor.source.StatusAwareSource` 的帧来源
         （例如 ``WindowFrameSource``：窗口不存在 / 最小化 / 不在前台 / 采集失败）。
 
+        Phase 5.3 追加诊断字段（:class:`~src.runtime.state_monitor.runtime_diagnostics.CycleDiagnosis`）：
+        ``capture_status`` / ``foreground_status`` / ``unknown_reason``；既有字段含义与格式不变。
+
         Args:
             schedule: 本轮节拍结果（提供耗时与超时量）。
             timestamp: 本轮时间戳（与历史记录使用同一个值）。
@@ -462,6 +513,8 @@ class StateMonitor:
             frame: 本轮帧；未取到时为 ``None``。
             result: 本轮原始判定结果；未取到帧时为 ``None``。
             failed: 本轮判定是否失败（降级为 ``unknown``）。
+            skip_reason: 帧来源报告的跳过原因（已由调用方解析）。
+            diagnosis: 本轮诊断三元组（采集 / 前台 / ``unknown`` 原因）。
         """
         metrics = self._metrics
         if metrics is None:
@@ -472,9 +525,6 @@ class StateMonitor:
             status = CycleStatus.ERROR
         else:
             status = CycleStatus.OK
-        skip_reason = None
-        if frame is None and isinstance(self._source, StatusAwareSource):
-            skip_reason = self._source.last_skip_reason
         metrics.record(
             CycleMetrics(
                 cycle_id=self._cycles,
@@ -488,9 +538,36 @@ class StateMonitor:
                 status=status,
                 skip_reason=skip_reason,
                 frame_source=frame.source if frame is not None else None,
+                capture_status=diagnosis.capture_status if diagnosis is not None else None,
+                foreground_status=diagnosis.foreground_status if diagnosis is not None else None,
+                unknown_reason=diagnosis.unknown_reason if diagnosis is not None else None,
             ),
             overrun_ms=schedule.overrun_ms,
         )
+
+    def _source_skip_reason(self) -> str | None:
+        """本轮跳过原因（来自实现了 :class:`StatusAwareSource` 的帧来源）。"""
+        if isinstance(self._source, StatusAwareSource):
+            return self._source.last_skip_reason
+        return None
+
+    def _source_skip_message(self) -> str | None:
+        """本轮跳过的可读说明（帧来源提供 ``status.message`` 时可用）。"""
+        status = getattr(self._source, "status", None)
+        message = getattr(status, "message", None)
+        return message if isinstance(message, str) and message else None
+
+    def _foreground_flags(self) -> tuple[bool, bool]:
+        """返回 ``(是否检查过前台, 是否通过)``（帧来源支持前台门控时为实际值）。
+
+        只读取帧来源暴露的属性（鸭子类型），因此对 ``CaptureFrameSource`` 等
+        不具备门控信息的来源返回 ``(False, False)``——诊断层会把它记为 ``n/a``。
+        """
+        guard = getattr(self._source, "guard", None)
+        checked = bool(getattr(guard, "enabled", False))
+        status = getattr(self._source, "status", None)
+        passed = getattr(status, "foreground", None) is True
+        return checked, passed
 
     def run(
         self,
@@ -513,6 +590,7 @@ class StateMonitor:
         self._cycles = self._classified = self._skipped = 0
         self._errors = 0
         self._stabilizer.reset()
+        self._diagnostics.reset()
 
         started_at = self._now()
         self._history.start(timestamp=started_at, interval_ms=self._config.interval_ms)
@@ -557,13 +635,30 @@ class StateMonitor:
                 )
 
                 schedule = self._scheduler.finish(cycle_started)
+                failed = self._errors > errors_before
+                skip_reason = self._source_skip_reason()
+                foreground_checked, foreground_passed = self._foreground_flags()
+                diagnosis = self._diagnostics.observe(
+                    frame_ok=frame is not None,
+                    result=result,
+                    judge_failed=failed,
+                    skip_reason=skip_reason,
+                    skip_message=self._source_skip_message(),
+                    foreground_checked=foreground_checked,
+                    foreground_passed=foreground_passed,
+                    latency_ms=schedule.elapsed_ms,
+                    backend=frame.source if frame is not None else None,
+                    evidence_hits=self._last_evidence_hits if frame is not None else None,
+                )
                 self._record_metrics(
                     schedule=schedule,
                     timestamp=timestamp,
                     frame_ms=frame_ms,
                     frame=frame,
                     result=result,
-                    failed=self._errors > errors_before,
+                    failed=failed,
+                    skip_reason=skip_reason,
+                    diagnosis=diagnosis,
                 )
                 if self._on_cycle is not None:
                     self._on_cycle(schedule)

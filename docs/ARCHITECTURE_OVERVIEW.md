@@ -1,6 +1,6 @@
 # Architecture Overview — Onmyoji Vision Agent
 
-> 本文件描述 **Phase 5.2 完成后的架构**：分层职责、依赖方向、数据流、数据模型、
+> 本文件描述 **Phase 5.3 完成后的架构**：分层职责、依赖方向、数据流、数据模型、
 > 四个"置信度"的语义、配置扩展指南与关键不变量。
 > 阶段报告（`docs/PHASE4_*` / `PHASE5*`）是历史记录，**不再修改**；与本文冲突时以本文与源码为准。
 
@@ -13,10 +13,10 @@
 │ WindowManager.require() → ensure_foreground() → CalibrationResolver         │
 │ → create_capture_backend() → Frame（image + timestamp + coordinate_transform）│
 │                                                                              │
-│ Phase 5.2 真实运行时（src/runtime/state_monitor/window_source.py）：          │
-│ OnmyojiWindowSource（窗口绑定，复用 window 层）                              │
-│ → ForegroundGuard（前台门控：只检查、不抢占、不切换窗口）                     │
-│ → WindowFrameSource（dxcam 优先 / mss 回退；窗口移动即重建采集区域）          │
+│ Phase 5.2 真实运行时（src/runtime/state_monitor/，Phase 5.3 拆分为三个单一职责模块）：│
+│ window_binding.OnmyojiWindowSource（窗口绑定，复用 window 层）                │
+│ → foreground_guard.ForegroundGuard（前台门控：只检查、不抢占、不切换窗口）     │
+│ → frame_source.WindowFrameSource（dxcam 优先 / mss 回退；窗口移动即重建）     │
 │   · 窗口不存在 / 最小化 / 不在前台 / 采集失败 → 返回 None + SkipReason        │
 └────────────────────────────────────────────────────────────────────────────┘
                                    ↓
@@ -45,6 +45,7 @@
 │ StateMonitor（固定节拍）→ StateEvent → StateHistoryStore（logs/state_history.json）│
 │   · 节拍：CycleScheduler（deadline based；late cycle 与 overrun 有记录）      │
 │   · 观测：CycleMetrics → RuntimeMetricsRecorder（可选 JSONL，无截图/用户数据）│
+│   · 诊断：RuntimeDiagnostics → RuntimeHealth（区分 runtime failure / vision unknown）│
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -70,7 +71,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释证据**（可靠度、分组、解释信息、状态可信度校准） | 不产出状态、不做时间滤波、不读文件 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元 | 不做循环 / 采集 / 时间滤波 / 点击 |
-| **运行时** | `src/runtime` | 真实窗口帧来源（窗口绑定 / 前台门控 / dxcam+mss）、deadline based 节拍调度、稳定化、事件、历史与运行指标落盘 | 不做视觉判定、不抢焦点、不点击 |
+| **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `frame_source`）、deadline based 节拍调度、稳定化、事件、历史与运行指标落盘、运行时诊断（`RuntimeHealth` / `UnknownReason`） | 不做视觉判定、不抢焦点、不点击 |
 
 **硬规则**：
 
@@ -92,7 +93,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | `StateResult` | 状态 | `state_name, confidence, source, detail, reason, evidence` | **系统最终状态判断** + 来源 + 解释；Runtime 的唯一输入 |
 | `StableStateResult` | 运行时 | `state_name, previous_state, confidence, changed, is_confirmed, raw_*, candidate, support_frames, required_frames, counted` | 时间滤波后的稳定状态 |
 | `CycleSchedule` | 运行时（Phase 5.2） | `cycle_id, started_at, ended_at, elapsed_ms, interval_ms, sleep_ms, overrun_ms, late, re_aligned` | 单轮节拍结果（late cycle / 超时量） |
-| `CycleMetrics` | 运行时（Phase 5.2） | `cycle_id, timestamp, state, confidence, stable_state, latency_ms, frame_ms, status, skip_reason, frame_source` | 单轮运行指标；**不含截图与用户数据** |
+| `CycleMetrics` | 运行时（Phase 5.2 / 5.3） | `cycle_id, timestamp, state, confidence, stable_state, latency_ms, frame_ms, status, skip_reason, frame_source` + `capture_status, foreground_status, unknown_reason` | 单轮运行指标；既有字段含义不变，诊断字段为追加；**不含截图与用户数据** |
+| `RuntimeHealth` | 运行时（Phase 5.3） | `capture_ok, foreground_ok, processor_ok, last_error, last_state, cycle_latency_ms, unknown_reason, cycles, frames, skipped, errors, skip_counts, backend` | 健康快照：区分 runtime failure 与 vision unknown |
 | `CaptureStatus` / `SkipReason` | 运行时（Phase 5.2） | `ok, reason, message, window, foreground, backend` | 本轮为什么没有帧（窗口不存在 / 最小化 / 不在前台 / 采集失败…） |
 
 **`StateCandidate` 与 `StateResult` 不合并**：前者回答"证据支持什么"（证据层内部契约），
@@ -161,6 +163,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 5 | Runtime 证据流水线接入（`StateMonitor` 判定入口 / 失败降级 / 首次性能测量） | `PHASE5_RUNTIME_PIPELINE_REPORT.md`、`PHASE5_RUNTIME_PERFORMANCE_REPORT.md` |
 | Phase 5.1 | 性能优化与真实采集测量（模板金字塔缓存 / profiling / 缓存 / 耗时画像 / 健壮性） | `PHASE5_1_PERFORMANCE_OPTIMIZATION_REPORT.md`、`PHASE5_1_REAL_RUNTIME_REPORT.md` |
 | Phase 5.2 | 真实运行时循环接线（真实窗口帧来源 / 前台门控 / deadline 调度 / 运行指标 / 长跑验证） | `PHASE5_2_REAL_RUNTIME_REPORT.md` |
+| Phase 5.3 | Runtime 架构加固（模块边界拆分 + 兼容层 / 运行时诊断 / `unknown` 原因细化 / 指标诊断字段） | `PHASE5_3_RUNTIME_HARDENING_REPORT.md` |
 
 ---
 
@@ -169,7 +172,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | 项 | 现状 | 归属 |
 | --- | --- | --- |
 | 实时循环（真实采集） | **已接线**（Phase 5.2）：`WindowFrameSource`（dxcam 优先 / mss 回退）+ `ForegroundGuard`（只检查不抢占）+ `CycleScheduler`（deadline based，late cycle 有记录）；真实窗口长跑见报告 | 已完成 |
-| 计算性能 | `detect` 占链路 ~99%（真实窗口实测 mean ≈380 ms，见 Phase 5.2 报告）；500 ms 周期平均内可运行，但余量小于离线测量 → 优化属 Phase 5.3 | Phase 5.3（检测优化 / 多线程 / 异步 pipeline） |
+| Runtime 模块边界 | **已拆分**（Phase 5.3）：`window_binding` / `foreground_guard` / `frame_source` 单一职责，`window_source` 仅作兼容层（旧 import 路径可用）；`frame_source.py` 仍 433 行（约 90 行为文档），进一步拆分（窗口再绑定 + 查找冷却抽成策略对象）列入 Phase 5.4 | Phase 5.4（可选） |
+| 计算性能 | `detect` 占链路 ~99%（真实窗口实测 mean ≈240–290 ms，见 Phase 5.2 报告）；500 ms 周期平均内可运行，但余量小于离线测量 → 优化属 Phase 5.4 | Phase 5.4（检测优化 / 多线程 / 异步 pipeline） |
 | 观测能力 | `detect_all(profile=True)`、`EvidenceRegistry(cache_size=N)`、`StateMonitor(timing=True)`、`TemplateMatcher.scale_hits` 均为**默认关闭**的可选能力 | 需要时按报告启用 |
 | `EvidenceHistory` | 已 deprecated、无生产调用方；连同 `evidence.history` 配置段可删除 | 独立清理项 |
 | `config.py` | 单文件承载全部配置模型（含 evidence / state / runtime 段），拆分方案见 Phase 4.7 报告 | Phase 5+（可选） |

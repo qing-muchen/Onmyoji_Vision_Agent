@@ -125,6 +125,8 @@ def print_cycle_line(
     )
     if metrics.status is not CycleStatus.OK:
         line += f" [{metrics.status.value}: {metrics.skip_reason or 'unknown'}]"
+    if metrics.unknown_reason is not None:
+        line += f" unknown_due_to={metrics.unknown_reason.value}"
     if schedule.late:
         line += f" [late +{schedule.overrun_ms:.1f}ms]"
     if event is not None:
@@ -250,6 +252,7 @@ def print_summary(
         f"最大 {monitor.scheduler.overrun_max_ms:.1f}ms）"
     )
     print(f"  capture: frames={source.frames} skips={source.skip_counts or {}}")
+    print(f"  health:  {monitor.health.describe()}")
     print(f"  metrics write errors: {metrics.write_errors}")
     if metrics.path is not None:
         print(f"  metrics file: {metrics.path}")
