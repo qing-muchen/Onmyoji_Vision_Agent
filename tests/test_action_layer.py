@@ -747,7 +747,9 @@ def test_unregistered_target_rejection() -> None:
 
     assert outcome.status is ActionStatus.REJECTED
     assert outcome.detail["stage"] == GuardStage.TARGET
-    assert "未解析" in outcome.reason
+    # Phase 7.1：失败原因由解析器细化（既有 stage 语义不变）
+    assert outcome.detail["resolution_reason"] == "target_not_found"
+    assert "target_not_found" in outcome.reason
 
 
 def test_uncalibrated_target_rejected_for_real_backend() -> None:

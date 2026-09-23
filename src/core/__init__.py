@@ -46,6 +46,12 @@ from src.core.paths import (
     get_project_root,
     resolve_from_project_root,
 )
+from src.core.vision_target import (
+    TargetSnapshot,
+    VisionTargetCandidate,
+    ratio_from_rect,
+    ratio_from_screen_point,
+)
 
 __all__ = [
     "DEFAULT_CONFIG_RELATIVE_PATH",
@@ -86,4 +92,8 @@ __all__ = [
     "get_project_root",
     "load_config",
     "resolve_from_project_root",
+    "TargetSnapshot",
+    "VisionTargetCandidate",
+    "ratio_from_rect",
+    "ratio_from_screen_point",
 ]

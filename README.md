@@ -334,7 +334,41 @@ elapsed / counters）、`TaskEngine.start/on_stable/on_cycle/pause/resume/stop`�
     E-STOP / 前台 / 异常隔离 / 流程顺序与限流 / Windows 后端接口）与
     `docs/PHASE7_ACTION_LAYER_REPORT.md`。**测试过程零真实输入**（全部使用 dry-run 或替身）。
 
-### 架构总览（Phase 7 第一阶段完成后的主链路）
+**Phase 7.1 — Vision-aware Action Resolver（已完成）**：让 Action 层消费**视觉提供的定位结果**，
+同时保持严格分层（Vision 说"目标在哪里"、Resolver 说"这个语义目标对应哪个可执行位置"、
+Action 说"是否允许执行输入"）。**未修改** `runtime/` `task/` `vision/`（含 `evidence` / `state`），
+**Action 层依旧不 import vision / runtime / task**：
+
+100. **Vision Target Contract**（新增 `src/core/vision_target.py`）：`VisionTargetCandidate`
+     （`target_name` / `x_ratio` / `y_ratio` / `confidence` / `bbox?` / `source` / `timestamp` /
+     `metadata`）+ `TargetSnapshot`（`casefold` 索引 + 生成时刻，O(1) 查询）+
+     比例换算纯函数（`ratio_from_rect` / `ratio_from_screen_point`）。**不含** Frame / numpy /
+     cv2 / `EvidenceResult`——只有名称、窗口相对比例、置信度与元信息。放在 `src/core` 的原因：
+     Vision 与 Action 都可依赖 core，而 Action 仍不依赖 vision；
+101. **`VisionAwareTargetResolver`**（`src/action/resolver.py`）：`SemanticTarget` → 查快照 →
+     匹配名称（大小写不敏感 + 可选别名）→ **存在 / TTL / 置信度 / 坐标合法**四项检查 →
+     `ResolvedTarget(source="vision")`；任一失败返回 `None`（**绝不猜位置、不用默认坐标、无 fallback**）；
+102. **单向注入**：`resolver.update_snapshot(snapshot)` / `update_candidates(candidates)`
+     —— 外部把视觉结果 push 给 resolver；**Action 从不主动读取 Vision**，
+     `ActionDispatcher` 甚至不知道视觉概念存在（只持有 `TargetResolver` 协议，AST 用例固化）；
+103. **失败原因可观测**（增量协议，不破坏 Phase 7.0 冻结的 `resolve()`）：
+     `resolve_detail()` → `TargetResolution{resolved, reason, detail}`；原因枚举
+     `target_not_found` / `target_expired` / `low_confidence` / `invalid_target` / `no_target` /
+     `resolver_error`，写入 `ActionOutcome.detail.resolution_reason`（**`stage` 仍为 `target`**）；
+104. **TTL / 置信度策略**：`vision_target_ttl_s`（默认 `1.5` ≈ 3 个 500ms 节拍）、
+     `vision_target_min_confidence`（默认 `0.6`，与 evidence 规则下限一致）；
+     边界取"严格大于 / 严格小于"，即恰好等于阈值时放行；
+105. **坐标策略不变**：候选只携带**窗口相对比例**；`ResolvedTarget.client_point(client_rect)`
+     仍是唯一换算点（帧像素 == 客户区像素，因为采集区域就是客户区，故无第二套坐标系）；
+     窗口外的目标**不裁剪**而是判为非法并拒绝；
+106. **安全边界不变**：门控顺序仍为 E-STOP → 窗口 → 前台 → **目标解析** → 目标校验 → 限流 → 后端；
+     Resolver 失败属于 `target` gate（`REJECTED`，**不是** `FAILED`、不抛异常）；
+     默认仍 `action.enabled=false` + `backend=dry_run` + `resolver=registry`（Phase 7.0 行为）；
+107. 新增 `tests/test_vision_action_resolver.py`（38 用例）、
+     `docs/PHASE7_1_ARCHITECTURE_REVIEW.md`（先于代码的架构审查）与
+     `docs/PHASE7_1_VISION_ACTION_RESOLVER_REPORT.md`。**测试过程零真实输入**。
+
+### 架构总览（Phase 7.1 完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -357,6 +391,10 @@ ActionRequest（语义目标）→ ActionPort      task：动作端口（Phase 6
   ↓  ActionDispatcher                     action：门控 → 解析 → 坐标换算 → 后端（Phase 7）
 SafetyGuard（E-STOP / 窗口 / 前台 / 已解析 / 限流）  action：任一失败 → REJECTED（禁止 fallback）
 TargetResolver（语义名 → x_ratio,y_ratio）  action：不读 Frame、不调 detector、不猜坐标
+  ├─ RegistryTargetResolver（默认）          action：静态注册表（人工标定）
+  └─ VisionAwareTargetResolver（Phase 7.1）  action：消费外部注入的 TargetSnapshot（TTL + 置信度）
+        ▲                                   （Vision 单向 push：update_snapshot / update_candidates）
+        └── VisionTargetCandidate{名称, x_ratio, y_ratio, confidence}  core 契约（vision 可依赖）
 InputBackend（SendInput / DryRun）        action：默认 DryRunBackend（**不产生输入**）
 E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 → 任务 FAILED 且动作 REJECTED
 ```
@@ -384,14 +422,16 @@ E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 �
 
 **尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
 Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
-**Phase 7.1 的 Vision-aware Action Resolver**（当前 Action 层用**静态注册表**把语义名映射到窗口相对
-比例；从检测结果 / 证据自动解析元素位置、置信度映射与阈值策略尚未实现，`drag` 动作亦留待此时）、
+**Vision → Action 的自动接线**（Phase 7.1 已提供契约与 `VisionAwareTargetResolver`，
+但把 `EvidenceResult` 转成 `VisionTargetCandidate` 并 push 给 resolver 的 adapter 属编排层，
+`drag` 动作亦未实现）、
 Phase 6.3 / 7.2 的运行时编排接线（Task Engine ↔ `StateMonitor` 回调、Task ↔ Action 的自动装配）、
 多任务调度与任务库、Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，
 以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
-**安全提醒**：`action.enabled` 默认为 `false`（`DryRunBackend`：只记录请求、不产生任何输入）。
-开启真实输入前请确认：目标已标定（`calibrated`）、窗口在前台、E-STOP 可用
+**安全提醒**：`action.enabled` 默认为 `false`（`DryRunBackend`：只记录请求、不产生任何输入），
+`action.resolver` 默认为 `registry`（不使用视觉解析）。开启真实输入前请确认：目标已标定
+（`calibrated`，视觉来源需通过 TTL / 置信度门）、窗口在前台、E-STOP 可用
 （API 或创建 `logs/ESTOP` 文件即可停止）。
 
 ## 目录结构
@@ -430,6 +470,7 @@ Onmyoji_Vision_Agent/
 │   │   ├── config.py             #   pydantic 配置模型与加载器
 │   │   ├── geometry.py           #   Point / Size / Rect / CoordinateTransform（统一坐标系统）
 │   │   ├── paths.py              #   项目根与默认配置路径
+│   │   ├── vision_target.py      #   VisionTargetCandidate / TargetSnapshot（Phase 7.1 契约）
 │   │   └── exceptions.py         #   ConfigError / WindowNotFoundError / CaptureError / MissingTransformError
 │   ├── utils/                    # 通用工具：日志
 │   ├── vision/                   # 视觉理解层
@@ -514,7 +555,8 @@ Onmyoji_Vision_Agent/
 │   │   ├── models.py             #   ActionRequest / ActionOutcome / ActionStatus / ActionType / ActionTarget
 │   │   │                         #   + SemanticTarget / ResolvedTarget（**禁止像素坐标**）
 │   │   ├── port.py               #   ActionPort 协议 + NullActionPort（与 Task 层字段兼容）
-│   │   ├── resolver.py           #   TargetResolver + RegistryTargetResolver（不读 Frame / 不调 detector）
+│   │   ├── resolver.py           #   TargetResolver + RegistryTargetResolver（静态注册表）
+│   │   │                         #   + VisionAwareTargetResolver（视觉快照 + TTL + 置信度，Phase 7.1）
 │   │   ├── registry.py           #   TargetRegistry（语义名 → 窗口相对比例；占位值 calibrated=False）
 │   │   ├── dispatcher.py         #   ActionDispatcher（门控 → 解析 → 坐标换算 → 执行 → 结果）
 │   │   ├── backend/
@@ -1757,8 +1799,14 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   （`ctypes` + `SendInput`；不是 `pyautogui`）、5 道安全门（E-STOP / 窗口 / 前台 / 目标已解析 /
   限流）、E-STOP（API + `logs/ESTOP` 哨兵，禁止热键）、`ActionDispatcher` 全流程编排。
   默认 `DryRunBackend`（**不产生任何输入**）。**不做**元素识别（模板 / OCR / YOLO）与任务逻辑。
-- Phase 7.1：Vision-aware Action Resolver —— 从检测结果 / 证据解析元素位置
-  （含置信度映射与阈值、TTL、失败策略），替代静态注册表；届时再定 `drag` 的语义。
-- Phase 7.2：编排接线 —— Task Engine ↔ `StateMonitor` 回调、Task ↔ ActionDispatcher 自动装配。
+- Phase 7.1（**已完成：Vision-aware Action Resolver**）：新增 `src/core/vision_target.py`
+  （`VisionTargetCandidate` / `TargetSnapshot` 契约 + 比例换算纯函数，Vision 与 Action 共同依赖）
+  与 `src/action/resolver.py::VisionAwareTargetResolver`（外部单向注入快照 → 名称匹配 →
+  **存在 / TTL / 置信度 / 坐标合法**四项检查 → `ResolvedTarget(source="vision")`；
+  失败原因经 `resolve_detail()` 暴露为 `target_not_found` / `target_expired` / `low_confidence` /
+  `invalid_target` 等）。**Dispatcher 不知道 Vision 存在**，Action 层仍不依赖 vision / runtime / task，
+  默认 `resolver=registry` + `dry_run`（真实输入默认关闭）。
+- Phase 7.2：编排接线 —— Vision adapter（`EvidenceResult` → `VisionTargetCandidate`）落地、
+  Task Engine ↔ `StateMonitor` 回调、Task ↔ ActionDispatcher 自动装配。
 - Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
   （`src/state`）。

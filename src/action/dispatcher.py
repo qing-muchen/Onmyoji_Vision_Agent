@@ -48,9 +48,15 @@ from src.action.models import (
     ResolvedTarget,
     now_iso,
 )
-from src.action.resolver import RegistryTargetResolver, TargetResolver
+from src.action.resolver import (
+    RegistryTargetResolver,
+    TargetResolution,
+    TargetResolutionReason,
+    TargetResolver,
+    resolver_from_config,
+)
 from src.action.safety.estop import EmergencyStop
-from src.action.safety.guard import GuardResult, SafetyGuard
+from src.action.safety.guard import GuardResult, GuardStage, SafetyGuard
 from src.core.geometry import Point
 from src.utils.logger import get_logger
 
@@ -255,12 +261,18 @@ class ActionDispatcher:
                 started,
             )
 
-        # 4) 目标解析（不读 Frame、不调 detector）
-        resolved = self._resolve(action_request)
+        # 4) 目标解析（不读 Frame、不调 detector；Phase 7.1：可来自视觉快照）
+        resolution = self._resolve(action_request)
+        resolved = resolution.resolved
         # 5~6) 解析后门控：目标可用性 → 频率限制
         post = self._guard.check_post(resolved, backend_dry_run=self.is_dry_run)
         if not post.allowed:
-            return self._rejected(action_request, post, started, resolved=resolved)
+            return self._rejected(
+                action_request,
+                self._with_resolution_reason(post, resolution),
+                started,
+                resolved=resolved,
+            )
 
         # 7~8) 坐标换算 + 后端执行（异常隔离）
         point = self._client_point(resolved, action_request)
@@ -300,13 +312,51 @@ class ActionDispatcher:
         )
     # ---- 内部：流程 ---------------------------------------------------------
 
-    def _resolve(self, request: ActionRequest) -> ResolvedTarget | None:
-        """解析语义目标（异常不传播，视为未解析）。"""
+    def _resolve(self, request: ActionRequest) -> TargetResolution:
+        """解析语义目标（异常隔离；**优先使用带原因的解析接口**）。
+
+        Args:
+            request: 动作请求。
+
+        Returns:
+            :class:`TargetResolution`（失败时 ``resolved`` 为 ``None`` 且带原因）。
+        """
+        resolver = self._resolver
         try:
-            return self._resolver.resolve(request.target)
+            detail_fn = getattr(resolver, "resolve_detail", None)
+            if callable(detail_fn):
+                resolution = detail_fn(request.target)
+                if isinstance(resolution, TargetResolution):
+                    return resolution
+            resolved = resolver.resolve(request.target)
+            if resolved is None:
+                return TargetResolution.reject(TargetResolutionReason.TARGET_NOT_FOUND)
+            return TargetResolution.success(resolved)
         except Exception as exc:  # noqa: BLE001 - 解析器失败 → 未解析（不猜坐标）
             logger.error("目标解析失败（已隔离）: %s", exc)
-            return None
+            return TargetResolution.reject(
+                TargetResolutionReason.RESOLVER_ERROR, error=str(exc)
+            )
+
+    @staticmethod
+    def _with_resolution_reason(result: GuardResult, resolution: TargetResolution) -> GuardResult:
+        """门控失败发生在 ``target`` 阶段时，用解析器给出的**具体原因**替换笼统说明。
+
+        Args:
+            result: 安全门结果。
+            resolution: 解析结果。
+
+        Returns:
+            可能被细化的门控结果（``stage`` 仍为 ``target``，状态语义不变）。
+        """
+        if result.allowed or result.stage != GuardStage.TARGET or resolution.ok:
+            return result
+        return GuardResult.reject(
+            GuardStage.TARGET,
+            f"语义目标不可用（{resolution.message()}）",
+            resolution_reason=resolution.reason.value,
+            **dict(resolution.detail),
+        )
 
     def _client_point(
         self, resolved: ResolvedTarget, request: ActionRequest
@@ -438,6 +488,8 @@ class ActionDispatcher:
             from src.action.backend import create_input_backend
 
             backend = create_input_backend(action_config)
+        if resolver is None:
+            resolver = resolver_from_config(action_config)
         guard = SafetyGuard(
             estop=estop
             if estop is not None

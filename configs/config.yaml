@@ -378,6 +378,15 @@ action:
   estop_path: "logs/ESTOP"
   # 点击前是否先移动指针（更接近真实操作）
   move_before_click: true
+  # 语义目标解析器（Phase 7.1）：
+  #   registry = 静态注册表（默认；人工标定比例）
+  #   vision   = 视觉快照（需外部注入 VisionTargetCandidate/TargetSnapshot，
+  #              由 orchestration 层或视觉侧 adapter 生成）
+  resolver: "registry"
+  # 视觉候选有效期（秒）：超过即视为过期并拒绝（reason=target_expired）
+  vision_target_ttl_s: 1.5
+  # 视觉候选最低置信度：不足即拒绝（reason=low_confidence）
+  vision_target_min_confidence: 0.6
 
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL

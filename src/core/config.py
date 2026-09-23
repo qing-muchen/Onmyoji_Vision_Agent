@@ -117,6 +117,12 @@ DEFAULT_ACTION_MIN_INTERVAL_S: float = 0.25
 DEFAULT_ACTION_MAX_PER_MINUTE: int = 60
 #: 紧急停止哨兵文件（与 Task 层共用同一路径）
 DEFAULT_ACTION_ESTOP_PATH: str = "logs/ESTOP"
+#: 语义目标解析器（``registry`` = 静态注册表，``vision`` = 视觉快照）
+DEFAULT_ACTION_RESOLVER: str = "registry"
+#: 视觉候选有效期（秒）：默认 500ms 节拍下约 3 个周期
+DEFAULT_VISION_TARGET_TTL_S: float = 1.5
+#: 视觉候选最低置信度（与 evidence 规则下限一致）
+DEFAULT_VISION_TARGET_MIN_CONFIDENCE: float = 0.6
 #: 稳定窗口的合法上限（防止配置成几乎不会确认的数值）
 MAX_STABILIZER_MIN_FRAMES: int = 60
 #: 关闭稳定化时使用的确认帧数（每帧立即确认）
@@ -1131,6 +1137,9 @@ class ActionConfig(StrictModel):
         max_actions_per_minute: 每分钟动作上限。
         estop_path: 紧急停止哨兵文件（与 Task 层共用 ``logs/ESTOP``）。
         move_before_click: 点击前是否先移动指针（更接近真实操作）。
+        resolver: 语义目标解析器（``registry`` = 静态注册表；``vision`` = 视觉快照，Phase 7.1）。
+        vision_target_ttl_s: 视觉候选有效期（秒）；超过即视为过期（``target_expired``）。
+        vision_target_min_confidence: 视觉候选最低置信度；不足即拒绝（``low_confidence``）。
     """
 
     enabled: bool = DEFAULT_ACTION_ENABLED
@@ -1140,6 +1149,11 @@ class ActionConfig(StrictModel):
     max_actions_per_minute: int = Field(default=DEFAULT_ACTION_MAX_PER_MINUTE, ge=1)
     estop_path: str = DEFAULT_ACTION_ESTOP_PATH
     move_before_click: bool = True
+    resolver: Literal["registry", "vision"] = DEFAULT_ACTION_RESOLVER  # type: ignore[assignment]
+    vision_target_ttl_s: float = Field(default=DEFAULT_VISION_TARGET_TTL_S, ge=0.0)
+    vision_target_min_confidence: float = Field(
+        default=DEFAULT_VISION_TARGET_MIN_CONFIDENCE, ge=0.0, le=1.0
+    )
 
 
 class AppConfig(StrictModel):

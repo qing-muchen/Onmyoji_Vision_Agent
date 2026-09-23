@@ -1,6 +1,6 @@
 # Architecture Overview — Onmyoji Vision Agent
 
-> 本文件描述 **Phase 7 第一阶段完成后的架构**：分层职责、依赖方向、数据流、数据模型、
+> 本文件描述 **Phase 7.1 完成后的架构**：分层职责、依赖方向、数据流、数据模型、
 > 四个"置信度"的语义、配置扩展指南与关键不变量。
 > 阶段报告（`docs/PHASE4_*` / `PHASE5*` / `PHASE6*`）是历史记录，**不再修改**；与本文冲突时以本文与源码为准。
 
@@ -78,7 +78,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元 | 不做循环 / 采集 / 时间滤波 / 点击 |
 | **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline based 节拍调度、稳定化、事件、历史与运行指标落盘、运行时诊断（`RuntimeHealth` / `UnknownReason`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`） | 不做视觉判定、不抢焦点、不点击 |
 | **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` + 严格校验）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，不拥有循环）、`ActionPort`（语义动作端口契约）、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、**不 import** `vision` / `evidence` / `cv2` / `runtime` / `action`、**不执行任何输入**（Phase 6.2 端口为 `NullActionPort`） |
-| **输入层** | `src/action` | 语义动作落地（Phase 7 第一阶段已完成）：`ActionRequest` / `ActionOutcome`（**无像素坐标**）、`ActionDispatcher`（门控 → 解析 → 坐标换算 → 后端）、`TargetResolver` + `TargetRegistry`（语义名 → 窗口相对比例）、`InputBackend`（默认 `DryRunBackend`；Win32 `SendInput` 后端）、`SafetyGuard`（5 道门）+ `EmergencyStop`（API + `logs/ESTOP`） | 不识别界面元素（模板 / OCR / YOLO）、不 import `vision` / `evidence` / `task` / `cv2`、**禁止 fallback click 与猜坐标**、不抢焦点、无全局热键 |
+| **输入层** | `src/action` | 语义动作落地：`ActionRequest` / `ActionOutcome`（**无像素坐标**）、`ActionDispatcher`（门控 → 解析 → 坐标换算 → 后端）、`TargetResolver` 两种实现（`RegistryTargetResolver` 静态注册表 / `VisionAwareTargetResolver` 视觉快照 + TTL + 置信度）、`InputBackend`（默认 `DryRunBackend`；Win32 `SendInput` 后端）、`SafetyGuard`（5 道门）+ `EmergencyStop`（API + `logs/ESTOP`） | 不识别界面元素（模板 / OCR / YOLO）、不 import `vision` / `evidence` / `task` / `cv2`、**禁止 fallback click 与猜坐标**、不抢焦点、无全局热键、不主动读取视觉（只接受外部注入的 `VisionTargetCandidate` 快照） |
 
 **硬规则**：
 
@@ -178,6 +178,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 6.1 | Task Engine 骨架（7 态生命周期 / `TaskContext` / `on_stable`·`on_cycle` 接口 / 谓词与钩子 / 动作端口协议 / AST 依赖边界） | `PHASE6_1_TASK_ENGINE_SKELETON_REPORT.md` |
 | Phase 6.2 | 任务定义加载与工作流执行（`configs/tasks/*.yaml` + 严格校验 / 条件绑定（无 eval）/ `WorkflowRunner` / E-STOP / `models` 包拆分） | `PHASE6_2_TASK_DEFINITION_REPORT.md` |
 | Phase 7 | Action Layer 第一阶段（语义动作模型（无像素坐标）/ 语义目标解析 / Win32 `SendInput` 后端 / 5 道安全门 / `ActionDispatcher`） | `PHASE7_ACTION_LAYER_REPORT.md` |
+| Phase 7.1 | Vision-aware Action Resolver（`VisionTargetCandidate` / `TargetSnapshot` 契约 / `VisionAwareTargetResolver`（TTL + 置信度）/ 失败原因可观测 / 单向注入） | `PHASE7_1_ARCHITECTURE_REVIEW.md`、`PHASE7_1_VISION_ACTION_RESOLVER_REPORT.md` |
 
 ---
 
@@ -194,5 +195,5 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | `config.py` | 单文件承载全部配置模型（含 evidence / state / runtime 段），拆分方案见 Phase 4.7 报告 | Phase 5+（可选） |
 | 计算性能 | 单帧 ≈ 170 次 `matchTemplate`（10 detector）；未做性能优化与预算验证 | Phase 5（接线前先测） |
 | 样本量 | `victory_icon` / `reward_panel` 各 1 张正样本（靠状态可信度校准补偿） | 数据侧 |
-| Action / State Machine / Task | 未实现 | Phase 7 / 8 |
+| Action / State Machine / Task | Action 层已实现（语义动作 + 视觉目标解析 + 5 道安全门，默认 dry-run）；State Machine / 多任务调度未实现 | Phase 8 |
 | `README` 与本文之外的历史章节 | 部分章节仍描述 Phase 3.x 的帧路径细节（已加注说明） | 文档迭代 |
