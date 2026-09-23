@@ -361,6 +361,24 @@ runtime:
     # 单次退避上限（秒）
     max_backoff_s: 8.0
 
+# 输入控制层（Phase 7）：把 Task 的语义动作请求变成受控的真实键鼠输入。
+# 安全默认：enabled=false 时使用 DryRunBackend（只记录请求、不产生任何输入）。
+action:
+  # 是否允许真实键鼠输入（必须显式开启；默认关闭）
+  enabled: false
+  # 输入后端：dry_run（默认，安全）/ windows（SendInput，真实输入）
+  backend: "dry_run"
+  # 是否要求目标窗口在前台（不抢焦点；失焦即拒绝该动作）
+  require_foreground: true
+  # 两次动作之间的最小间隔（秒）
+  min_interval_s: 0.25
+  # 每分钟动作上限
+  max_actions_per_minute: 60
+  # 紧急停止哨兵文件（与 Task 层共用；文件存在即视为触发，人工创建即可）
+  estop_path: "logs/ESTOP"
+  # 点击前是否先移动指针（更接近真实操作）
+  move_before_click: true
+
 logging:
   level: "INFO" # DEBUG | INFO | WARNING | ERROR | CRITICAL
   dir: "logs"

@@ -5,6 +5,7 @@
 """
 
 from src.core.config import (
+    ActionConfig,
     AppConfig,
     AppMeta,
     CalibrationConfig,

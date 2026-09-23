@@ -103,6 +103,20 @@ DEFAULT_RECOVERY_MAX_RETRY: int = 3
 DEFAULT_RECOVERY_BACKOFF_S: float = 0.5
 DEFAULT_RECOVERY_BACKOFF_FACTOR: float = 2.0
 DEFAULT_RECOVERY_MAX_BACKOFF_S: float = 8.0
+
+# ---- Action 层（Phase 7） ----------------------------------------------------
+#: 真实键鼠输入默认**关闭**（安全默认：Action 层默认使用 DryRunBackend）
+DEFAULT_ACTION_ENABLED: bool = False
+#: 输入后端名（``dry_run`` / ``windows``）
+DEFAULT_ACTION_BACKEND: str = "dry_run"
+#: 是否要求目标窗口在前台（不抢焦点）
+DEFAULT_ACTION_REQUIRE_FOREGROUND: bool = True
+#: 两次动作之间的最小间隔（秒）
+DEFAULT_ACTION_MIN_INTERVAL_S: float = 0.25
+#: 每分钟动作上限
+DEFAULT_ACTION_MAX_PER_MINUTE: int = 60
+#: 紧急停止哨兵文件（与 Task 层共用同一路径）
+DEFAULT_ACTION_ESTOP_PATH: str = "logs/ESTOP"
 #: 稳定窗口的合法上限（防止配置成几乎不会确认的数值）
 MAX_STABILIZER_MIN_FRAMES: int = 60
 #: 关闭稳定化时使用的确认帧数（每帧立即确认）
@@ -1103,6 +1117,31 @@ class RuntimeConfig(StrictModel):
     recovery: RuntimeRecoveryConfig = Field(default_factory=RuntimeRecoveryConfig)
 
 
+class ActionConfig(StrictModel):
+    """输入控制层配置（Phase 7）。
+
+    动作安全策略的声明位置：**真实键鼠输入默认关闭**（``enabled=false`` 时
+    :class:`~src.action.backend.base.DryRunBackend` 只记录请求、不产生输入）。
+
+    Attributes:
+        enabled: 是否允许真实输入（默认 ``False``；安全默认，必须显式开启）。
+        backend: 输入后端（``dry_run`` / ``windows``）。
+        require_foreground: 是否要求目标窗口在前台（``True`` 时不抢焦点、失焦即拒绝）。
+        min_interval_s: 两次动作之间的最小间隔（秒）。
+        max_actions_per_minute: 每分钟动作上限。
+        estop_path: 紧急停止哨兵文件（与 Task 层共用 ``logs/ESTOP``）。
+        move_before_click: 点击前是否先移动指针（更接近真实操作）。
+    """
+
+    enabled: bool = DEFAULT_ACTION_ENABLED
+    backend: Literal["dry_run", "windows"] = DEFAULT_ACTION_BACKEND  # type: ignore[assignment]
+    require_foreground: bool = DEFAULT_ACTION_REQUIRE_FOREGROUND
+    min_interval_s: float = Field(default=DEFAULT_ACTION_MIN_INTERVAL_S, ge=0.0)
+    max_actions_per_minute: int = Field(default=DEFAULT_ACTION_MAX_PER_MINUTE, ge=1)
+    estop_path: str = DEFAULT_ACTION_ESTOP_PATH
+    move_before_click: bool = True
+
+
 class AppConfig(StrictModel):
     """应用总配置，聚合所有子模块配置。"""
 
@@ -1118,6 +1157,7 @@ class AppConfig(StrictModel):
     state: StateConfig = Field(default_factory=StateConfig)
     evidence: EvidenceConfig = Field(default_factory=EvidenceConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    action: ActionConfig = Field(default_factory=ActionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     def log_dir(self) -> Path:

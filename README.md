@@ -301,7 +301,40 @@ elapsed / counters）、`TaskEngine.start/on_stable/on_cycle/pause/resume/stop`�
     `tests/test_task_loader.py`（63 用例）与 `docs/PHASE6_2_TASK_DEFINITION_REPORT.md`。
     **本阶段不实现任何输入**（`ActionPort` 保持 `NullActionPort`：只记录请求，不点击、不按键）。
 
-### 架构总览（Phase 6.2 完成后的主链路）
+**Phase 7 — Action Layer Implementation（已完成：第一阶段）**：把 Task 的**语义动作请求**变成受控的真实键鼠输入。
+**不实现**游戏按钮识别（模板 / OCR / YOLO）、不实现任务逻辑与自动刷任务，未修改
+`runtime/` `vision/` `evidence/` `capture/` `window/` `task/`：
+
+92. **数据模型**（`src/action/models.py`）：`ActionRequest`（`request_id` / `action_type` /
+    `target` / `parameters` / `created_at`）/ `ActionOutcome`（`status` / `reason` /
+    `latency_ms` / `resolved_target`）/ `ActionStatus` / `ActionType` / `ActionTarget`；
+    **禁止像素坐标**——数据类无坐标字段、参数含坐标键直接报错、
+    `SemanticTarget` 拒绝 `reference` / `x` / `y` 写法、目标名不得形如 `CLICK_1530_850`；
+93. **端口**（`port.py`）：`ActionPort` 协议 + `NullActionPort`。Action 层的 `ActionRequest` /
+    `ActionOutcome` 与 Task 层**字段兼容**（`action_id`→`request_id`、`kind`→`action_type`、
+    `is_failure`），因此 `ActionDispatcher` **可直接注入** `TaskEngine(action_port=...)`，
+    两层互不 import；
+94. **语义目标解析**（`resolver.py` + `registry.py`）：`SemanticTarget` → `ResolvedTarget`
+    （`window_relative_position` + `confidence` + `source`）。Resolver **不读 Frame、不调 detector、
+    不属于 vision**（AST 用例锁定）；未注册目标解析失败 → 动作被拒绝（**绝不猜坐标**）；
+95. **Windows 输入后端**（`backend/windows.py`）：`WindowsMouseBackend` / `WindowsKeyboardBackend` /
+    `WindowsInputBackend`，用 `ctypes` + **`SendInput`**（不是 `pyautogui`：扫描码 / 延迟 / 游戏兼容性），
+    绝对坐标按**虚拟桌面**归一化到 `0..65535`，构造时设置 DPI 感知；
+    `Win32WindowProbe` 提供窗口有效性 / 前台 / 客户区矩形（屏幕坐标）；
+96. **安全门控**（`safety/guard.py`）：每次动作前 **5 道门**（E-STOP → 窗口有效性 → 前台 →
+    目标已解析/已标定 → 频率限制），任一失败即 `REJECTED`（带 `stage`），
+    **禁止 fallback click、禁止猜坐标**；`RateLimiter`（最小间隔 0.25s + 每分钟 60 次）；
+    后端异常**隔离**为 `FAILED`（不传播）；
+97. **E-STOP**（`safety/estop.py`）：API（`EmergencyStop.trigger`）+ **文件哨兵**
+    （`logs/ESTOP`，与 Task 层**共用**）；不自动复位、**不注册任何全局热键**；
+98. **分发流程**（`dispatcher.py`）：`ActionRequest → SafetyGuard → Resolver → 坐标换算 → Backend`，
+    返回 `ActionOutcome`（含延迟与统计）；默认后端 `DryRunBackend`（**只记录、不输入**），
+    真实输入需 `action.enabled=true` + `backend: windows`（配置在 `configs/config.yaml`）；
+99. 新增 `tests/test_action_layer.py`（58 用例：schema / 禁坐标 / 解析 / 依赖边界 / dry-run /
+    E-STOP / 前台 / 异常隔离 / 流程顺序与限流 / Windows 后端接口）与
+    `docs/PHASE7_ACTION_LAYER_REPORT.md`。**测试过程零真实输入**（全部使用 dry-run 或替身）。
+
+### 架构总览（Phase 7 第一阶段完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -320,8 +353,12 @@ RuntimeLifecycle                       runtime：INITIALIZING/READY/RUNNING/PAUS
 RecoveryManager                        runtime：退避重试 + 次数上限（用尽 → FAILED；不会死循环 / 忙等）
   ↓  TaskEngine.start(TaskDefinition)     task：任务目标（YAML 工作流，Phase 6.2）
 StateSnapshot → 转移条件 → 下一步目标      task：on_stable 决策 / on_cycle 计时（Task 不拥有循环）
-ActionRequest（语义目标）→ ActionPort      task：动作端口（Phase 6.2 = NullActionPort：只记录、不执行）
-E-STOP（API / logs/ESTOP 哨兵）            task：任意轮次触发 → 任务立即 FAILED，且不再请求动作
+ActionRequest（语义目标）→ ActionPort      task：动作端口（Phase 6.2 = NullActionPort，只记录）
+  ↓  ActionDispatcher                     action：门控 → 解析 → 坐标换算 → 后端（Phase 7）
+SafetyGuard（E-STOP / 窗口 / 前台 / 已解析 / 限流）  action：任一失败 → REJECTED（禁止 fallback）
+TargetResolver（语义名 → x_ratio,y_ratio）  action：不读 Frame、不调 detector、不猜坐标
+InputBackend（SendInput / DryRun）        action：默认 DryRunBackend（**不产生输入**）
+E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 → 任务 FAILED 且动作 REJECTED
 ```
 
 | 层 | 包 | 职责 | 明确不做 |
@@ -332,7 +369,8 @@ E-STOP（API / logs/ESTOP 哨兵）            task：任意轮次触发 → 任
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释的视觉证据**（可靠度 / 分组 / 解释信息） | 不产出状态、不做时间滤波 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`） | 不做循环 / 采集 / 时间滤波 |
-| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**（Phase 6.2 端口为 `NullActionPort`） |
+| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**（端口实现属 Action 层） |
+| **输入层** | `src/action` | 语义动作落地：`ActionRequest` / `ActionOutcome`（无像素坐标）、`ActionDispatcher`（门控 → 解析 → 坐标换算 → 后端）、`TargetResolver`（语义名 → 窗口相对比例）、`InputBackend`（`DryRunBackend` 默认 / Win32 `SendInput`）、`SafetyGuard`（5 道门）+ `EmergencyStop` | 不识别界面元素（模板 / OCR / YOLO）、不 import vision / evidence / task / cv2、**禁止 fallback click 与猜坐标**、不抢焦点、无全局热键 |
 | **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`） | 不做视觉判定、不抢焦点、不点击 |
 
 四个"置信度"语义互不混用（详见 `docs/ARCHITECTURE_OVERVIEW.md`）：
@@ -346,11 +384,15 @@ E-STOP（API / logs/ESTOP 哨兵）            task：任意轮次触发 → 任
 
 **尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
 Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
-**Phase 7 的 Action Layer（受控键鼠输入）**——Phase 6.2 的 `ActionPort` 契约与语义目标已就位，
-但端口实现仍为 `NullActionPort`（只记录请求，不点击、不按键），
-Phase 6.3 的运行时自动接线（Task Engine 与 `StateMonitor` 回调的正式对接）、多任务调度与任务库、
-Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，以及任何**基于文字或界面的
-决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
+**Phase 7.1 的 Vision-aware Action Resolver**（当前 Action 层用**静态注册表**把语义名映射到窗口相对
+比例；从检测结果 / 证据自动解析元素位置、置信度映射与阈值策略尚未实现，`drag` 动作亦留待此时）、
+Phase 6.3 / 7.2 的运行时编排接线（Task Engine ↔ `StateMonitor` 回调、Task ↔ Action 的自动装配）、
+多任务调度与任务库、Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，
+以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
+
+**安全提醒**：`action.enabled` 默认为 `false`（`DryRunBackend`：只记录请求、不产生任何输入）。
+开启真实输入前请确认：目标已标定（`calibrated`）、窗口在前台、E-STOP 可用
+（API 或创建 `logs/ESTOP` 文件即可停止）。
 
 ## 目录结构
 
@@ -358,6 +400,7 @@ Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，以及任
 Onmyoji_Vision_Agent/
 ├── configs/
 │   ├── config.yaml               # 唯一的运行期配置来源（pydantic 严格校验）
+│   │                             #   含 action 段（Phase 7：enabled=false 安全默认）
 │   └── tasks/                    # 任务定义（Phase 6.2：声明式工作流，加载期严格校验）
 │       ├── farming.yaml          #   示例：等待战斗 → 战斗 → 结算 → COMPLETE
 │       └── open_exploration.yaml #   示例：语义 click / 结构化条件 / 重试 / 分支
@@ -467,7 +510,19 @@ Onmyoji_Vision_Agent/
 │   │       ├── history.py        #     StateHistoryStore（即时原子写 JSON）
 │   │       ├── timing.py         #     CycleTiming（可选耗时画像）
 │   │       └── source.py         #     FrameSource / CaptureFrameSource / 轻量前台门控
-│   ├── action/                   # 输入控制层（Phase 7：受控键鼠输入与安全约束）
+│   ├── action/                   # 输入控制层（Phase 7：语义动作 → 受控键鼠输入）
+│   │   ├── models.py             #   ActionRequest / ActionOutcome / ActionStatus / ActionType / ActionTarget
+│   │   │                         #   + SemanticTarget / ResolvedTarget（**禁止像素坐标**）
+│   │   ├── port.py               #   ActionPort 协议 + NullActionPort（与 Task 层字段兼容）
+│   │   ├── resolver.py           #   TargetResolver + RegistryTargetResolver（不读 Frame / 不调 detector）
+│   │   ├── registry.py           #   TargetRegistry（语义名 → 窗口相对比例；占位值 calibrated=False）
+│   │   ├── dispatcher.py         #   ActionDispatcher（门控 → 解析 → 坐标换算 → 执行 → 结果）
+│   │   ├── backend/
+│   │   │   ├── base.py           #     InputBackend 协议 / DryRunBackend（默认）/ WindowProbe
+│   │   │   └── windows.py        #     Win32 SendInput 鼠标 / 键盘后端 + Win32WindowProbe
+│   │   └── safety/
+│   │       ├── estop.py          #     EmergencyStop（API + logs/ESTOP；禁止热键）
+│   │       └── guard.py          #     SafetyGuard（5 道门）/ RateLimiter
 │   ├── state/                    # 状态管理层（Phase 8：State Machine）
 │   └── task/                     # 任务层（Phase 6.1 骨架 / 6.2 声明式工作流）
 │       ├── models/               #   定义与视图（Phase 6.2 拆分）
@@ -1696,7 +1751,14 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   工作流执行模型（`StepExecutor` / `StepTransition` / `WorkflowRunner`）、`start(TaskDefinition)`
   与 `start(Task)` 并存、E-STOP（API + `logs/ESTOP` 哨兵，禁止热键）、`models` 包拆分。
   **`ActionPort` 仍为 `NullActionPort`：只记录请求，不点击、不按键。**
-- Phase 7：Action Planning & Action Engine —— 受控的键鼠输入与安全约束
-  （`src/action`，坐标一律经 `CoordinateTransform` 映射；消费 Task 的**语义目标**）。
+- **Phase 7（已完成：Action Layer 第一阶段）**：`src/action/` —— 语义动作数据模型
+  （**禁止像素坐标**）、`ActionPort`（与 Task 层字段兼容，可直接注入）、语义目标解析
+  （`TargetResolver` + `TargetRegistry`：语义名 → 窗口相对比例）、Windows 输入后端
+  （`ctypes` + `SendInput`；不是 `pyautogui`）、5 道安全门（E-STOP / 窗口 / 前台 / 目标已解析 /
+  限流）、E-STOP（API + `logs/ESTOP` 哨兵，禁止热键）、`ActionDispatcher` 全流程编排。
+  默认 `DryRunBackend`（**不产生任何输入**）。**不做**元素识别（模板 / OCR / YOLO）与任务逻辑。
+- Phase 7.1：Vision-aware Action Resolver —— 从检测结果 / 证据解析元素位置
+  （含置信度映射与阈值、TTL、失败策略），替代静态注册表；届时再定 `drag` 的语义。
+- Phase 7.2：编排接线 —— Task Engine ↔ `StateMonitor` 回调、Task ↔ ActionDispatcher 自动装配。
 - Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
   （`src/state`）。
