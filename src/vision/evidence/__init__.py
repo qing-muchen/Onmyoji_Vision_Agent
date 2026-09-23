@@ -1,4 +1,4 @@
-"""视觉证据层（Phase 4.1：Evidence Detector Framework）。
+"""视觉证据层（Phase 4.1 框架；4.2 补齐 battle 证据；4.3 可靠度加权；4.4 空间分组与时间稳定）。
 
 职责：把一帧画面**翻译成一组可解释的视觉证据**，而**不是**直接输出状态。
 
@@ -8,7 +8,9 @@
       ↓  EvidenceRegistry.detect_all(frame)
     [EvidenceResult, ...]        # 每条 = 一条视觉事实（可能是否定结果）
       ↓  EvidenceAggregator.aggregate(evidence)
-    StateCandidate               # 候选状态 + 判定理由（because: xxx=0.95, yyy=0.88）
+    StateCandidate               # 候选状态 + 判定理由（because: xxx=0.9500(r=0.80), ...）
+      ↓  EvidenceHistory.push(candidate) → stable_state()
+    stable state                 # 时间窗口内的多数状态（未达门槛时为 None）
 
 关键约定：
 
@@ -21,6 +23,12 @@
   证据检测不要求帧携带 ``coordinate_transform``（``bbox`` 位于帧像素坐标系）。
 * **不伪造置信度**：模板数据不足时按 ``shortfall_factor`` 折价并在 metadata 标记
   ``insufficient_templates``。
+* **空间去重（4.4）**：同一视觉区域（``group``）内的多条证据只贡献一次得分，
+  规则也可按 group 数计数（``min_groups``）——避免"同一块 UI 被两个 detector 看到"
+  被当成两条独立证据。
+* **时间稳定（4.4）**：:class:`~src.vision.evidence.history.EvidenceHistory` 对最近
+  N 帧的候选状态做多数判断，把瞬时抖动与真实切换区分开；它属于证据层内部，
+  既不替代也不依赖 ``StateMonitor`` / ``StateStabilizer``。
 
 依赖方向：``core`` → ``capture`` / ``detector`` / ``ocr`` → ``evidence``。
 本层**不依赖** ``state``（不产生 ``StateResult``），也不做任何交互或状态转移。
@@ -59,6 +67,7 @@ from src.vision.evidence.detectors import (
     VictoryIconDetector,
     create_detectors,
 )
+from src.vision.evidence.history import EvidenceHistory
 from src.vision.evidence.models import (
     MAX_CONFIDENCE,
     MIN_CONFIDENCE,
@@ -89,6 +98,7 @@ __all__ = [
     "BottomMenuYardDetector",
     "ChapterPanelDetector",
     "EvidenceAggregator",
+    "EvidenceHistory",
     "EvidenceRegistry",
     "EvidenceResult",
     "EvidenceScore",

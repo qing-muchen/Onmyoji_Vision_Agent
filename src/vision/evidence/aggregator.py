@@ -11,9 +11,13 @@
 
 规则条件（均为声明式）：
 
-* ``requires`` —— 必须全部命中的证据；
-* ``any_of`` + ``min_matches`` —— 候选证据里至少命中 ``min_matches`` 条
-  （``min_matches=1`` 即"至少一个"，``=2`` 即"至少两个"，用于表达"两条旁证才算数"）。
+* ``requires`` —— 必须全部命中的证据（按证据逐条判断，不参与 group 计数）；
+* ``any_of`` + ``min_groups`` —— 命中的候选证据需覆盖至少 ``min_groups`` 个**不同 group**
+  （``min_groups=2`` 表示"至少两块视觉区域亮起"）。
+
+**空间去重（Phase 4.4）**：同一 group 内的证据观察同一块视觉区域，命中高度相关，
+因此先用 effective score（``confidence × reliability``）挑出每组的代表，再参与计分与计数。
+未分组的证据（``group`` 为空）以自身证据名自成一组。
 
 计分方式（Phase 4.3 起）为**按可靠度加权平均**：
 
@@ -21,7 +25,8 @@
 
 ``confidence`` 是"这一帧匹配得多好"，``reliability`` 是"这类证据平时有多可信"。
 可靠度低的证据权重小，因此一条易受遮挡的旁证不会把强证据的结论显著拉低；
-所有证据可靠度相同时该式退化为简单平均。
+所有证据可靠度相同时该式退化为简单平均。``EvidenceScore.matched`` 与 ``reason``
+中列出的是**去重后的代表**，因此其条目数就是实际贡献得分的视觉区域数。
 
 数据流::
 
@@ -149,7 +154,7 @@ class EvidenceAggregator:
             else:
                 matched.append(hit)
 
-        # any_of 需要命中 min_matches 条；未命中的也要记入 missing，
+        # any_of 需要覆盖 min_groups 个**不同 group**；未命中的也要记入 missing，
         # 否则调用方无法解释"证据不够"的原因。
         any_of_matched: list[EvidenceResult] = []
         any_of_missing: list[str] = []
@@ -161,20 +166,56 @@ class EvidenceAggregator:
                 any_of_matched.append(hit)
         matched.extend(any_of_matched)
 
-        any_of_ok = (not rule.any_of) or (len(any_of_matched) >= rule.min_matches)
-        satisfied = not missing and any_of_ok
-        score = self._weighted_score(matched) if satisfied else 0.0
-        matched.sort(key=lambda item: item.confidence, reverse=True)
+        # 空间相关性：同一视觉区域（group）内只作一条代表参与计分
+        representatives = self._dedupe_by_group(matched)
+        any_of_groups = {self._group_key(item) for item in any_of_matched}
+        groups_ok = (not rule.any_of) or (len(any_of_groups) >= rule.min_groups)
+        satisfied = not missing and groups_ok
+        score = self._weighted_score(representatives) if satisfied else 0.0
+        representatives.sort(key=lambda item: item.confidence, reverse=True)
         return EvidenceScore(
             state=rule.state,
             score=score,
             satisfied=satisfied,
-            matched=tuple(matched),
+            matched=tuple(representatives),
             missing=tuple(missing + any_of_missing),
             reason=", ".join(
-                f"{item.name}={item.confidence:.4f}(r={item.reliability:.2f})" for item in matched
+                f"{item.name}={item.confidence:.4f}(r={item.reliability:.2f})"
+                for item in representatives
             ),
         )
+
+    @staticmethod
+    def _group_key(item: EvidenceResult) -> str:
+        """证据的分组键：有 ``group`` 用 group，未分组时以证据名自成一组。"""
+        return item.group or item.name
+
+    @staticmethod
+    def _effective_score(item: EvidenceResult) -> float:
+        """证据的有效分：``confidence × reliability``。"""
+        return item.confidence * item.reliability
+
+    @classmethod
+    def _dedupe_by_group(cls, matched: Sequence[EvidenceResult]) -> list[EvidenceResult]:
+        """同一 group 内只保留 effective score 最高的一条证据。
+
+        同一块视觉区域上的多个 detector 命中高度相关（例如战斗界面右侧的行动条与
+        式神头像），若各算一次会重复放大同一处 UI 的权重；这里按 group 去重，
+        让每个视觉区域最多贡献一条证据。
+
+        Args:
+            matched: 命中的证据（``requires`` 命中 + ``any_of`` 命中）。
+
+        Returns:
+            每个 group 的代表证据；顺序不保证，由调用方排序。
+        """
+        best: dict[str, EvidenceResult] = {}
+        for item in matched:
+            key = cls._group_key(item)
+            current = best.get(key)
+            if current is None or cls._effective_score(item) > cls._effective_score(current):
+                best[key] = item
+        return list(best.values())
 
     @staticmethod
     def _weighted_score(matched: Sequence[EvidenceResult]) -> float:

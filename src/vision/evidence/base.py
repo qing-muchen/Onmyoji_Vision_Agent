@@ -107,6 +107,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             省略或引擎不可用时，detector 只使用模板匹配（不会因此抛异常）。
         reliability: 该类证据的**长期**可靠程度（``(0, 1]``）。:meth:`from_config`
             会从 ``evidence.reliability`` 读取；省略时取 ``DEFAULT_RELIABILITY``（等权）。
+        group: 该证据观察的**视觉区域**名。:meth:`from_config` 会从 ``evidence.groups``
+            反查；省略（空字符串）表示未分组，该证据自成一组。
     """
 
     #: detector 名（子类必须覆写）：同时作为配置键、证据名与模板文件名前缀。
@@ -159,6 +161,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             templates,
             ocr_engine=ocr_engine,
             reliability=config.reliability_for(cls.NAME),
+            group=config.group_of(cls.NAME) or "",
         )
 
     def __init__(
@@ -170,6 +173,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         matcher: TemplateMatcher | None = None,
         ocr_engine: OCREngine | None = None,
         reliability: float = DEFAULT_RELIABILITY,
+        group: str = "",
     ) -> None:
         self._name = name
         self._config = config
@@ -177,6 +181,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         self._matcher = matcher if matcher is not None else TemplateMatcher(config.matcher_config())
         self._ocr_engine = ocr_engine
         self._reliability = reliability
+        self._group = group
 
     @property
     def evidence_type(self) -> EvidenceType:
@@ -187,6 +192,11 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
     def reliability(self) -> float:
         """该类证据的长期可靠程度，会写入每一条 :class:`EvidenceResult`。"""
         return self._reliability
+
+    @property
+    def group(self) -> str:
+        """该证据观察的视觉区域名（空字符串 = 未分组，自成一组）。"""
+        return self._group
 
     @property
     def name(self) -> str:
@@ -430,6 +440,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             metadata=metadata,
             evidence_type=self.EVIDENCE_TYPE,
             reliability=self._reliability,
+            group=self._group,
         )
 
     def build_hit(
@@ -462,6 +473,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             metadata=metadata,
             evidence_type=self.EVIDENCE_TYPE,
             reliability=self._reliability,
+            group=self._group,
         )
 
     def template_metadata(self, match: TemplateMatch) -> dict:

@@ -9,7 +9,9 @@
 5. Fake Frame 输入（不依赖真实截图与真实数据集）；
 6. 每个已实现的 detector 都返回合法 :class:`EvidenceResult`；
 7. :class:`EvidenceAggregator` 的规则聚合（battle / yard / exploration / 无证据 → unknown）；
-8. **Phase 4.2**：battle 证据链（新增 detector 注册、无模板契约、配置形态、``requires + any_of`` 规则）。
+8. **Phase 4.2**：battle 证据链（新增 detector 注册、无模板契约、配置形态、``requires + any_of`` 规则）；
+9. **Phase 4.3**：证据可靠度（reliability 读取、加权计分、弱证据降权）；
+10. **Phase 4.4**：证据分组（同区域不重复贡献、``min_groups`` 计数）与时间窗口稳定性。
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from src.core.config import (
     EvidenceAggregatorConfig,
     EvidenceConfig,
     EvidenceDetectorConfig,
+    EvidenceGroupConfig,
+    EvidenceHistoryConfig,
     EvidenceRuleConfig,
 )
 from src.core.exceptions import EvidenceError, EvidenceTemplateLoadError
@@ -35,6 +39,7 @@ from src.vision.evidence import (
     BaseDetector,
     BaseEvidenceDetector,
     EvidenceAggregator,
+    EvidenceHistory,
     EvidenceRegistry,
     EvidenceResult,
     EvidenceScore,
@@ -102,9 +107,10 @@ def hit(
     confidence: float,
     *,
     reliability: float = 1.0,
+    group: str = "",
     evidence_type: EvidenceType = EvidenceType.CUSTOM,
 ) -> EvidenceResult:
-    """构造一条命中证据（``reliability`` 默认 1.0，即等权）。"""
+    """构造一条命中证据（``reliability`` 默认 1.0 即等权；``group`` 为空表示未分组）。"""
     return EvidenceResult(
         name=name,
         detected=True,
@@ -113,6 +119,7 @@ def hit(
         source=EvidenceSource.TEMPLATE,
         evidence_type=evidence_type,
         reliability=reliability,
+        group=group,
     )
 
 
@@ -529,20 +536,25 @@ class TestBattleEvidenceChain:
         assert detectors["battle_shikigami_icons"].roi == (0.925, 0.09, 1.00, 0.60)
 
     def test_default_battle_rule_shape(self) -> None:
-        """Phase 4.3：battle 规则不再强依赖自动按钮，改为"四条里任意两条"。"""
+        """Phase 4.4：battle 规则按**视觉区域**计数（四条证据需覆盖两个不同 group）。"""
         config = EvidenceConfig()
         battle = next(rule for rule in config.aggregator.rules if rule.state == "battle")
         assert battle.requires == []
         assert battle.any_of == list(BATTLE_EVIDENCE_NAMES)
-        assert battle.min_matches == 2
+        assert battle.min_groups == 2
 
     @staticmethod
     def battle_rule() -> EvidenceRuleConfig:
-        """Phase 4.3 的 battle 规则：四条战斗证据里任意两条。"""
+        """Phase 4.4 的 battle 规则：四条战斗证据需覆盖两个不同 group。
+
+        本类用 ``hit()`` 构造证据（``group`` 为空），因此每条证据自成一组，
+        "覆盖两个 group"退化为"命中两条证据"；group 本身的行为由
+        :class:`TestEvidenceGroups` 单独覆盖。
+        """
         return EvidenceRuleConfig(
             state="battle",
             any_of=list(BATTLE_EVIDENCE_NAMES),
-            min_matches=2,
+            min_groups=2,
         )
 
     @pytest.mark.parametrize(
@@ -551,11 +563,10 @@ class TestBattleEvidenceChain:
             ("battle_auto_button", "battle_skill_area"),
             ("battle_auto_button", "battle_shikigami_icons"),
             ("battle_skill_area", "battle_action_bar"),
-            ("battle_action_bar", "battle_shikigami_icons"),
         ],
     )
     def test_any_two_evidences_is_battle(self, pair: tuple[str, str]) -> None:
-        """任意两条战斗证据即可判定 battle（含"没有自动按钮"的组合）。"""
+        """未分组时每条证据自成一组，任意两条即可判定 battle。"""
         result = aggregator(self.battle_rule()).aggregate([hit(name, 0.9) for name in pair])
         assert result.state == "battle"
         assert result.confidence == pytest.approx(0.9)
@@ -738,18 +749,19 @@ class TestEvidenceReliability:
         assert result.state == "battle"
         assert result.confidence == pytest.approx((0.9 * 0.8 + 0.9 * 0.5) / 1.3)
 
-    def test_battle_min_matches_boundary(self) -> None:
+    def test_battle_min_groups_boundary(self) -> None:
+        """未分组时每条证据自成一组：1 条不够，2 条达标。"""
         agg = aggregator(self.real_battle_rule())
         assert agg.aggregate([hit("battle_skill_area", 0.9)]).state == "unknown"
         assert agg.aggregate(
             [hit("battle_skill_area", 0.9), hit("battle_action_bar", 0.9)]
         ).state == "battle"
 
-    def test_min_matches_validation(self) -> None:
+    def test_min_groups_validation(self) -> None:
         with pytest.raises(ValidationError):
-            EvidenceRuleConfig(state="battle", any_of=["a"], min_matches=2)
+            EvidenceRuleConfig(state="battle", any_of=["a"], min_groups=2)
         with pytest.raises(ValidationError):
-            EvidenceRuleConfig(state="battle", requires=["a"], min_matches=2)
+            EvidenceRuleConfig(state="battle", requires=["a"], min_groups=2)
 
     # ---- 5. missing / reason 解释 ----
 
@@ -788,3 +800,277 @@ class TestEvidenceReliability:
         scores = aggregator(self.real_battle_rule()).score([hit("battle_auto_button", 0.99)])
         assert scores[0].satisfied is False
         assert scores[0].score == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
+# 10. Phase 4.4：证据分组（空间拓扑）
+# --------------------------------------------------------------------------
+
+
+class TestEvidenceGroups:
+    """Phase 4.4：group 字段、配置校验、空间去重与按 group 计数。"""
+
+    # ---- 1. group 字段 ----
+
+    def test_group_defaults_to_empty(self) -> None:
+        """未指定时 group 为空字符串（自成一组）。"""
+        assert hit("x", 0.5).group == ""
+        assert EvidenceResult.miss("x").group == ""
+
+    def test_group_is_carried_through(self) -> None:
+        assert hit("x", 0.5, group="right").group == "right"
+        assert EvidenceResult.miss("x", group="right").group == "right"
+
+    def test_detector_reads_group_from_config(self) -> None:
+        """detector 的 group 来自配置，而非源码硬编码。"""
+        detectors = {detector.name: detector for detector in create_detectors(EvidenceConfig())}
+        assert detectors["battle_action_bar"].group == "battle_right_ui"
+        assert detectors["battle_shikigami_icons"].group == "battle_right_ui"
+        assert detectors["victory_icon"].group == ""
+
+    def test_group_of_reverse_lookup(self) -> None:
+        config = EvidenceConfig()
+        assert config.group_of("battle_auto_button") == "battle_left_ui"
+        assert config.group_of("battle_shikigami_icons") == "battle_right_ui"
+        assert config.group_of("chapter_panel") is None
+
+    # ---- 配置校验 ----
+
+    def test_group_members_must_be_registered(self) -> None:
+        """不存在的 detector 不允许加入 group。"""
+        with pytest.raises(ValidationError, match="未登记的 detector"):
+            EvidenceConfig(groups={"x": {"members": ["no_such_detector"]}})
+
+    def test_group_members_must_not_be_empty(self) -> None:
+        """空 group 非法。"""
+        with pytest.raises(ValidationError, match="不能为空"):
+            EvidenceGroupConfig(members=[])
+
+    def test_group_members_must_be_unique(self) -> None:
+        with pytest.raises(ValidationError, match="重复"):
+            EvidenceGroupConfig(members=["a", "a"])
+
+    def test_multiple_groups_are_allowed(self) -> None:
+        """多个 group 配置合法。"""
+        config = EvidenceConfig(
+            groups={
+                "g1": {"members": ["battle_auto_button"]},
+                "g2": {"members": ["battle_skill_area"]},
+            }
+        )
+        assert set(config.groups) == {"g1", "g2"}
+
+    # ---- 2/3. 空间去重与计数 ----
+
+    @staticmethod
+    def two_group_rule() -> EvidenceRuleConfig:
+        """三个候选证据、需覆盖两个不同 group 的规则（低阈值便于验证聚合）。"""
+        return EvidenceRuleConfig(
+            state="battle",
+            any_of=["a", "b", "c"],
+            min_groups=2,
+            min_confidence=0.1,
+        )
+
+    def test_same_group_does_not_count_twice(self) -> None:
+        """同 group 的两条证据只算一个视觉区域，因此不满足 min_groups=2。"""
+        agg = aggregator(self.two_group_rule())
+        assert agg.aggregate(
+            [hit("a", 0.9, group="right"), hit("b", 0.9, group="right")]
+        ).state == "unknown"
+
+    def test_adding_second_group_satisfies_rule(self) -> None:
+        """补齐另一区域的证据后才满足条件。"""
+        agg = aggregator(self.two_group_rule())
+        assert agg.aggregate(
+            [hit("a", 0.9, group="right"), hit("b", 0.9, group="right")]
+        ).state == "unknown"
+        assert agg.aggregate(
+            [
+                hit("a", 0.9, group="right"),
+                hit("b", 0.9, group="right"),
+                hit("c", 0.9, group="bottom"),
+            ]
+        ).state == "battle"
+
+    def test_cross_group_counts(self) -> None:
+        agg = aggregator(self.two_group_rule())
+        assert agg.aggregate(
+            [hit("a", 0.9, group="right"), hit("c", 0.9, group="bottom")]
+        ).state == "battle"
+
+    def test_highest_effective_score_represents_group(self) -> None:
+        """同一 group 内取 effective score（confidence × reliability）最高者作代表。"""
+        result = aggregator(self.two_group_rule()).aggregate(
+            [
+                hit("a", 0.5, reliability=0.5, group="right"),  # eff 0.25
+                hit("b", 0.9, reliability=0.9, group="right"),  # eff 0.81 ← 代表
+                hit("c", 0.8, reliability=0.8, group="bottom"),  # eff 0.64
+            ]
+        )
+        assert result.state == "battle"
+        assert len(result.evidence) == 2
+        assert {item.name for item in result.evidence} == {"b", "c"}
+        assert result.confidence == pytest.approx((0.9 * 0.9 + 0.8 * 0.8) / (0.9 + 0.8))
+
+    def test_ungrouped_evidence_forms_its_own_group(self) -> None:
+        """未分组的证据以自身证据名自成一组。"""
+        result = aggregator(self.two_group_rule()).aggregate([hit("a", 0.9), hit("c", 0.9)])
+        assert result.state == "battle"
+        assert len(result.evidence) == 2
+
+    def test_unmet_rule_still_reports_missing(self) -> None:
+        """空间去重不影响 missing 的解释能力。"""
+        scores = aggregator(self.two_group_rule()).score(
+            [hit("a", 0.9, group="right"), hit("b", 0.9, group="right")]
+        )
+        assert scores[0].satisfied is False
+        assert "c" in scores[0].missing
+
+
+class TestBattleGroupTopology:
+    """Phase 4.4：战斗 UI 的真实分组行为（行动条与式神头像同属右侧区域）。"""
+
+    @staticmethod
+    def battle_aggregator() -> EvidenceAggregator:
+        """使用真实配置里的 battle 规则。"""
+        return EvidenceAggregator(EvidenceConfig().aggregator)
+
+    def test_right_ui_pair_alone_is_not_battle(self) -> None:
+        """action_bar + shikigami_icons 同属 battle_right_ui：一起命中只算一个区域。"""
+        result = self.battle_aggregator().aggregate(
+            [
+                hit("battle_action_bar", 0.95, group="battle_right_ui"),
+                hit("battle_shikigami_icons", 0.95, group="battle_right_ui"),
+            ]
+        )
+        assert result.state == "unknown"
+
+    @pytest.mark.parametrize(
+        ("first", "first_group", "second", "second_group"),
+        [
+            ("battle_auto_button", "battle_left_ui", "battle_skill_area", "battle_bottom_ui"),
+            ("battle_auto_button", "battle_left_ui", "battle_action_bar", "battle_right_ui"),
+            ("battle_skill_area", "battle_bottom_ui", "battle_shikigami_icons", "battle_right_ui"),
+        ],
+    )
+    def test_cross_group_pairs_are_battle(
+        self, first: str, first_group: str, second: str, second_group: str
+    ) -> None:
+        """覆盖两个不同视觉区域即可判定 battle（含没有自动按钮的组合）。"""
+        result = self.battle_aggregator().aggregate(
+            [hit(first, 0.9, group=first_group), hit(second, 0.9, group=second_group)]
+        )
+        assert result.state == "battle"
+
+    def test_four_evidences_collapse_to_three_regions(self) -> None:
+        """三块区域、四条证据：右侧两条压成一条代表，参与计分的是 3 条。"""
+        result = self.battle_aggregator().aggregate(
+            [
+                hit("battle_auto_button", 0.9, group="battle_left_ui"),
+                hit("battle_skill_area", 0.9, group="battle_bottom_ui"),
+                hit("battle_action_bar", 0.9, group="battle_right_ui"),
+                hit("battle_shikigami_icons", 0.9, group="battle_right_ui"),
+            ]
+        )
+        assert result.state == "battle"
+        assert len(result.evidence) == 3
+
+    def test_configured_groups_cover_battle_evidence(self) -> None:
+        """配置里 battle 的四条证据都归属明确的视觉区域。"""
+        config = EvidenceConfig()
+        groups = {config.group_of(name) for name in BATTLE_EVIDENCE_NAMES}
+        assert groups == {"battle_left_ui", "battle_bottom_ui", "battle_right_ui"}
+
+
+# --------------------------------------------------------------------------
+# 11. Phase 4.4：时间窗口稳定性
+# --------------------------------------------------------------------------
+
+
+class TestEvidenceHistory:
+    """Phase 4.4：候选状态的时间窗口稳定性（不涉及 StateMonitor）。"""
+
+    @staticmethod
+    def history(window_size: int = 5, min_state_count: int = 3) -> EvidenceHistory:
+        return EvidenceHistory(
+            EvidenceHistoryConfig(window_size=window_size, min_state_count=min_state_count)
+        )
+
+    @staticmethod
+    def candidate(state: str, confidence: float = 0.9) -> StateCandidate:
+        return StateCandidate(state=state, confidence=confidence)
+
+    def test_empty_window_is_not_stable(self) -> None:
+        assert self.history().stable_state() is None
+
+    def test_below_threshold_is_not_stable(self) -> None:
+        history = self.history()
+        history.push(self.candidate("battle"))
+        history.push(self.candidate("battle"))
+        assert history.stable_state() is None  # 2 < 3
+
+    def test_reaching_threshold_becomes_stable(self) -> None:
+        history = self.history()
+        for _ in range(3):
+            history.push(self.candidate("battle"))
+        assert history.stable_state() == "battle"
+
+    def test_jitter_sequence_from_spec(self) -> None:
+        """规格示例：[battle, battle, unknown, battle, battle] → stable_state=battle。"""
+        history = self.history()
+        for state in ["battle", "battle", "unknown", "battle", "battle"]:
+            history.push(self.candidate(state))
+        assert history.stable_state() == "battle"
+        assert history.counts() == {"battle": 4, "unknown": 1}
+
+    def test_jitter_is_tolerated_until_threshold(self) -> None:
+        """抖动序列在达到门槛前不应给出结论。"""
+        history = self.history()
+        for state in ["battle", "unknown", "battle"]:
+            history.push(self.candidate(state))
+        assert history.stable_state() is None
+
+    def test_window_slides_and_drops_oldest(self) -> None:
+        """窗口满后最旧的候选被挤出，稳定状态随之切换。"""
+        history = self.history(window_size=3, min_state_count=2)
+        for state in ["battle", "battle", "yard"]:
+            history.push(self.candidate(state))
+        assert history.stable_state() == "battle"
+        history.push(self.candidate("yard"))
+        assert history.states == ("battle", "yard", "yard")
+        assert history.stable_state() == "yard"
+
+    def test_tie_prefers_most_recent(self) -> None:
+        """计数并列时取最近出现的状态，保证结果确定。"""
+        history = self.history(window_size=4, min_state_count=2)
+        for state in ["battle", "battle", "yard", "yard"]:
+            history.push(self.candidate(state))
+        assert history.stable_state() == "yard"
+
+    def test_stable_candidate_keeps_confidence(self) -> None:
+        history = self.history()
+        for confidence in (0.5, 0.6, 0.7):
+            history.push(StateCandidate(state="battle", confidence=confidence, reason="probe"))
+        candidate = history.stable_candidate()
+        assert candidate is not None
+        assert candidate.confidence == pytest.approx(0.7)
+        assert candidate.reason == "probe"
+
+    def test_clear_resets_window(self) -> None:
+        history = self.history()
+        for _ in range(3):
+            history.push(self.candidate("battle"))
+        history.clear()
+        assert len(history) == 0
+        assert history.stable_state() is None
+
+    def test_window_config_validation(self) -> None:
+        """稳定门槛超过窗口长度时必须报错（否则永远无法稳定）。"""
+        with pytest.raises(ValidationError, match="min_state_count"):
+            EvidenceHistoryConfig(window_size=3, min_state_count=5)
+
+    def test_describe_reports_window_state(self) -> None:
+        history = self.history()
+        history.push(self.candidate("battle"))
+        assert "window=1/5" in history.describe()

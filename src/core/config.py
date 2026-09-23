@@ -127,8 +127,24 @@ MIN_EVIDENCE_RELIABILITY: float = 0.0
 MAX_EVIDENCE_RELIABILITY: float = 1.0
 #: 证据可靠度的默认值：未显式配置时视为满可靠，加权平均退化为等权平均
 DEFAULT_EVIDENCE_RELIABILITY: float = 1.0
-#: 规则中 any_of 的默认最少命中数（1 = 现有的"至少命中一个"语义）
-DEFAULT_EVIDENCE_MIN_MATCHES: int = 1
+#: 规则中 any_of 的默认最少命中 **group** 数（1 = "至少命中一个视觉区域"）
+DEFAULT_EVIDENCE_MIN_GROUPS: int = 1
+#: 默认的证据分组（Phase 4.4）：group 名 -> 成员证据名
+#:
+#: 多个 detector 可能观察**同一块视觉区域**（例如战斗界面右侧的行动条与式神头像），
+#: 它们的命中在空间上高度相关，不能各算一次；按 group 去重后只贡献一次得分，
+#: 规则也可以按 group 数（而非证据条数）计数。
+#:
+#: 未出现在任何 group 里的证据自成一组（以自身证据名作为组名）。
+DEFAULT_EVIDENCE_GROUPS: dict[str, dict[str, Any]] = {
+    "battle_left_ui": {"members": ["battle_auto_button"]},
+    "battle_bottom_ui": {"members": ["battle_skill_area"]},
+    "battle_right_ui": {"members": ["battle_action_bar", "battle_shikigami_icons"]},
+}
+#: 证据历史窗口的默认长度（Phase 4.4）：保留最近多少个候选状态
+DEFAULT_EVIDENCE_HISTORY_WINDOW: int = 5
+#: 历史窗口内判定"稳定"所需的最少同状态次数
+DEFAULT_EVIDENCE_HISTORY_MIN_STATE_COUNT: int = 3
 #: 默认的证据可靠度表（Phase 4.3）：证据名 -> **长期**可靠程度
 #:
 #: 与 ``confidence``（当帧匹配强度）不同，可靠度回答的是"这类证据平时有多可信"，
@@ -194,9 +210,11 @@ DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
 }
 #: 默认的证据聚合规则：状态 -> 需要的证据名
 #:
-#: ``requires`` 必须全部命中；``any_of`` 至少命中 ``min_matches`` 条。
-#: Phase 4.3 起 ``battle`` 不再强依赖自动按钮：四条战斗证据里任意两条即可——
-#: 既能容忍某一处 UI 被技能动画遮挡，也不会因为某个副本没有自动按钮而整条链路失效。
+#: ``requires`` 必须全部命中；``any_of`` 至少命中 ``min_groups`` 个**不同 group**。
+#: Phase 4.4 起 ``battle`` 按视觉区域计数：自动按钮（左）、技能区（底）、右侧 UI
+#: （行动条 + 式神头像，同一块区域）里任意两个区域命中即可——
+#: 既容忍某个区域被技能动画遮挡，也不会把"同一块右侧 UI 上两个 detector 同时命中"
+#: 误当成两条独立证据。
 DEFAULT_EVIDENCE_RULES: tuple[dict[str, Any], ...] = (
     {"state": "battle_result", "requires": ["victory_icon"]},
     {"state": "battle_reward", "requires": ["reward_panel"]},
@@ -208,7 +226,7 @@ DEFAULT_EVIDENCE_RULES: tuple[dict[str, Any], ...] = (
             "battle_action_bar",
             "battle_shikigami_icons",
         ],
-        "min_matches": 2,
+        "min_groups": 2,
     },
     {"state": "exploration", "requires": ["bottom_menu_exploration", "chapter_panel"]},
     {"state": "yard", "requires": ["bottom_menu_yard"]},
@@ -608,25 +626,54 @@ class EvidenceDetectorConfig(StrictModel):
         )
 
 
+class EvidenceGroupConfig(StrictModel):
+    """一组观察**同一视觉区域**的证据（Phase 4.4）。
+
+    多个 detector 可能落在同一块 UI 上（战斗界面右侧的行动条与式神头像），它们的命中
+    在空间上高度相关。放进同一 group 后，聚合器在该组内**只取一条**代表参与计分，
+    规则也可以按 group 数（而不是证据条数）计数。
+
+    Attributes:
+        members: 成员证据名（至少一个，不允许重复）。
+
+    Raises:
+        ValueError: ``members`` 为空、含空名或存在重复项。
+    """
+
+    members: list[str] = Field(default_factory=list)
+
+    @field_validator("members")
+    @classmethod
+    def _validate_members(cls, value: list[str]) -> list[str]:
+        """校验成员非空且不重复。"""
+        if not value:
+            raise ValueError("evidence group 的 members 不能为空")
+        if any(not member.strip() for member in value):
+            raise ValueError("evidence group 的成员名不能为空")
+        if len(set(value)) != len(value):
+            raise ValueError(f"evidence group 的 members 存在重复项: {value}")
+        return value
+
+
 class EvidenceRuleConfig(StrictModel):
-    """一条"证据 -> 候选状态"的聚合规则（Phase 4.1，Phase 4.3 扩展计数条件）。
+    """一条"证据 -> 候选状态"的聚合规则（Phase 4.1，Phase 4.4 改为按 group 计数）。
 
     规则是**声明式**的：满足条件即产生候选状态，因此新增状态或调整判定强度
     都不需要改 Aggregator 代码。
 
     Attributes:
         state: 候选状态名。
-        requires: 必须**全部**命中的证据名。
-        any_of: 候选证据名；至少命中 ``min_matches`` 条即算满足（可为空）。
-        min_matches: ``any_of`` 的最少命中数；``1`` 等价于"至少命中一个"。
-            声明了 ``any_of`` 才能使用大于 1 的取值。
+        requires: 必须**全部**命中的证据名（按证据逐条判断，不参与 group 计数）。
+        any_of: 候选证据名；其命中证据覆盖到至少 ``min_groups`` 个**不同 group** 即算满足。
+        min_groups: ``any_of`` 需要覆盖的最少 group 数；``1`` 等价于"至少命中一个区域"。
+            同一 group 内命中多条证据只算一个 group。
         min_confidence: 单条证据的置信度下限（低于该值的证据不算命中）。
     """
 
     state: str
     requires: list[str] = Field(default_factory=list)
     any_of: list[str] = Field(default_factory=list)
-    min_matches: int = Field(default=DEFAULT_EVIDENCE_MIN_MATCHES, ge=1)
+    min_groups: int = Field(default=DEFAULT_EVIDENCE_MIN_GROUPS, ge=1)
     min_confidence: float = Field(default=DEFAULT_EVIDENCE_RULE_MIN_CONFIDENCE, gt=0.0, le=1.0)
 
     @field_validator("state")
@@ -644,13 +691,13 @@ class EvidenceRuleConfig(StrictModel):
             raise ValueError(
                 f"evidence 规则 {self.state!r} 至少要声明 requires 或 any_of 之一"
             )
-        if not self.any_of and self.min_matches != DEFAULT_EVIDENCE_MIN_MATCHES:
+        if not self.any_of and self.min_groups != DEFAULT_EVIDENCE_MIN_GROUPS:
             raise ValueError(
-                f"evidence 规则 {self.state!r} 未声明 any_of，min_matches 无意义"
+                f"evidence 规则 {self.state!r} 未声明 any_of，min_groups 无意义"
             )
-        if self.any_of and self.min_matches > len(self.any_of):
+        if self.any_of and self.min_groups > len(self.any_of):
             raise ValueError(
-                f"evidence 规则 {self.state!r} 的 min_matches={self.min_matches} "
+                f"evidence 规则 {self.state!r} 的 min_groups={self.min_groups} "
                 f"超过 any_of 的证据数（{len(self.any_of)}）"
             )
         return self
@@ -672,8 +719,37 @@ class EvidenceAggregatorConfig(StrictModel):
     )
 
 
+class EvidenceHistoryConfig(StrictModel):
+    """证据历史窗口配置（Phase 4.4）。
+
+    为 500ms 轮询下的**时间稳定性**提供基础：单帧判定会在转场 / 技能动画时抖动，
+    对最近若干帧的候选状态做多数判断可以显著降低抖动。本配置只描述窗口参数，
+    时间累积逻辑在 :class:`~src.vision.evidence.history.EvidenceHistory`。
+
+    Attributes:
+        window_size: 保留最近多少个候选状态（滑动窗口长度）。
+        min_state_count: 窗口内同一状态出现多少次才认为"稳定"。
+
+    Raises:
+        ValueError: 窗口长度非正，或门槛超过窗口长度（永远无法稳定）。
+    """
+
+    window_size: int = Field(default=DEFAULT_EVIDENCE_HISTORY_WINDOW, ge=1)
+    min_state_count: int = Field(default=DEFAULT_EVIDENCE_HISTORY_MIN_STATE_COUNT, ge=1)
+
+    @model_validator(mode="after")
+    def _validate_window(self) -> EvidenceHistoryConfig:
+        """校验"稳定门槛"不超过窗口长度。"""
+        if self.min_state_count > self.window_size:
+            raise ValueError(
+                f"evidence.history 的 min_state_count={self.min_state_count} "
+                f"超过 window_size={self.window_size}（永远无法达到稳定）"
+            )
+        return self
+
+
 class EvidenceConfig(StrictModel):
-    """视觉证据层配置（Phase 4.1，Phase 4.3 加入证据可靠度表）。
+    """视觉证据层配置（Phase 4.1；4.3 加入可靠度表；4.4 加入分组与历史窗口）。
 
     Attributes:
         enabled: 证据层总开关。
@@ -683,7 +759,11 @@ class EvidenceConfig(StrictModel):
             可靠度，聚合器据此做加权平均。
         default_reliability: 未在 :attr:`reliability` 中登记的证据所使用的兜底值；
             默认 ``1.0``，即"未标定就按等权处理"。
+        groups: group 名 -> 成员；同一 group 内的证据观察**同一块视觉区域**，
+            聚合时只作一条代表参与计分（见 :meth:`group_of`）。
         aggregator: 证据聚合配置。
+        history: 候选状态的时间窗口配置（供
+            :class:`~src.vision.evidence.history.EvidenceHistory` 使用）。
     """
 
     enabled: bool = True
@@ -701,6 +781,12 @@ class EvidenceConfig(StrictModel):
         le=MAX_EVIDENCE_RELIABILITY,
     )
     aggregator: EvidenceAggregatorConfig = Field(default_factory=EvidenceAggregatorConfig)
+    groups: dict[str, EvidenceGroupConfig] = Field(
+        default_factory=lambda: {
+            name: EvidenceGroupConfig(**values) for name, values in DEFAULT_EVIDENCE_GROUPS.items()
+        }
+    )
+    history: EvidenceHistoryConfig = Field(default_factory=EvidenceHistoryConfig)
 
     @field_validator("reliability")
     @classmethod
@@ -726,6 +812,39 @@ class EvidenceConfig(StrictModel):
             可靠度，范围 ``(0, 1]``。
         """
         return self.reliability.get(name, self.default_reliability)
+
+    def group_of(self, name: str) -> str | None:
+        """返回某条证据所属的 group 名（未分组时返回 ``None``）。
+
+        一条证据应只归属一块视觉区域；若配置里把它写进多个 group，只有配置顺序里最先
+        出现的那个生效（不报错，但结果确定、可复现）。
+
+        Args:
+            name: 证据名。
+
+        Returns:
+            group 名；该证据未出现在任何 group 中时返回 ``None``。
+        """
+        for group_name, group in self.groups.items():
+            if name in group.members:
+                return group_name
+        return None
+
+    @model_validator(mode="after")
+    def _validate_groups(self) -> EvidenceConfig:
+        """校验 group 成员都是已登记的 detector。
+
+        "不存在的 detector 不允许加入 group"：成员必须能在 :attr:`detectors` 中找到，
+        否则说明配置拼写错误或 detector 已被移除，必须在加载期暴露而不是静默失效。
+        """
+        for group_name, group in self.groups.items():
+            unknown = [member for member in group.members if member not in self.detectors]
+            if unknown:
+                raise ValueError(
+                    f"evidence.groups[{group_name!r}] 引用了未登记的 detector: "
+                    f"{', '.join(unknown)}（已登记: {', '.join(sorted(self.detectors))}）"
+                )
+        return self
 
 
 class RuntimeStateMonitorConfig(StrictModel):

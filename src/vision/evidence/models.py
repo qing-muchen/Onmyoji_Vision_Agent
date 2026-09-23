@@ -114,6 +114,9 @@ class EvidenceResult:
             ``evidence.reliability`` 在构造 detector 时注入，检测结果本身不改动它。
             与 ``confidence`` 的分工：``confidence`` 回答"这一帧匹配得多好"，
             ``reliability`` 回答"这类证据平时有多可信"，聚合器据此做加权平均。
+        group: 该证据观察的**视觉区域**名（由配置 ``evidence.groups`` 注入）；
+            同一 group 内的多条证据在空间上相关，聚合时只作一条代表参与计分。
+            空字符串表示未分组——此时该证据自成一组。
 
     Raises:
         ValueError: 名称为空、``evidence_type`` 类型不对、置信度或可靠度越界，
@@ -128,6 +131,7 @@ class EvidenceResult:
     metadata: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
     evidence_type: EvidenceType = EvidenceType.CUSTOM
     reliability: float = DEFAULT_RELIABILITY
+    group: str = ""
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -156,6 +160,7 @@ class EvidenceResult:
         metadata: dict[str, Any] | None = None,
         evidence_type: EvidenceType = EvidenceType.CUSTOM,
         reliability: float = DEFAULT_RELIABILITY,
+        group: str = "",
     ) -> EvidenceResult:
         """构造一条"未检出"的证据。
 
@@ -165,6 +170,7 @@ class EvidenceResult:
             evidence_type: 证据的粗分类。
             reliability: 该类证据的长期可靠程度；未检出时不计分，但保持字段完整，
                 便于日志里对照"这条证据本来有多可信"。
+            group: 该证据观察的视觉区域名（未检出时不计分，同样只为字段完整）。
 
         Returns:
             ``detected=False``、``confidence=0.0`` 的证据。
@@ -176,6 +182,7 @@ class EvidenceResult:
             metadata=metadata or {},
             evidence_type=evidence_type,
             reliability=reliability,
+            group=group,
         )
 
     @property

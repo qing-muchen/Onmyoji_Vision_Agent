@@ -131,7 +131,7 @@ state:
     threshold: 0.85
 
 evidence:
-  # 视觉证据层（Phase 4.1）：Frame -> [EvidenceResult] -> StateCandidate
+  # 视觉证据层（Phase 4.1-4.4）：Frame -> [EvidenceResult] -> StateCandidate -> stable state
   # 只提取可解释的视觉证据，**不直接输出状态**；状态映射全部由 aggregator 的规则完成。
   #
   # detectors 的公共默认值（各条目可单独覆盖）：
@@ -164,6 +164,25 @@ evidence:
     battle_shikigami_icons: 0.5
   # 未在上表登记的证据使用该兜底可靠度（1.0 = 未标定就按等权处理）
   default_reliability: 1.0
+  # 证据分组（Phase 4.4）：同一 group 内的 detector 观察**同一块视觉区域**。
+  # 同一区域上的多次命中在空间上高度相关，聚合时只作一条代表参与计分，
+  # 规则也可以按 group 数（min_groups）而不是证据条数计数。
+  # 未出现在任何 group 里的证据自成一组（以自身证据名作为组名）。
+  groups:
+    battle_left_ui:
+      members: ["battle_auto_button"]
+    battle_bottom_ui:
+      members: ["battle_skill_area"]
+    # 行动条与式神头像都落在战斗界面右侧同一块 UI 上，因此同组
+    battle_right_ui:
+      members: ["battle_action_bar", "battle_shikigami_icons"]
+  # 候选状态的时间窗口（Phase 4.4）：供证据层的 EvidenceHistory 使用，不涉及 StateMonitor。
+  # 500ms 轮询下单帧判定会在转场 / 技能动画时抖动，需按窗口内多数判断。
+  history:
+    # 保留最近多少个候选状态
+    window_size: 5
+    # 窗口内同一状态出现多少次才认为稳定
+    min_state_count: 3
   detectors:
     # 注意：bottom_menu 刻意拆成 yard / exploration 两个 detector——
     # 两类底部功能栏的图标组成与上下文完全不同，合并会丢掉区分度。
@@ -236,7 +255,7 @@ evidence:
       shortfall_factor: 0.7
   aggregator:
     # 证据 -> 候选状态的映射规则（声明式：新增状态只需加规则，无需改代码）
-    # requires: 必须全部命中；any_of + min_matches: 候选证据里至少命中 min_matches 条
+    # requires: 必须全部命中；any_of + min_groups: 候选证据需覆盖至少 min_groups 个不同 group
     enabled: true
     fallback_state: "unknown"
     rules:
@@ -247,12 +266,12 @@ evidence:
       - state: "battle_reward"
         requires: ["reward_panel"]
         min_confidence: 0.6
-      # 战斗（Phase 4.3）：不再强依赖自动按钮——四条战斗证据里任意两条即可。
-      # 既可以容忍某一处 UI 被遮挡（实测 battle_002 右侧行动条不可见），
-      # 也不会因为某个副本没有自动按钮而整条链路失效。
+      # 战斗（Phase 4.4）：按**视觉区域**计数，需覆盖至少两个不同 group。
+      # 行动条与式神头像同属 battle_right_ui，一起命中只算一个区域，
+      # 因此"只有右侧 UI 亮起"不会被误判为战斗。
       - state: "battle"
         any_of: ["battle_auto_button", "battle_skill_area", "battle_action_bar", "battle_shikigami_icons"]
-        min_matches: 2
+        min_groups: 2
         min_confidence: 0.6
       - state: "exploration"
         requires: ["bottom_menu_exploration", "chapter_panel"]
