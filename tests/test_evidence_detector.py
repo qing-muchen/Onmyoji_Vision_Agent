@@ -97,8 +97,14 @@ class FakeDetector(BaseEvidenceDetector):
         return self._result
 
 
-def hit(name: str, confidence: float, *, evidence_type: EvidenceType = EvidenceType.CUSTOM) -> EvidenceResult:
-    """构造一条命中证据。"""
+def hit(
+    name: str,
+    confidence: float,
+    *,
+    reliability: float = 1.0,
+    evidence_type: EvidenceType = EvidenceType.CUSTOM,
+) -> EvidenceResult:
+    """构造一条命中证据（``reliability`` 默认 1.0，即等权）。"""
     return EvidenceResult(
         name=name,
         detected=True,
@@ -106,6 +112,7 @@ def hit(name: str, confidence: float, *, evidence_type: EvidenceType = EvidenceT
         bbox=Rect(x=1, y=2, width=3, height=4),
         source=EvidenceSource.TEMPLATE,
         evidence_type=evidence_type,
+        reliability=reliability,
     )
 
 
@@ -522,43 +529,44 @@ class TestBattleEvidenceChain:
         assert detectors["battle_shikigami_icons"].roi == (0.925, 0.09, 1.00, 0.60)
 
     def test_default_battle_rule_shape(self) -> None:
+        """Phase 4.3：battle 规则不再强依赖自动按钮，改为"四条里任意两条"。"""
         config = EvidenceConfig()
         battle = next(rule for rule in config.aggregator.rules if rule.state == "battle")
-        assert battle.requires == ["battle_auto_button"]
-        assert battle.any_of == list(NEW_BATTLE_DETECTORS)
+        assert battle.requires == []
+        assert battle.any_of == list(BATTLE_EVIDENCE_NAMES)
+        assert battle.min_matches == 2
 
     @staticmethod
     def battle_rule() -> EvidenceRuleConfig:
-        """Phase 4.2 的 battle 规则：必需自动按钮 + 任一辅助证据。"""
+        """Phase 4.3 的 battle 规则：四条战斗证据里任意两条。"""
         return EvidenceRuleConfig(
             state="battle",
-            requires=["battle_auto_button"],
-            any_of=list(NEW_BATTLE_DETECTORS),
+            any_of=list(BATTLE_EVIDENCE_NAMES),
+            min_matches=2,
         )
 
-    @pytest.mark.parametrize("aux", NEW_BATTLE_DETECTORS)
-    def test_auto_plus_one_aux_is_battle(self, aux: str) -> None:
-        """自动按钮 + 任一辅助证据即可判定 battle（覆盖技能动画遮挡单个证据的场景）。"""
-        result = aggregator(self.battle_rule()).aggregate(
-            [hit("battle_auto_button", 0.95), hit(aux, 0.9)]
-        )
+    @pytest.mark.parametrize(
+        "pair",
+        [
+            ("battle_auto_button", "battle_skill_area"),
+            ("battle_auto_button", "battle_shikigami_icons"),
+            ("battle_skill_area", "battle_action_bar"),
+            ("battle_action_bar", "battle_shikigami_icons"),
+        ],
+    )
+    def test_any_two_evidences_is_battle(self, pair: tuple[str, str]) -> None:
+        """任意两条战斗证据即可判定 battle（含"没有自动按钮"的组合）。"""
+        result = aggregator(self.battle_rule()).aggregate([hit(name, 0.9) for name in pair])
         assert result.state == "battle"
-        assert result.confidence == pytest.approx(0.925)
+        assert result.confidence == pytest.approx(0.9)
         assert len(result.evidence) == 2
 
-    def test_auto_alone_is_not_enough(self) -> None:
-        """只有自动按钮、没有任何辅助证据时不判定 battle（避免单证据误判）。"""
-        result = aggregator(self.battle_rule()).aggregate([hit("battle_auto_button", 0.95)])
+    @pytest.mark.parametrize("name", BATTLE_EVIDENCE_NAMES)
+    def test_single_evidence_is_not_enough(self, name: str) -> None:
+        """单条战斗证据不足以判定（避免任何一处 UI 误检就切状态）。"""
+        result = aggregator(self.battle_rule()).aggregate([hit(name, 0.95)])
         assert result.state == "unknown"
-        assert "battle_skill_area" in result.reason
-
-    def test_aux_alone_is_not_enough(self) -> None:
-        """辅助证据齐全但缺少必需的自动按钮 → 不判定 battle。"""
-        result = aggregator(self.battle_rule()).aggregate(
-            [hit(name, 0.95) for name in NEW_BATTLE_DETECTORS]
-        )
-        assert result.state == "unknown"
-        assert "battle_auto_button" in result.reason
+        assert "battle" in result.reason
 
     def test_full_battle_evidence(self) -> None:
         result = aggregator(self.battle_rule()).aggregate(
@@ -583,3 +591,200 @@ class TestBattleEvidenceChain:
         assert agg.aggregate(
             [hit("battle_auto_button", 0.95), hit("battle_skill_area", 0.95)]
         ).state == "battle"
+
+
+# --------------------------------------------------------------------------
+# 9. Phase 4.3：证据可靠度与加权计分
+# --------------------------------------------------------------------------
+
+
+class TestEvidenceReliability:
+    """Phase 4.3：reliability 读取、加权计分、弱证据降权、battle 计数条件与 missing 解释。"""
+
+    # ---- 1. reliability 读取 ----
+
+    def test_default_reliability_is_neutral(self) -> None:
+        """未显式指定时可靠度为 1.0（等权），保证行为向后兼容。"""
+        assert hit("x", 0.5).reliability == pytest.approx(1.0)
+
+    @pytest.mark.parametrize("value", [0.0, -0.1, 1.01, 2.0])
+    def test_reliability_range_enforced(self, value: float) -> None:
+        with pytest.raises(ValueError, match="reliability"):
+            EvidenceResult(name="x", detected=True, confidence=0.5, reliability=value)
+
+    def test_config_reliability_table(self) -> None:
+        """可靠度由配置提供，源码里不出现具体权重。"""
+        config = EvidenceConfig()
+        assert config.reliability_for("victory_icon") == pytest.approx(0.95)
+        assert config.reliability_for("battle_action_bar") == pytest.approx(0.5)
+        # 未登记的证据走兜底值
+        assert config.reliability_for("brand_new_evidence") == pytest.approx(1.0)
+
+    def test_reliability_config_rejects_out_of_range(self) -> None:
+        with pytest.raises(ValidationError):
+            EvidenceConfig(reliability={"bad": 0.0})
+
+    def test_detector_reads_reliability_from_config(self) -> None:
+        config = EvidenceConfig()
+        detectors = create_detectors(config)
+        assert detectors
+        for detector in detectors:
+            assert detector.reliability == pytest.approx(config.reliability_for(detector.name))
+
+    def test_detector_writes_reliability_into_evidence(self, tmp_path: Path) -> None:
+        """detector 输出的每条证据（含未检出的）都要带上自己的可靠度。"""
+        miss = TemplateEvidenceDetector(
+            "probe", EvidenceDetectorConfig(), reliability=0.42
+        ).detect(make_frame())
+        assert miss.detected is False
+        assert miss.reliability == pytest.approx(0.42)
+
+        frame = make_frame()
+        write_png(tmp_path / "probe" / "positive" / "probe_cap_001.png", frame.image[240:300, 0:400])
+        detector = TemplateEvidenceDetector(
+            "probe",
+            EvidenceDetectorConfig(roi=(0.0, 0.8, 1.0, 1.0), min_templates=1),
+            tuple(load_feature_templates(tmp_path / "probe" / "positive", "probe", limit=1, root=tmp_path)),
+            reliability=0.42,
+        )
+        result = detector.detect(frame)
+        assert result.detected is True
+        assert result.reliability == pytest.approx(0.42)
+
+    # ---- 2. weighted score 计算 ----
+
+    @staticmethod
+    def two_evidence_rule() -> EvidenceRuleConfig:
+        """两条候选证据的最小规则。
+
+        刻意使用较低的 ``min_confidence``：本组测试验证的是**加权公式**本身，
+        低置信度的"弱证据"必须能进入计分，否则测试的是阈值过滤而不是加权。
+        """
+        return EvidenceRuleConfig(
+            state="battle",
+            any_of=["strong", "weak"],
+            min_confidence=0.1,
+        )
+
+    def test_weighted_score_formula(self) -> None:
+        """score = sum(confidence * reliability) / sum(reliability)。"""
+        scores = aggregator(self.two_evidence_rule()).score(
+            [hit("strong", 0.9, reliability=0.9), hit("weak", 0.3, reliability=0.3)]
+        )
+        expected = (0.9 * 0.9 + 0.3 * 0.3) / (0.9 + 0.3)
+        assert scores[0].score == pytest.approx(expected)
+        assert scores[0].score == pytest.approx(0.75)
+
+    def test_equal_reliability_degrades_to_simple_mean(self) -> None:
+        """可靠度相同时退化为简单平均（等价于 Phase 4.2 的行为）。"""
+        scores = aggregator(self.two_evidence_rule()).score(
+            [hit("strong", 0.9), hit("weak", 0.3)]
+        )
+        assert scores[0].score == pytest.approx((0.9 + 0.3) / 2)
+
+    def test_aggregate_confidence_uses_weighted_score(self) -> None:
+        result = aggregator(self.two_evidence_rule()).aggregate(
+            [hit("strong", 0.9, reliability=0.9), hit("weak", 0.3, reliability=0.3)]
+        )
+        assert result.state == "battle"
+        assert result.confidence == pytest.approx(0.75)
+
+    # ---- 3. 弱证据不会显著拉低强证据 ----
+
+    def test_weak_evidence_barely_drags_down_strong_score(self) -> None:
+        """低可靠度旁证权重极小：几乎不影响强证据给出的分。"""
+        agg = aggregator(self.two_evidence_rule())
+        strong_only = agg.score([hit("strong", 0.95, reliability=0.99)])[0].score
+        with_weak = agg.score(
+            [hit("strong", 0.95, reliability=0.99), hit("weak", 0.2, reliability=0.01)]
+        )[0].score
+        assert with_weak == pytest.approx(strong_only, abs=0.01)
+
+    def test_weighted_score_beats_simple_mean(self) -> None:
+        """同一组证据：加权分必须高于简单平均（弱证据被降权）。"""
+        matched = [hit("strong", 0.95, reliability=0.99), hit("weak", 0.2, reliability=0.01)]
+        weighted = aggregator(self.two_evidence_rule()).score(matched)[0].score
+        simple_mean = sum(item.confidence for item in matched) / len(matched)
+        assert weighted > simple_mean
+
+    def test_high_reliability_evidence_dominates(self) -> None:
+        """可靠度高的证据对得分影响更大。"""
+        agg = aggregator(self.two_evidence_rule())
+        high_weight = agg.score(
+            [hit("strong", 1.0, reliability=0.9), hit("weak", 0.5, reliability=0.1)]
+        )[0].score
+        low_weight = agg.score(
+            [hit("strong", 1.0, reliability=0.1), hit("weak", 0.5, reliability=0.9)]
+        )[0].score
+        assert high_weight > low_weight
+
+    # ---- 4. battle：没有 auto_button 也能识别 ----
+
+    @staticmethod
+    def real_battle_rule() -> EvidenceRuleConfig:
+        """取配置里的真实 battle 规则。"""
+        return next(
+            rule for rule in EvidenceConfig().aggregator.rules if rule.state == "battle"
+        )
+
+    def test_battle_without_auto_button_is_recognised(self) -> None:
+        """Phase 4.3：没有自动按钮，另外两条战斗证据即可判定 battle。"""
+        result = aggregator(self.real_battle_rule()).aggregate(
+            [
+                hit("battle_skill_area", 0.9, reliability=0.8),
+                hit("battle_action_bar", 0.9, reliability=0.5),
+            ]
+        )
+        assert result.state == "battle"
+        assert result.confidence == pytest.approx((0.9 * 0.8 + 0.9 * 0.5) / 1.3)
+
+    def test_battle_min_matches_boundary(self) -> None:
+        agg = aggregator(self.real_battle_rule())
+        assert agg.aggregate([hit("battle_skill_area", 0.9)]).state == "unknown"
+        assert agg.aggregate(
+            [hit("battle_skill_area", 0.9), hit("battle_action_bar", 0.9)]
+        ).state == "battle"
+
+    def test_min_matches_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            EvidenceRuleConfig(state="battle", any_of=["a"], min_matches=2)
+        with pytest.raises(ValidationError):
+            EvidenceRuleConfig(state="battle", requires=["a"], min_matches=2)
+
+    # ---- 5. missing / reason 解释 ----
+
+    def test_missing_lists_unmet_any_of_candidates(self) -> None:
+        """any_of 未达标时，missing 必须列出所有未命中的候选证据。"""
+        battlefield = aggregator(self.real_battle_rule()).score([hit("battle_skill_area", 0.9)])[0]
+        assert battlefield.satisfied is False
+        assert set(battlefield.missing) == {
+            "battle_auto_button",
+            "battle_action_bar",
+            "battle_shikigami_icons",
+        }
+
+    def test_missing_keeps_requires_semantics(self) -> None:
+        """requires 缺失仍然记入 missing（与 Phase 4.1 行为一致）。"""
+        agg = aggregator(
+            EvidenceRuleConfig(
+                state="exploration",
+                requires=["bottom_menu_exploration", "chapter_panel"],
+            )
+        )
+        assert agg.score([hit("bottom_menu_exploration", 0.9)])[0].missing == ("chapter_panel",)
+
+    def test_reason_reports_reliability(self) -> None:
+        """reason 里要能看出每条证据的可靠度，解释得分从何而来。"""
+        result = aggregator(self.real_battle_rule()).aggregate(
+            [
+                hit("battle_auto_button", 0.9, reliability=0.8),
+                hit("battle_skill_area", 0.9, reliability=0.8),
+            ]
+        )
+        assert "battle_auto_button=0.9000(r=0.80)" in result.reason
+
+    def test_unmet_rule_scores_zero(self) -> None:
+        """未满足的规则得分必须为 0，避免它被误当成候选。"""
+        scores = aggregator(self.real_battle_rule()).score([hit("battle_auto_button", 0.99)])
+        assert scores[0].satisfied is False
+        assert scores[0].score == pytest.approx(0.0)

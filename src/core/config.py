@@ -122,6 +122,33 @@ DEFAULT_EVIDENCE_OCR_ONLY_FACTOR: float = 0.9
 DEFAULT_EVIDENCE_RULE_MIN_CONFIDENCE: float = 0.6
 #: Aggregator 的兜底状态名（没有任何规则命中时输出）
 DEFAULT_EVIDENCE_FALLBACK_STATE: str = "unknown"
+#: 证据可靠度的合法区间（左开右闭：可靠度为 0 会让加权平均除零）
+MIN_EVIDENCE_RELIABILITY: float = 0.0
+MAX_EVIDENCE_RELIABILITY: float = 1.0
+#: 证据可靠度的默认值：未显式配置时视为满可靠，加权平均退化为等权平均
+DEFAULT_EVIDENCE_RELIABILITY: float = 1.0
+#: 规则中 any_of 的默认最少命中数（1 = 现有的"至少命中一个"语义）
+DEFAULT_EVIDENCE_MIN_MATCHES: int = 1
+#: 默认的证据可靠度表（Phase 4.3）：证据名 -> **长期**可靠程度
+#:
+#: 与 ``confidence``（当帧匹配强度）不同，可靠度回答的是"这类证据平时有多可信"，
+#: 因此只与证据类型有关、与当前这一帧的好坏无关。判定依据：
+#:
+#: * 结算 / 奖励界面形态独特、误报率低 → 0.95；
+#: * 底部功能栏、章节栏是稳定的结构性 UI → 0.9；
+#: * 自动按钮与技能区跨皮肤形态稳定 → 0.8；
+#: * 行动条 / 式神头像易被技能动画遮挡，且两者区域重叠、独立价值有限 → 0.5。
+DEFAULT_EVIDENCE_RELIABILITY_MAP: dict[str, float] = {
+    "victory_icon": 0.95,
+    "reward_panel": 0.95,
+    "bottom_menu_yard": 0.9,
+    "bottom_menu_exploration": 0.9,
+    "chapter_panel": 0.9,
+    "battle_auto_button": 0.8,
+    "battle_skill_area": 0.8,
+    "battle_action_bar": 0.5,
+    "battle_shikigami_icons": 0.5,
+}
 #: 默认的证据 detector 定义：名称 -> {ROI, 模板目录, OCR 目标文本}
 DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
     "bottom_menu_yard": {
@@ -167,16 +194,21 @@ DEFAULT_EVIDENCE_DETECTORS: dict[str, dict[str, Any]] = {
 }
 #: 默认的证据聚合规则：状态 -> 需要的证据名
 #:
-#: ``requires`` 必须全部命中，``any_of`` 至少命中一条（Phase 4.2 起 ``battle`` 使用两者组合：
-#: 自动按钮是战斗的强特征，技能区 / 行动条 / 式神头像任一再加一条旁证即可，
-#: 这样单个证据被技能动画遮挡时不会丢掉整条链路）。
+#: ``requires`` 必须全部命中；``any_of`` 至少命中 ``min_matches`` 条。
+#: Phase 4.3 起 ``battle`` 不再强依赖自动按钮：四条战斗证据里任意两条即可——
+#: 既能容忍某一处 UI 被技能动画遮挡，也不会因为某个副本没有自动按钮而整条链路失效。
 DEFAULT_EVIDENCE_RULES: tuple[dict[str, Any], ...] = (
     {"state": "battle_result", "requires": ["victory_icon"]},
     {"state": "battle_reward", "requires": ["reward_panel"]},
     {
         "state": "battle",
-        "requires": ["battle_auto_button"],
-        "any_of": ["battle_skill_area", "battle_action_bar", "battle_shikigami_icons"],
+        "any_of": [
+            "battle_auto_button",
+            "battle_skill_area",
+            "battle_action_bar",
+            "battle_shikigami_icons",
+        ],
+        "min_matches": 2,
     },
     {"state": "exploration", "requires": ["bottom_menu_exploration", "chapter_panel"]},
     {"state": "yard", "requires": ["bottom_menu_yard"]},
@@ -577,20 +609,24 @@ class EvidenceDetectorConfig(StrictModel):
 
 
 class EvidenceRuleConfig(StrictModel):
-    """一条"证据 -> 候选状态"的聚合规则（Phase 4.1）。
+    """一条"证据 -> 候选状态"的聚合规则（Phase 4.1，Phase 4.3 扩展计数条件）。
 
-    规则是**声明式**的：满足条件即产生候选状态，因此新增状态不需要改 Aggregator 代码。
+    规则是**声明式**的：满足条件即产生候选状态，因此新增状态或调整判定强度
+    都不需要改 Aggregator 代码。
 
     Attributes:
         state: 候选状态名。
         requires: 必须**全部**命中的证据名。
-        any_of: 至少命中一个的证据名（可为空）。
-        min_confidence: 单条证据的置信度下限。
+        any_of: 候选证据名；至少命中 ``min_matches`` 条即算满足（可为空）。
+        min_matches: ``any_of`` 的最少命中数；``1`` 等价于"至少命中一个"。
+            声明了 ``any_of`` 才能使用大于 1 的取值。
+        min_confidence: 单条证据的置信度下限（低于该值的证据不算命中）。
     """
 
     state: str
     requires: list[str] = Field(default_factory=list)
     any_of: list[str] = Field(default_factory=list)
+    min_matches: int = Field(default=DEFAULT_EVIDENCE_MIN_MATCHES, ge=1)
     min_confidence: float = Field(default=DEFAULT_EVIDENCE_RULE_MIN_CONFIDENCE, gt=0.0, le=1.0)
 
     @field_validator("state")
@@ -603,10 +639,19 @@ class EvidenceRuleConfig(StrictModel):
 
     @model_validator(mode="after")
     def _validate_conditions(self) -> EvidenceRuleConfig:
-        """校验规则至少声明了一个条件，避免"无条件的规则"永远命中。"""
+        """校验规则的条件自洽，避免"无条件的规则"或"永远无法满足的规则"。"""
         if not self.requires and not self.any_of:
             raise ValueError(
                 f"evidence 规则 {self.state!r} 至少要声明 requires 或 any_of 之一"
+            )
+        if not self.any_of and self.min_matches != DEFAULT_EVIDENCE_MIN_MATCHES:
+            raise ValueError(
+                f"evidence 规则 {self.state!r} 未声明 any_of，min_matches 无意义"
+            )
+        if self.any_of and self.min_matches > len(self.any_of):
+            raise ValueError(
+                f"evidence 规则 {self.state!r} 的 min_matches={self.min_matches} "
+                f"超过 any_of 的证据数（{len(self.any_of)}）"
             )
         return self
 
@@ -628,11 +673,16 @@ class EvidenceAggregatorConfig(StrictModel):
 
 
 class EvidenceConfig(StrictModel):
-    """视觉证据层配置（Phase 4.1）。
+    """视觉证据层配置（Phase 4.1，Phase 4.3 加入证据可靠度表）。
 
     Attributes:
         enabled: 证据层总开关。
         detectors: detector 名 -> 配置；新增 detector 只需在此登记，不必改核心流程。
+        reliability: 证据名 -> **长期**可靠程度（``(0, 1]``）。它描述"这类证据平时有多可信"，
+            与 ``confidence``（当帧匹配强度）是两个独立维度：detector 输出证据时会带上自己的
+            可靠度，聚合器据此做加权平均。
+        default_reliability: 未在 :attr:`reliability` 中登记的证据所使用的兜底值；
+            默认 ``1.0``，即"未标定就按等权处理"。
         aggregator: 证据聚合配置。
     """
 
@@ -642,7 +692,40 @@ class EvidenceConfig(StrictModel):
             name: EvidenceDetectorConfig(**values) for name, values in DEFAULT_EVIDENCE_DETECTORS.items()
         }
     )
+    reliability: dict[str, float] = Field(
+        default_factory=lambda: dict(DEFAULT_EVIDENCE_RELIABILITY_MAP)
+    )
+    default_reliability: float = Field(
+        default=DEFAULT_EVIDENCE_RELIABILITY,
+        gt=MIN_EVIDENCE_RELIABILITY,
+        le=MAX_EVIDENCE_RELIABILITY,
+    )
     aggregator: EvidenceAggregatorConfig = Field(default_factory=EvidenceAggregatorConfig)
+
+    @field_validator("reliability")
+    @classmethod
+    def _validate_reliability(cls, value: dict[str, float]) -> dict[str, float]:
+        """校验证据名非空且可靠度落在 ``(0, 1]``（0 会让加权平均除零）。"""
+        for name, weight in value.items():
+            if not name.strip():
+                raise ValueError("evidence.reliability 的证据名不能为空")
+            if not MIN_EVIDENCE_RELIABILITY < weight <= MAX_EVIDENCE_RELIABILITY:
+                raise ValueError(
+                    f"evidence.reliability[{name!r}] 必须落在 "
+                    f"({MIN_EVIDENCE_RELIABILITY:g}, {MAX_EVIDENCE_RELIABILITY:g}] 区间内: {weight}"
+                )
+        return value
+
+    def reliability_for(self, name: str) -> float:
+        """返回某条证据的长期可靠度（未登记时取 :attr:`default_reliability`）。
+
+        Args:
+            name: 证据名。
+
+        Returns:
+            可靠度，范围 ``(0, 1]``。
+        """
+        return self.reliability.get(name, self.default_reliability)
 
 
 class RuntimeStateMonitorConfig(StrictModel):

@@ -10,6 +10,13 @@
 证据与状态解耦：``EvidenceResult`` 不允许携带状态名，
 例如 ``battle_auto_button`` 只说"左下角有自动按钮"，至于"所以当前在战斗"属于
 :class:`~src.vision.evidence.aggregator.EvidenceAggregator` 的职责。
+
+Phase 4.3 起每条证据带有**两个独立的分值维度**：
+
+* :attr:`EvidenceResult.confidence` —— **当帧**匹配强度（"这一帧匹配得多好"）；
+* :attr:`EvidenceResult.reliability` —— 该类证据的**长期**可靠程度（"这类证据平时有多可信"）。
+
+两者都不是状态，因此仍然满足"证据与状态解耦"。
 """
 
 from __future__ import annotations
@@ -21,8 +28,11 @@ from typing import Any
 from src.core.geometry import Rect
 
 __all__ = [
+    "DEFAULT_RELIABILITY",
     "MAX_CONFIDENCE",
+    "MAX_RELIABILITY",
     "MIN_CONFIDENCE",
+    "MIN_RELIABILITY",
     "STATE_UNKNOWN",
     "EvidenceResult",
     "EvidenceScore",
@@ -37,6 +47,12 @@ __all__ = [
 MIN_CONFIDENCE: float = 0.0
 #: 允许的最大置信度
 MAX_CONFIDENCE: float = 1.0
+#: 可靠度的合法区间（左开右闭：可靠度为 0 会让加权平均除零）
+MIN_RELIABILITY: float = 0.0
+#: 可靠度的上界
+MAX_RELIABILITY: float = 1.0
+#: 未显式指定时的可靠度：视为满可靠，加权平均等价于等权平均
+DEFAULT_RELIABILITY: float = 1.0
 #: 兜底状态名：没有任何有效证据时 Aggregator 输出该候选
 STATE_UNKNOWN: str = "unknown"
 
@@ -94,9 +110,14 @@ class EvidenceResult:
         metadata: 供人阅读的附加信息（例如 OCR 文本、命中的模板 ID）；
             不参与相等比较与哈希。
         evidence_type: 证据的粗分类，见 :class:`EvidenceType`。
+        reliability: 该类证据的**长期**可靠程度，范围 ``(0, 1]``；由配置
+            ``evidence.reliability`` 在构造 detector 时注入，检测结果本身不改动它。
+            与 ``confidence`` 的分工：``confidence`` 回答"这一帧匹配得多好"，
+            ``reliability`` 回答"这类证据平时有多可信"，聚合器据此做加权平均。
 
     Raises:
-        ValueError: 名称为空、置信度越界，或 ``detected`` 与 ``confidence`` 矛盾。
+        ValueError: 名称为空、``evidence_type`` 类型不对、置信度或可靠度越界，
+            或 ``detected`` 与 ``confidence`` 矛盾。
     """
 
     name: str
@@ -106,6 +127,7 @@ class EvidenceResult:
     source: str = EvidenceSource.TEMPLATE
     metadata: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
     evidence_type: EvidenceType = EvidenceType.CUSTOM
+    reliability: float = DEFAULT_RELIABILITY
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -120,6 +142,11 @@ class EvidenceResult:
             raise ValueError("detected=True 时 confidence 必须大于 0")
         if not self.detected and self.confidence > MIN_CONFIDENCE:
             raise ValueError("detected=False 时 confidence 必须为 0（未检出就没有置信度可言）")
+        if not MIN_RELIABILITY < self.reliability <= MAX_RELIABILITY:
+            raise ValueError(
+                f"reliability 必须落在 ({MIN_RELIABILITY:g}, {MAX_RELIABILITY:g}] 区间内: "
+                f"{self.reliability}（0 会让加权平均除零）"
+            )
 
     @classmethod
     def miss(
@@ -128,6 +155,7 @@ class EvidenceResult:
         *,
         metadata: dict[str, Any] | None = None,
         evidence_type: EvidenceType = EvidenceType.CUSTOM,
+        reliability: float = DEFAULT_RELIABILITY,
     ) -> EvidenceResult:
         """构造一条"未检出"的证据。
 
@@ -135,6 +163,8 @@ class EvidenceResult:
             name: 证据名称。
             metadata: 附加说明（例如失败原因）。
             evidence_type: 证据的粗分类。
+            reliability: 该类证据的长期可靠程度；未检出时不计分，但保持字段完整，
+                便于日志里对照"这条证据本来有多可信"。
 
         Returns:
             ``detected=False``、``confidence=0.0`` 的证据。
@@ -145,6 +175,7 @@ class EvidenceResult:
             confidence=MIN_CONFIDENCE,
             metadata=metadata or {},
             evidence_type=evidence_type,
+            reliability=reliability,
         )
 
     @property
@@ -153,9 +184,12 @@ class EvidenceResult:
         return self.detected
 
     def describe(self) -> str:
-        """返回可读描述，例如 ``battle_auto_button hit confidence=0.9500 source=template``。"""
+        """返回可读描述，例如 ``battle_auto_button hit confidence=0.9500 reliability=0.8000``。"""
         state = "hit" if self.detected else "miss"
-        description = f"{self.name} {state} confidence={self.confidence:.4f} source={self.source}"
+        description = (
+            f"{self.name} {state} confidence={self.confidence:.4f} "
+            f"reliability={self.reliability:.4f} source={self.source}"
+        )
         if self.bbox is not None:
             description += f" bbox={self.bbox.describe()}"
         return description

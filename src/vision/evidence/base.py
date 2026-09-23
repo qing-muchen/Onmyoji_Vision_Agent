@@ -32,6 +32,7 @@ from src.vision.capture.models import Frame
 from src.vision.detector.models import TemplateInfo
 from src.vision.detector.template.matcher import TemplateMatch, TemplateMatcher
 from src.vision.evidence.models import (
+    DEFAULT_RELIABILITY,
     MIN_CONFIDENCE,
     EvidenceResult,
     EvidenceSource,
@@ -104,6 +105,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         matcher: 自定义匹配器；省略时按配置创建。
         ocr_engine: 可选的 OCR 引擎；注入后可在 ROI 内做文字识别作为第二证据源。
             省略或引擎不可用时，detector 只使用模板匹配（不会因此抛异常）。
+        reliability: 该类证据的**长期**可靠程度（``(0, 1]``）。:meth:`from_config`
+            会从 ``evidence.reliability`` 读取；省略时取 ``DEFAULT_RELIABILITY``（等权）。
     """
 
     #: detector 名（子类必须覆写）：同时作为配置键、证据名与模板文件名前缀。
@@ -150,7 +153,13 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
                     root=root,
                 )
             )
-        return cls(cls.NAME, detector_config, templates, ocr_engine=ocr_engine)
+        return cls(
+            cls.NAME,
+            detector_config,
+            templates,
+            ocr_engine=ocr_engine,
+            reliability=config.reliability_for(cls.NAME),
+        )
 
     def __init__(
         self,
@@ -160,17 +169,24 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         *,
         matcher: TemplateMatcher | None = None,
         ocr_engine: OCREngine | None = None,
+        reliability: float = DEFAULT_RELIABILITY,
     ) -> None:
         self._name = name
         self._config = config
         self._templates = tuple(templates)
         self._matcher = matcher if matcher is not None else TemplateMatcher(config.matcher_config())
         self._ocr_engine = ocr_engine
+        self._reliability = reliability
 
     @property
     def evidence_type(self) -> EvidenceType:
         """该 detector 输出的证据分类。"""
         return self.EVIDENCE_TYPE
+
+    @property
+    def reliability(self) -> float:
+        """该类证据的长期可靠程度，会写入每一条 :class:`EvidenceResult`。"""
+        return self._reliability
 
     @property
     def name(self) -> str:
@@ -409,7 +425,12 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         """
         metadata: dict = {"reason": reason}
         metadata.update(extra)
-        return EvidenceResult.miss(self._name, metadata=metadata, evidence_type=self.EVIDENCE_TYPE)
+        return EvidenceResult.miss(
+            self._name,
+            metadata=metadata,
+            evidence_type=self.EVIDENCE_TYPE,
+            reliability=self._reliability,
+        )
 
     def build_hit(
         self,
@@ -440,6 +461,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             source=source,
             metadata=metadata,
             evidence_type=self.EVIDENCE_TYPE,
+            reliability=self._reliability,
         )
 
     def template_metadata(self, match: TemplateMatch) -> dict:

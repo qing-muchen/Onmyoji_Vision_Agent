@@ -1,12 +1,27 @@
-"""证据聚合：多条 :class:`EvidenceResult` → :class:`EvidenceScore` / :class:`StateCandidate`（Phase 4.1）。
+"""证据聚合：多条 :class:`EvidenceResult` → :class:`EvidenceScore` / :class:`StateCandidate`
+（Phase 4.1，Phase 4.3 引入可靠度加权）。
 
 职责边界：
 
-* **detector** 只报告视觉事实（"左下角有自动按钮"）；
+* **detector** 只报告视觉事实（"左下角有自动按钮"），并带上该类证据的**长期可靠度**；
 * **aggregator**（本模块）才做业务映射（"所以候选状态是 battle"）。
 
 映射规则**全部来自配置**（``evidence.aggregator.rules``），因此新增状态只需要加一条规则，
 不必改动 detector 或本模块的代码；源码里不存在 ``if auto_button: return battle`` 这类硬编码。
+
+规则条件（均为声明式）：
+
+* ``requires`` —— 必须全部命中的证据；
+* ``any_of`` + ``min_matches`` —— 候选证据里至少命中 ``min_matches`` 条
+  （``min_matches=1`` 即"至少一个"，``=2`` 即"至少两个"，用于表达"两条旁证才算数"）。
+
+计分方式（Phase 4.3 起）为**按可靠度加权平均**：
+
+``score = sum(confidence * reliability) / sum(reliability)``
+
+``confidence`` 是"这一帧匹配得多好"，``reliability`` 是"这类证据平时有多可信"。
+可靠度低的证据权重小，因此一条易受遮挡的旁证不会把强证据的结论显著拉低；
+所有证据可靠度相同时该式退化为简单平均。
 
 数据流::
 
@@ -134,21 +149,21 @@ class EvidenceAggregator:
             else:
                 matched.append(hit)
 
-        # any_of 里的证据"命中即加分"，"全部未命中"则整条规则不满足；
-        # 未命中的也要记入 missing，否则调用方无法解释"证据不够"的原因。
+        # any_of 需要命中 min_matches 条；未命中的也要记入 missing，
+        # 否则调用方无法解释"证据不够"的原因。
+        any_of_matched: list[EvidenceResult] = []
         any_of_missing: list[str] = []
         for name in rule.any_of:
             hit = self._hit(by_name, name, rule.min_confidence)
-            if hit is not None:
-                matched.append(hit)
-            else:
+            if hit is None:
                 any_of_missing.append(name)
+            else:
+                any_of_matched.append(hit)
+        matched.extend(any_of_matched)
 
-        any_of_ok = (not rule.any_of) or (len(any_of_missing) < len(rule.any_of))
+        any_of_ok = (not rule.any_of) or (len(any_of_matched) >= rule.min_matches)
         satisfied = not missing and any_of_ok
-        score = 0.0
-        if satisfied and matched:
-            score = sum(item.confidence for item in matched) / len(matched)
+        score = self._weighted_score(matched) if satisfied else 0.0
         matched.sort(key=lambda item: item.confidence, reverse=True)
         return EvidenceScore(
             state=rule.state,
@@ -156,8 +171,31 @@ class EvidenceAggregator:
             satisfied=satisfied,
             matched=tuple(matched),
             missing=tuple(missing + any_of_missing),
-            reason=", ".join(f"{item.name}={item.confidence:.4f}" for item in matched),
+            reason=", ".join(
+                f"{item.name}={item.confidence:.4f}(r={item.reliability:.2f})" for item in matched
+            ),
         )
+
+    @staticmethod
+    def _weighted_score(matched: Sequence[EvidenceResult]) -> float:
+        """按可靠度加权的平均置信度：``sum(confidence * reliability) / sum(reliability)``。
+
+        可靠度高的证据权重大，因此一条低可靠度的旁证不会显著拉低强证据的结论；
+        所有证据可靠度相同时退化为简单平均（等价于 Phase 4.2 的行为）。
+
+        Args:
+            matched: 参与计分的命中证据。
+
+        Returns:
+            加权得分，范围 ``[0, 1]``；无证据时为 ``0.0``。
+        """
+        if not matched:
+            return 0.0
+        total_weight = sum(item.reliability for item in matched)
+        if total_weight <= 0.0:  # pragma: no cover - reliability 已在构造时校验为 > 0
+            return 0.0
+        weighted = sum(item.confidence * item.reliability for item in matched)
+        return weighted / total_weight
 
     @staticmethod
     def _hit(

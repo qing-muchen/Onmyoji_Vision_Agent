@@ -143,6 +143,27 @@ evidence:
   #   ocr_weight: 0.4        模板与 OCR 双源命中时的 OCR 权重
   #   ocr_only_factor: 0.9   仅 OCR 命中（缺少视觉定位）时的置信度折价
   enabled: true
+  # 证据可靠度（Phase 4.3）：证据名 -> **长期**可靠程度，范围 (0, 1]。
+  # 与 confidence（当帧匹配强度）是两个独立维度；聚合器按
+  #   score = sum(confidence * reliability) / sum(reliability)
+  # 做加权平均，因此低可靠度的旁证不会显著拉低强证据的结论。
+  # 判定依据：界面形态是否独特（误报率）、是否容易被动画/遮挡影响。
+  reliability:
+    # 结算 / 奖励界面形态独特，误报率低
+    victory_icon: 0.95
+    reward_panel: 0.95
+    # 底部功能栏与章节栏是稳定的结构性 UI
+    bottom_menu_yard: 0.9
+    bottom_menu_exploration: 0.9
+    chapter_panel: 0.9
+    # 自动按钮与技能区跨皮肤形态稳定
+    battle_auto_button: 0.8
+    battle_skill_area: 0.8
+    # 行动条 / 式神头像易被技能动画遮挡，且两者区域重叠、独立价值有限
+    battle_action_bar: 0.5
+    battle_shikigami_icons: 0.5
+  # 未在上表登记的证据使用该兜底可靠度（1.0 = 未标定就按等权处理）
+  default_reliability: 1.0
   detectors:
     # 注意：bottom_menu 刻意拆成 yard / exploration 两个 detector——
     # 两类底部功能栏的图标组成与上下文完全不同，合并会丢掉区分度。
@@ -215,6 +236,7 @@ evidence:
       shortfall_factor: 0.7
   aggregator:
     # 证据 -> 候选状态的映射规则（声明式：新增状态只需加规则，无需改代码）
+    # requires: 必须全部命中；any_of + min_matches: 候选证据里至少命中 min_matches 条
     enabled: true
     fallback_state: "unknown"
     rules:
@@ -225,11 +247,12 @@ evidence:
       - state: "battle_reward"
         requires: ["reward_panel"]
         min_confidence: 0.6
-      # 战斗（Phase 4.2）：自动按钮是必需证据，技能区 / 行动条 / 式神头像
-      # 至少再命中一条——单个证据可能被技能动画遮挡（实测 battle_002 右侧行动条不可见）
+      # 战斗（Phase 4.3）：不再强依赖自动按钮——四条战斗证据里任意两条即可。
+      # 既可以容忍某一处 UI 被遮挡（实测 battle_002 右侧行动条不可见），
+      # 也不会因为某个副本没有自动按钮而整条链路失效。
       - state: "battle"
-        requires: ["battle_auto_button"]
-        any_of: ["battle_skill_area", "battle_action_bar", "battle_shikigami_icons"]
+        any_of: ["battle_auto_button", "battle_skill_area", "battle_action_bar", "battle_shikigami_icons"]
+        min_matches: 2
         min_confidence: 0.6
       - state: "exploration"
         requires: ["bottom_menu_exploration", "chapter_panel"]
