@@ -332,6 +332,12 @@ runtime:
     max_events: 1000
     # 每个周期是否检查目标窗口在前台：只检查、不抢占，失焦则跳过该轮（计入 skipped）
     check_foreground: true
+    # 逐轮运行指标（Phase 5.2）：cycle_id / timestamp / state / stable_state / latency，
+    # JSON Lines（每轮一行）。**不含截图与任何用户数据**；只作观测，写入失败不影响主循环。
+    metrics_path: "logs/runtime_metrics.jsonl"
+    # 是否落盘；默认 false（可选观测能力，零副作用）。
+    # live_runtime_demo.py 默认开启并写入上面的路径，便于长跑后统计。
+    save_metrics: false
   # 状态稳定化（Phase 3.2）：把逐帧识别结果稳定为"稳定状态"
   stabilization:
     # 总开关；关闭时退化为"每帧立即确认"（等价 min_frames=1）

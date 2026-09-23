@@ -85,6 +85,8 @@ DEFAULT_TRANSITION_STRIP_ASPECT_RATIO: float = 8.0
 DEFAULT_MONITOR_INTERVAL_MS: int = 500
 #: 默认的状态历史文件（相对项目根；``logs/`` 已被 .gitignore 忽略）
 DEFAULT_STATE_HISTORY_PATH: str = "logs/state_history.json"
+#: 默认的运行指标文件（JSON Lines；Phase 5.2，相对项目根）
+DEFAULT_RUNTIME_METRICS_PATH: str = "logs/runtime_metrics.jsonl"
 #: 状态历史保留的最大事件数（超出丢弃最旧事件）
 DEFAULT_MONITOR_MAX_EVENTS: int = 1000
 #: 监控周期的合法范围（毫秒）
@@ -984,6 +986,13 @@ class RuntimeStateMonitorConfig(StrictModel):
         max_events: 事件历史上限，超出后丢弃**最旧**事件。
         check_foreground: 每个周期是否检查目标窗口在前台（仅检查、不抢占；
             失焦时跳过该轮并计入 ``skipped``）。整屏回退等无真实窗口的场景不检查。
+        metrics_path: 运行指标文件路径（JSON Lines）；相对路径以项目根目录为基准。
+        save_metrics: 是否把逐轮运行指标写入 ``metrics_path``（Phase 5.2）。
+
+            默认 ``False``：运行指标是**可选观测能力**（与 Phase 5.1 的
+            ``timing`` / ``profile`` 一致，默认零副作用）；开启后每轮追加一行 JSON，
+            仅含轮次、时间戳、状态与耗时，**不含截图与任何用户数据**。
+            无论是否落盘，``StateMonitor.metrics`` 都保留内存记录供统计。
     """
 
     interval_ms: int = Field(
@@ -995,6 +1004,8 @@ class RuntimeStateMonitorConfig(StrictModel):
     save_history: bool = True
     max_events: int = Field(default=DEFAULT_MONITOR_MAX_EVENTS, ge=1)
     check_foreground: bool = True
+    metrics_path: str = DEFAULT_RUNTIME_METRICS_PATH
+    save_metrics: bool = False
 
     @field_validator("history_path")
     @classmethod
@@ -1002,6 +1013,14 @@ class RuntimeStateMonitorConfig(StrictModel):
         """校验历史文件路径非空。"""
         if not value.strip():
             raise ValueError("runtime.state_monitor.history_path 不能为空")
+        return value
+
+    @field_validator("metrics_path")
+    @classmethod
+    def _validate_metrics_path(cls, value: str) -> str:
+        """校验运行指标文件路径非空。"""
+        if not value.strip():
+            raise ValueError("runtime.state_monitor.metrics_path 不能为空")
         return value
 
     @property

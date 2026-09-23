@@ -1,4 +1,4 @@
-"""实时状态监控循环（Phase 3.1 / 3.2）。
+"""实时状态监控循环（Phase 3.1 / 3.2 / 5.2）。
 
 把"单帧状态判定"变成**按固定周期运行**的监控。判定入口可以是**证据流水线**（Phase 5 推荐）
 或状态分类器本身（Phase 3.0 行为，兼容保留）：
@@ -9,19 +9,31 @@
                        或 StateClassifier.classify(frame)（旧路径）
                 → stabilizer（逐帧 → 稳定状态）
                 → 只有稳定状态改变才产生 StateEvent → 回调 + history 即时落盘
+                → 运行指标（可选，Phase 5.2）：cycle_id / timestamp / state / stable / latency
 ```
+
+节拍由 :class:`~src.runtime.state_monitor.scheduler.CycleScheduler` 提供（Phase 5.2）：
+
+* **deadline based**：等待按"上一次 deadline + interval"计算，单轮耗时被吸收进周期，
+  不会让周期漂移（不是 ``sleep(interval)``）；
+* **late cycle 记录**：单轮耗时超过 interval 时记为 ``late`` 并累计 ``overrun``，
+  同时重对齐节拍基准，避免"追赶风暴"（详见调度器模块文档）。
 
 设计要点：
 
-* **固定节拍**：等待按"上次节拍 + interval"计算，单轮耗时不会让周期漂移；
 * **稳定化先行**：事件只由**稳定状态**驱动，逐帧抖动不产生事件；首次确认只建立基线；
 * **可注入时钟与睡眠**（``clock`` / ``sleep`` / ``now``）：循环逻辑无需真实等待即可测试；
 * **判定失败不崩溃**（Phase 5）：证据检测 / OCR / 模板异常被捕获，该帧降级为 ``unknown``
   并把原因写入 ``reason`` / ``detail``（计入 :attr:`StateMonitor.errors`）；
+* **采集失败不崩溃**（Phase 5.2）：真实窗口帧来源把窗口/采集问题转成"本轮无帧"
+  （``source.get_frame() is None``），循环跳过该轮并继续，原因写入运行指标
+  （``metrics`` 的 ``skip_reason``）；
+* **不进 Action 层**：本模块只采集、判定、记录；不点击、不键入、不切换窗口、不抢焦点；
 * **不吞其余异常**：只捕获 ``KeyboardInterrupt`` 以正常收尾（中断时也会落盘），
   历史写入失败等真实错误向上传播（见 :class:`~src.core.exceptions.MonitorError`）。
 
-运行摘要见 :mod:`src.runtime.state_monitor.report`；本模块不做状态转移与任何交互。
+运行摘要见 :mod:`src.runtime.state_monitor.report`，逐轮指标见
+:mod:`src.runtime.state_monitor.metrics`；本模块不做状态转移与任何交互。
 """
 
 from __future__ import annotations
@@ -33,8 +45,14 @@ from src.core.config import AppConfig, RuntimeStabilizationConfig, RuntimeStateM
 from src.core.exceptions import OnmyojiVisionError
 from src.runtime.state_monitor.events import StateEvent
 from src.runtime.state_monitor.history import StateHistoryStore
+from src.runtime.state_monitor.metrics import (
+    CycleMetrics,
+    CycleStatus,
+    RuntimeMetricsRecorder,
+)
 from src.runtime.state_monitor.report import MonitorReport, StopReason, local_now_iso
-from src.runtime.state_monitor.source import FrameSource
+from src.runtime.state_monitor.scheduler import CycleSchedule, CycleScheduler
+from src.runtime.state_monitor.source import FrameSource, StatusAwareSource
 from src.runtime.state_monitor.stabilizer import StableStateResult, StateStabilizer
 from src.runtime.state_monitor.timing import CycleTiming
 from src.utils.logger import get_logger
@@ -57,13 +75,18 @@ class StateMonitor:
     Args:
         classifier: 状态判定入口：:class:`~src.vision.state.classifier.StateClassifier`（旧路径）
             或 :class:`~src.vision.pipeline.frame_processor.EvidenceFrameProcessor`（Phase 5 推荐）。
-        source: 帧来源（生产环境为 ``CaptureFrameSource``）。
+        source: 帧来源（生产环境为 ``WindowFrameSource`` 或 ``CaptureFrameSource``）。
         config: 状态监控配置（周期、历史路径、事件上限）。
         processor: 证据流水线；显式传入时优先于 ``classifier``（渐进迁移）。
         stabilizer / history: 稳定器与历史存储；省略时按各自配置创建。
+        scheduler: 节拍调度器；省略时按 ``config.interval_ms`` 创建（Phase 5.2）。
+        metrics: 逐轮运行指标记录器；省略时不记录（``from_config`` 会按配置装配）。
         clock / sleep / now: 时钟、等待与时间戳函数（可在测试中注入）。
         timing: 是否采集每轮耗时画像（Phase 5.1；默认 ``False`` = 零额外开销）。
         on_result / on_event / on_stable: 识别 / 稳定状态变化 / 稳定化处理回调。
+        on_cycle: 每轮结束（含跳过轮）后的回调，接收该轮
+            :class:`~src.runtime.state_monitor.scheduler.CycleSchedule`；
+            回调执行时本轮运行指标**已**写入 ``metrics``（Phase 5.2）。
     """
 
     def __init__(
@@ -75,6 +98,8 @@ class StateMonitor:
         processor: EvidenceFrameProcessor | None = None,
         stabilizer: StateStabilizer | None = None,
         history: StateHistoryStore | None = None,
+        scheduler: CycleScheduler | None = None,
+        metrics: RuntimeMetricsRecorder | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = local_now_iso,
@@ -82,6 +107,7 @@ class StateMonitor:
         on_result: Callable[[StateResult], None] | None = None,
         on_event: Callable[[StateEvent], None] | None = None,
         on_stable: Callable[[StableStateResult], None] | None = None,
+        on_cycle: Callable[[CycleSchedule], None] | None = None,
     ) -> None:
         # 渐进迁移（Phase 5）：第一个位置参数既可以是证据流水线（推荐），也可以是状态分类器
         # （Phase 3.0 旧行为）；显式传入的 ``processor`` 优先级最高。
@@ -100,14 +126,20 @@ class StateMonitor:
             stabilizer if stabilizer is not None else StateStabilizer(RuntimeStabilizationConfig())
         )
         self._history = history if history is not None else StateHistoryStore(config)
+        self._scheduler = (
+            scheduler
+            if scheduler is not None
+            else CycleScheduler(config.interval_ms, clock=clock, sleep=sleep)
+        )
+        self._metrics = metrics
         self._clock = clock
-        self._sleep = sleep
         self._now = now
         self._timing_enabled = timing
         self._last_timing: CycleTiming | None = None
         self._on_result = on_result
         self._on_event = on_event
         self._on_stable = on_stable
+        self._on_cycle = on_cycle
         self._events: list[StateEvent] = []
         self._current_state: StateName | None = None
         self._last_result: StateResult | None = None
@@ -127,6 +159,8 @@ class StateMonitor:
         classifier: StateClassifier | None = None,
         stabilizer: StateStabilizer | None = None,
         history: StateHistoryStore | None = None,
+        scheduler: CycleScheduler | None = None,
+        metrics: RuntimeMetricsRecorder | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = local_now_iso,
@@ -134,6 +168,7 @@ class StateMonitor:
         on_result: Callable[[StateResult], None] | None = None,
         on_event: Callable[[StateEvent], None] | None = None,
         on_stable: Callable[[StableStateResult], None] | None = None,
+        on_cycle: Callable[[CycleSchedule], None] | None = None,
     ) -> StateMonitor:
         """按应用配置装配监控器。
 
@@ -144,6 +179,9 @@ class StateMonitor:
                 （含转场证据；转场数据集不可用时自动降级，不会抛异常）。
             classifier: 显式使用状态分类器（帧路径，Phase 3.x 行为）；仅在 ``processor`` 省略时生效。
             stabilizer / history: 省略时按 ``config`` 自动创建。
+            scheduler: 节拍调度器；省略时按 ``runtime.state_monitor.interval_ms`` 创建。
+            metrics: 运行指标记录器；省略时按 ``runtime.state_monitor.save_metrics`` 自动创建
+                （默认保留在内存中，开启后写入 ``metrics_path``）。
             clock / sleep / now: 时钟、等待与时间戳函数（可在测试中注入）。
             timing: 是否采集每轮耗时画像（Phase 5.1；默认 ``False``）。
             on_result / on_event / on_stable: 见 :meth:`__init__`。
@@ -163,6 +201,11 @@ class StateMonitor:
         entry: StateClassifier | EvidenceFrameProcessor = (
             active_processor if active_processor is not None else classifier  # type: ignore[assignment]
         )
+        active_metrics = (
+            metrics
+            if metrics is not None
+            else RuntimeMetricsRecorder.from_config(config.runtime.state_monitor)
+        )
         return cls(
             entry,
             source,
@@ -170,6 +213,8 @@ class StateMonitor:
             processor=active_processor,
             stabilizer=active_stabilizer,
             history=history,
+            scheduler=scheduler,
+            metrics=active_metrics,
             clock=clock,
             sleep=sleep,
             now=now,
@@ -177,6 +222,7 @@ class StateMonitor:
             on_result=on_result,
             on_event=on_event,
             on_stable=on_stable,
+            on_cycle=on_cycle,
         )
 
     @property
@@ -205,6 +251,21 @@ class StateMonitor:
     def errors(self) -> int:
         """判定失败（降级为 ``unknown``）的帧数（Phase 5）。"""
         return self._errors
+
+    @property
+    def scheduler(self) -> CycleScheduler:
+        """节拍调度器（含 late cycle / overrun 统计，Phase 5.2）。"""
+        return self._scheduler
+
+    @property
+    def metrics(self) -> RuntimeMetricsRecorder | None:
+        """逐轮运行指标记录器；未启用时为 ``None``（直接构造时可省略）。"""
+        return self._metrics
+
+    @property
+    def last_schedule(self) -> CycleSchedule | None:
+        """最近一轮的节拍结果；尚未运行过时为 ``None``。"""
+        return self._scheduler.last
 
     @property
     def source(self) -> FrameSource:
@@ -377,6 +438,60 @@ class StateMonitor:
                 reason=f"evidence pipeline failure: {exc}",
             )
 
+    def _record_metrics(
+        self,
+        *,
+        schedule: CycleSchedule,
+        timestamp: str,
+        frame_ms: float,
+        frame: Frame | None,
+        result: StateResult | None,
+        failed: bool,
+    ) -> None:
+        """记录本轮运行指标（Phase 5.2；未启用 ``metrics`` 时是空操作）。
+
+        只记录"运行"本身：轮次、时间戳、原始/稳定状态、耗时与跳过原因；
+        **不记录截图，也不记录任何用户数据**。跳过原因来自实现了
+        :class:`~src.runtime.state_monitor.source.StatusAwareSource` 的帧来源
+        （例如 ``WindowFrameSource``：窗口不存在 / 最小化 / 不在前台 / 采集失败）。
+
+        Args:
+            schedule: 本轮节拍结果（提供耗时与超时量）。
+            timestamp: 本轮时间戳（与历史记录使用同一个值）。
+            frame_ms: 取帧耗时。
+            frame: 本轮帧；未取到时为 ``None``。
+            result: 本轮原始判定结果；未取到帧时为 ``None``。
+            failed: 本轮判定是否失败（降级为 ``unknown``）。
+        """
+        metrics = self._metrics
+        if metrics is None:
+            return
+        if frame is None:
+            status = CycleStatus.SKIPPED
+        elif failed:
+            status = CycleStatus.ERROR
+        else:
+            status = CycleStatus.OK
+        skip_reason = None
+        if frame is None and isinstance(self._source, StatusAwareSource):
+            skip_reason = self._source.last_skip_reason
+        metrics.record(
+            CycleMetrics(
+                cycle_id=self._cycles,
+                timestamp=timestamp,
+                started_at=schedule.started_at,
+                latency_ms=schedule.elapsed_ms,
+                frame_ms=frame_ms,
+                state=result.state_name if result is not None else None,
+                confidence=result.confidence if result is not None else 0.0,
+                stable_state=self._current_state,
+                status=status,
+                skip_reason=skip_reason,
+                frame_source=frame.source if frame is not None else None,
+            ),
+            overrun_ms=schedule.overrun_ms,
+        )
+
     def run(
         self,
         *,
@@ -401,9 +516,8 @@ class StateMonitor:
 
         started_at = self._now()
         self._history.start(timestamp=started_at, interval_ms=self._config.interval_ms)
-        interval = self._config.interval_seconds
         start_clock = self._clock()
-        deadline = start_clock
+        self._scheduler.reset(start_at=start_clock)
         stop_reason = StopReason.MAX_CYCLES
         logger.info(
             "状态监控开始：interval=%dms, max_cycles=%s, duration=%ss, stabilization=%s(%d 帧)",
@@ -422,29 +536,37 @@ class StateMonitor:
                     stop_reason = StopReason.DURATION
                     break
 
+                cycle_started = self._scheduler.begin()
+                errors_before = self._errors
                 frame_started = time.perf_counter()
                 frame = self._source.get_frame()
                 frame_ms = (time.perf_counter() - frame_started) * 1000.0
+                result: StateResult | None = None
                 if frame is None:
                     self._skipped += 1
                     logger.debug("本轮无可用帧，跳过（累计 %d）", self._skipped)
                 else:
-                    self.step(frame, frame_ms=frame_ms)
+                    result = self.step(frame, frame_ms=frame_ms)
 
                 self._cycles += 1
+                timestamp = self._now()
                 self._history.update_progress(
                     cycles=self._cycles,
                     skipped=self._skipped,
-                    timestamp=self._now(),
+                    timestamp=timestamp,
                 )
 
-                deadline += interval
-                remaining = deadline - self._clock()
-                if remaining > 0:
-                    self._sleep(remaining)
-                else:
-                    # 单轮耗时超过周期：重新对齐节拍，避免"追赶风暴"
-                    deadline = self._clock()
+                schedule = self._scheduler.finish(cycle_started)
+                self._record_metrics(
+                    schedule=schedule,
+                    timestamp=timestamp,
+                    frame_ms=frame_ms,
+                    frame=frame,
+                    result=result,
+                    failed=self._errors > errors_before,
+                )
+                if self._on_cycle is not None:
+                    self._on_cycle(schedule)
         except KeyboardInterrupt:
             stop_reason = StopReason.INTERRUPT
             logger.warning("收到中断信号（Ctrl+C），正在收尾并保存历史")
@@ -452,6 +574,15 @@ class StateMonitor:
         ended_at = self._now()
         self._history.update_progress(cycles=self._cycles, skipped=self._skipped, timestamp=ended_at)
         self._history.save()
+        if self._scheduler.late_cycles:
+            logger.warning(
+                "本轮运行有 %d/%d 个 late cycle（单轮耗时超过 %dms）：累计超时 %.1fms，最大 %.1fms",
+                self._scheduler.late_cycles,
+                self._scheduler.cycles,
+                self._config.interval_ms,
+                self._scheduler.overrun_total_ms,
+                self._scheduler.overrun_max_ms,
+            )
         report = MonitorReport(
             cycles=self._cycles,
             classified=self._classified,

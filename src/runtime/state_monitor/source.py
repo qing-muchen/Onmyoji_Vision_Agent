@@ -9,6 +9,15 @@
 只能拿到"屏幕上的像素"，目标窗口失去前台时截图会包含遮挡窗口，可能造成状态误判。
 本模块提供 :func:`make_foreground_gate` —— **只检查、不抢占**：未在前台时本轮返回
 ``None``（监控侧计入 ``skipped``），不会把游戏窗口抢到前台打扰用户。
+
+Phase 5.2 起，真实窗口场景使用
+:class:`~src.runtime.state_monitor.window_source.WindowFrameSource`
+（内部含功能更完整的 :class:`~src.runtime.state_monitor.window_source.ForegroundGuard`：
+原因可解释、可统计、窗口重绑定时自动跟随）。本模块的轻量门控与
+:class:`CaptureFrameSource` 保持原样，供既有调用方与整屏回退场景使用。
+
+可选能力：帧来源可以实现 :class:`StatusAwareSource`（``last_skip_reason``），
+让 Runtime 把"这一轮为什么没有帧"记入运行指标（Phase 5.2）。
 """
 
 from __future__ import annotations
@@ -25,6 +34,7 @@ __all__ = [
     "CaptureFrameSource",
     "ForegroundGate",
     "FrameSource",
+    "StatusAwareSource",
     "make_foreground_gate",
 ]
 
@@ -41,6 +51,21 @@ class FrameSource(Protocol):
         Returns:
             帧对象；暂无可用画面（后端未产出 / 前台门控未通过）时为 ``None``。
         """
+        ...
+
+
+@runtime_checkable
+class StatusAwareSource(Protocol):
+    """帧来源的**可选**能力：报告本轮跳过的原因。
+
+    实现该协议的帧来源（例如
+    :class:`~src.runtime.state_monitor.window_source.WindowFrameSource`）可以让 Runtime
+    把跳过原因写入运行指标；未实现的来源不受影响。
+    """
+
+    @property
+    def last_skip_reason(self) -> str | None:
+        """最近一次跳过的原因标识；成功取帧或尚未取帧时为 ``None``。"""
         ...
 
 

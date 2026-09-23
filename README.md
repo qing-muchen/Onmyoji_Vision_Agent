@@ -178,20 +178,51 @@ Phase 4.6.1 起扩展为完整状态集）：
     并崩溃监控循环）；
 59. 新增 `tests/test_phase51_performance.py`（14 个用例）与两份报告。
 
-### 架构总览（Phase 5.1 完成后的主链路）
+**Phase 5.2 — Real Runtime Loop Integration（已完成：真实窗口 500ms 循环）**：把 Runtime 接到真实
+阴阳师桌面窗口，并建立运行期安全边界（只截图、不点击）：
+
+60. **真实窗口帧来源** `WindowFrameSource`（`src/runtime/state_monitor/window_source.py`）：
+    复用 Phase 1 的窗口/校准/采集链路，**dxcam 优先、mss 回退**；帧携带
+    `image / timestamp / source（后端名）/ coordinate_transform`；窗口被拖动或缩放时**自动重建**
+    采集区域与坐标映射；
+61. **窗口绑定** `OnmyojiWindowSource`：复用 `src/vision/window`（`WindowManager` / `find_window`），
+    支持配置里的 `exact` / `contains` / `regex` 三种标题匹配；默认把 `activate_on_start` 强制为
+    `False`（**不重新实现窗口搜索，也不抢焦点**）；
+62. **前台门控** `ForegroundGuard`：目标窗口不在前台时**跳过本轮**（`skipped`），
+    只检查、不调用任何置前 API、不切换窗口；判定结果与原因（`GuardVerdict` / `SkipReason`）可解释；
+63. **不崩溃**：窗口不存在 / 已关闭 / 最小化 / 不在前台 / 后端不可用 / 抓帧失败 / 本轮无帧
+    全部转为 `None` + `CaptureStatus`（含原因与诊断信息），Runtime 只需按"本轮无帧"处理；
+    窗口不可用时按 `retry_interval_s` 冷却重试（自动接上"游戏后启动"）；
+64. **deadline based 节拍** `CycleScheduler`：等待按"上次 deadline + interval"推进（不是
+    `sleep(interval)`），单轮耗时被吸收进周期；单轮耗时超过周期 → 记为 **late cycle** 并记录
+    `overrun_ms`、累计 `late_cycles` / `overrun_total_ms` / `overrun_max_ms`，同时重对齐节拍基准
+    避免"追赶风暴"；
+65. **运行指标** `RuntimeMetricsRecorder`：`cycle_id / timestamp / state / confidence /
+    stable_state / latency_ms / status / skip_reason / frame_source`，可选写入
+    `logs/runtime_metrics.jsonl`（JSON Lines）；**不保存截图、不保存任何用户数据**，
+    写入失败不影响主循环；
+66. **真实运行 Demo** `examples/live_runtime_demo.py`：真实窗口 500ms 循环，逐轮输出
+    `timestamp / raw state / confidence / stable state / cycle time / event`，
+    支持 `--duration 600`（10 分钟）、`--timing`、`--allow-background`（诊断）、`--no-metrics`；
+67. 新增 `tests/test_runtime_loop.py`（33 个用例：节拍准确性、late cycle、7 类跳过路径、
+    判定失败、事件语义不变、稳定化不变、指标字段与落盘）与
+    `docs/PHASE5_2_REAL_RUNTIME_REPORT.md`（真实长跑统计与环境差异）。
+
+### 架构总览（Phase 5.2 完成后的主链路）
 
 ```text
-Frame                                  采集：Window → Foreground → Calibration → Capture
-  ↓  EvidenceRegistry.detect_all(frame)
+WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
+  │  窗口不存在 / 最小化 / 不在前台 / 采集失败 → None + SkipReason（Runtime 记为 skipped）
+  ↓  EvidenceFrameProcessor.process(frame)
 [EvidenceResult, ...]                  证据层：看到了什么（含否定证据；bbox 位于帧像素坐标）
   ↓  EvidenceAggregator.aggregate      规则来自配置：requires / any_of + min_groups / reliability
 StateCandidate                         候选状态 + 证据得分 + 状态可信度 + 判定理由
   ↓  StateClassifier.classify_evidence 状态层：这些证据意味着什么（无硬编码映射）
 StateResult                            state_name / confidence / source / reason / evidence
   ↓  StateStabilizer.update            runtime：时间滤波（唯一归属）+ 置信度门槛
-                                       （StateMonitor 的判定入口 = EvidenceFrameProcessor；
-                                         判定失败降级为 unknown 并记录原因，循环不崩溃）
 StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json）
+CycleScheduler（deadline based）       runtime：节拍 + late cycle / overrun 记录
+CycleMetrics → RuntimeMetricsRecorder  runtime：逐轮指标（可选 JSONL，无截图 / 无用户数据）
 ```
 
 | 层 | 包 | 职责 | 明确不做 |
@@ -202,7 +233,7 @@ StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释的视觉证据**（可靠度 / 分组 / 解释信息） | 不产出状态、不做时间滤波 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`） | 不做循环 / 采集 / 时间滤波 |
-| **运行时** | `src/runtime` | 固定节拍、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer`） | 不做视觉判定 |
+| **运行时** | `src/runtime` | 真实窗口帧来源（`WindowFrameSource` / `OnmyojiWindowSource` / `ForegroundGuard`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`） | 不做视觉判定、不抢焦点、不点击 |
 
 四个"置信度"语义互不混用（详见 `docs/ARCHITECTURE_OVERVIEW.md`）：
 
@@ -213,9 +244,8 @@ StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json
 | `evidence.aggregator.rules[*].state_confidence.min` | **状态可信度下限**（可选校准；`rule_based`） |
 | `runtime.stabilization.confidence_threshold` | 稳定化门槛（消费**状态可信度**） |
 
-**尚未实现**：**真实采集的实时循环**（Phase 5/5.1 已完成证据流水线接线、性能优化与离线节拍 Demo，
-`detect` mean ≈ 185 ms / p95 ≈ 276 ms 已可在 500 ms 周期内运行；**尚未接线真实 500ms 截图循环
-（dxcam/mss + 前台门控）与长跑验证**）、
+**尚未实现**：Phase 5.3 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
+本阶段按"只接线不做提前优化"完成）、
 Phase 6/7/8 的 State Integration /
 Action /
 State Machine / Task System、YOLO 与深度学习模型、鼠标点击与键盘输入，以及任何**基于文字或界面的
@@ -240,6 +270,7 @@ Onmyoji_Vision_Agent/
 │   ├── evidence_demo.py              # 证据层 Demo（Frame -> EvidenceResult -> StateCandidate）
 │   ├── evidence_state_demo.py        # 证据驱动状态 Demo（Frame -> Evidence -> StateResult，Phase 4.7）
 │   ├── runtime_pipeline_demo.py      # Runtime 证据流水线 Demo（固定节拍 -> 状态 -> 稳定 -> 事件，Phase 5）
+│   ├── live_runtime_demo.py          # 真实窗口实时运行 Demo（500ms 循环 -> 状态 -> 事件，Phase 5.2）
 │   ├── state_classifier_demo.py      # 状态识别 Demo（帧路径：Frame -> StateResult）
 │   ├── state_monitor_demo.py         # 实时状态监控 Demo（周期采集 -> 状态变化事件）
 │   ├── state_stabilizer_demo.py      # 状态稳定化 Demo（raw state -> stable state）
@@ -312,14 +343,18 @@ Onmyoji_Vision_Agent/
 │   │   │   └── yard/             #     庭院视觉组件（Phase 4.6.5 起不参与状态判定）
 │   │   └── pipeline/             #   编排层（Phase 4.7）：Frame -> 证据 -> StateResult
 │   │       └── frame_processor.py#     EvidenceFrameProcessor（供 Phase 5 Runtime 接线）
-│   ├── runtime/                  # 运行期编排（Phase 3.1）：时间滤波的唯一归属
-│   │   └── state_monitor/        #   实时状态监控
+│   ├── runtime/                  # 运行期编排（Phase 3.1 / 5.2）：时间滤波的唯一归属
+│   │   └── state_monitor/        #   实时状态监控与真实运行时
 │   │       ├── monitor.py        #     StateMonitor（固定节拍循环 + 变化检测）
+│   │       ├── scheduler.py      #     CycleScheduler（deadline based 节拍 + late cycle 记录）
+│   │       ├── metrics.py        #     CycleMetrics / RuntimeMetricsRecorder（逐轮指标，可选 JSONL）
+│   │       ├── window_source.py  #     真实窗口：OnmyojiWindowSource / ForegroundGuard / WindowFrameSource
 │   │       ├── stabilizer.py     #     StateStabilizer（逐帧 -> 稳定状态）
 │   │       ├── report.py         #     MonitorReport / StopReason（运行摘要）
 │   │       ├── events.py         #     StateEvent（状态变化事件）
 │   │       ├── history.py        #     StateHistoryStore（即时原子写 JSON）
-│   │       └── source.py         #     FrameSource / CaptureFrameSource / 前台门控
+│   │       ├── timing.py         #     CycleTiming（可选耗时画像）
+│   │       └── source.py         #     FrameSource / CaptureFrameSource / 轻量前台门控
 │   ├── action/                   # 输入控制层（Phase 7：受控键鼠输入与安全约束）
 │   ├── state/                    # 状态管理层（Phase 8：State Machine）
 │   └── task/                     # 任务调度层（Phase 8：任务编排与重试）
@@ -393,6 +428,12 @@ python examples/evidence_state_demo.py --image dataset/raw/battle_result/battle_
 python examples/runtime_pipeline_demo.py
 python examples/runtime_pipeline_demo.py --interval-ms 500 --real-time
 python examples/runtime_pipeline_demo.py --timing     # 每轮耗时分解（frame/detect/state/stabilize，Phase 5.1）
+
+# 14. Demo：真实窗口实时运行（真实阴阳师窗口 → 500ms 循环；需要游戏窗口，Ctrl+C 结束）
+python examples/live_runtime_demo.py                          # 前台门控 + 逐轮输出
+python examples/live_runtime_demo.py --duration 600           # 10 分钟长跑（写 logs/runtime_metrics.jsonl）
+python examples/live_runtime_demo.py --max-cycles 20 --timing # 短跑 + 每轮耗时分解
+python examples/live_runtime_demo.py --allow-background       # 诊断：关闭前台门控（截图可能含遮挡窗口）
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -1363,6 +1404,55 @@ Stable Changes: 0            # 首次确认是基线，不算变化
   例如 `victory_icon` / `reward_panel` 各只有 1 张正样本（置信度被折价到 `0.70`），
   靠 Phase 4.6.6 的**状态可信度校准**（`state_confidence`）补偿才达到稳定门槛。
 
+## 真实运行时循环（Phase 5.2）
+
+把 Runtime 接到**真实阴阳师桌面窗口**：窗口绑定 → 前台门控 → dxcam/mss 采集 → 证据 → 状态 →
+稳定化 → 事件，按 deadline based 500 ms 节拍持续运行。本层只做"截图、窗口识别、循环调度、
+状态监控"：**不点击、不键入、不抢焦点、不切换窗口、不保存截图**。
+
+### 组件
+
+| 组件 | 位置 | 职责 |
+| --- | --- | --- |
+| `OnmyojiWindowSource` | `src/runtime/state_monitor/window_source.py` | 目标窗口查找/绑定/几何刷新（复用 `src/vision/window`，支持 `exact` / `contains` / `regex`）；默认强制 `activate_on_start=False` |
+| `ForegroundGuard` | 同上 | 前台门控：目标窗口不在最前 → **跳过本轮**；只检查、不调用任何置前 API；给出期望/实际前台句柄与原因（`GuardVerdict`） |
+| `WindowFrameSource` | 同上 | 真实窗口帧来源：dxcam 优先 / mss 回退（复用 `create_capture_backend`）；窗口被拖动或缩放即重建采集区域；窗口不存在 / 最小化 / 不在前台 / 后端不可用 / 抓帧失败 / 本轮无帧 → `None` + `SkipReason`（`strict=True` 才抛） |
+| `CycleScheduler` | `src/runtime/state_monitor/scheduler.py` | deadline based 节拍（不是 `sleep(interval)`）；单轮超过周期记为 **late cycle** 并记录 `overrun_ms`，同时重对齐基准避免"追赶风暴" |
+| `RuntimeMetricsRecorder` | `src/runtime/state_monitor/metrics.py` | 逐轮指标 `cycle_id / timestamp / state / confidence / stable_state / latency_ms / frame_ms / status / skip_reason / frame_source`；可选 JSONL（`logs/runtime_metrics.jsonl`）；**不含截图与用户数据**，写入失败不影响主循环 |
+| `live_runtime_demo.py` | `examples/` | 真实窗口 500 ms 循环 Demo（`--duration` / `--max-cycles` / `--timing` / `--allow-background` / `--no-metrics` / `--metrics-path`） |
+
+### 逐轮输出（真实运行，截取）
+
+```text
+[20:36:45] #0001 raw=unknown      confidence=0.0000 stable=pending   cycle=  375.0ms
+[20:36:46] #0002 raw=unknown      confidence=0.0000 stable=pending   cycle=  235.0ms
+[20:36:47] #0003 raw=unknown      confidence=0.0000 stable=unknown   cycle=  235.0ms
+[20:38:25] #0202 raw=-            confidence=0.0000 stable=unknown   cycle=    0.0ms [skipped: not_foreground]
+```
+
+### 跳过原因（不崩溃，全部可解释）
+
+| `SkipReason` | 触发条件 |
+| --- | --- |
+| `window_not_found` | 未找到标题匹配的窗口（按 `retry_interval_s` 冷却后重试，游戏后启动可自动接上） |
+| `window_minimized` | 窗口已最小化（客户区无尺寸） |
+| `not_foreground` | 窗口不在最前（截图会包含遮挡内容）——**只跳过，不抢焦点、不切换窗口** |
+| `backend_unavailable` | dxcam / mss 全部创建失败 |
+| `capture_failed` | 抓帧失败（设备丢失等）→ 释放后端，下一轮重建后自动恢复 |
+| `no_frame` | 后端本轮没有产出帧 |
+| `not_started` | 尚未调用 `start()`（编程错误，不会崩溃） |
+
+### 真实 10 分钟数据（2 × 1200 轮）
+
+| 口径 | cycles | ok | skipped | latency mean | p95 | fps | late cycle |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 前台门控（`--duration 600`） | 1200 | 201 | 999（`not_foreground`） | 242.7 ms | 266.0 ms | 2.00 | 0 |
+| 关闭门控（`--allow-background`，窗口被遮挡） | 1200 | 1200 | 0 | 290.9 ms | 360.0 ms | 2.00 | 0 |
+
+两段均 0 崩溃、0 判定失败、0 metrics 写入失败；环境（i7-14650HX / RTX 5050 Laptop / Windows 11）、
+真实环境差异（detect ≈240–289 ms vs 离线 185 ms）、判定恒为 `unknown` 的数据侧原因与全部局限，
+见 `docs/PHASE5_2_REAL_RUNTIME_REPORT.md`。
+
 ## 代码规范
 
 1. 全部公共函数/方法使用类型注解并编写 docstring（Google 风格）。
@@ -1400,9 +1490,14 @@ Stable Changes: 0            # 首次确认是基线，不算变化
 - **Phase 5.1（已完成：优化与测量）**：模板金字塔缓存（`detect` mean 356 → 197 ms、p95 514 → 301 ms，
   逐字段等价）、真实采集测量（dxcam 0.42 ms / mss 29.83 ms）、可选 profiling / 帧指纹缓存 /
   每轮耗时画像、极小帧健壮性修复 → **500 ms 周期已可行**。
-- Phase 5.2（待办）：真实采集的实时循环 —— 500ms 截图循环 + 前台门控接线 + 长跑验证
-  （`detect` 仍占链路的 99.97%；如需进一步压缩预算，见
-  `docs/PHASE5_1_PERFORMANCE_OPTIMIZATION_REPORT.md` 第 7 节的配置级建议）。
+- **Phase 5.2（已完成：真实运行时循环）**：WindowFrameSource（真实窗口 / dxcam 优先 + mss 回退 /
+  窗口移动即重建）、OnmyojiWindowSource（窗口绑定，不抢焦点）、ForegroundGuard（前台门控：只检查、
+  不抢占，失焦即跳过并记录原因）、CycleScheduler（deadline based 节拍 + late cycle / overrun 记录）、
+  RuntimeMetricsRecorder（逐轮指标 JSONL，无截图 / 无用户数据）、`examples/live_runtime_demo.py`
+  与 10 分钟真实长跑（2 × 1200 轮，0 late cycle、0 崩溃；`detect` ≈240–289 ms）。
+  **本阶段不做提前优化**（检测优化 / 多线程 / 异步 pipeline 归 Phase 5.3）。
+- Phase 5.3：运行时优化 —— 检测优化（ROI / 模板数 / 尺度收敛）、多线程或异步 pipeline、
+  更高频率循环（真实环境余量约 210–260 ms，见 `docs/PHASE5_2_REAL_RUNTIME_REPORT.md`）。
 - Phase 6：State Integration —— 事件 / 落盘 / 观测与状态语义收敛。
 - Phase 7：Action Planning & Action Engine —— 受控的键鼠输入与安全约束
   （`src/action`，坐标一律经 `CoordinateTransform` 映射）。
