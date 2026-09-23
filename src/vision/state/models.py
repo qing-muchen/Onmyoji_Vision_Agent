@@ -174,8 +174,18 @@ class StateResult:
     无法被 Runtime / Agent 结构化消费；现在这两件事各有字段，并可通过 :meth:`to_dict`
     原样序列化。
 
-    边界：``evidence`` 只保存**证据名**（字符串），**不持有**证据层的 ``EvidenceResult``
-    对象——状态层不依赖证据层的数据模型；"证据 → 状态"的映射属于 Phase 4.6.3。
+    **边界（Phase 4.7）**——本类与 :class:`~src.vision.evidence.models.StateCandidate`
+    分工明确，**不合并**：
+
+    * ``StateCandidate``（证据层）：候选状态 + 证据得分 / 状态可信度 + 命中的代表证据，
+      表达"**证据支持什么**"；
+    * ``StateResult``（本类，状态层）：**系统的最终状态判断** + 结果来源（``source``）+
+      解释（``reason`` / ``evidence``），表达"系统认为现在是什么状态、为什么"，并且是
+      Runtime（``StateStabilizer`` / ``StateEvent`` / 历史落盘）的唯一输入。
+
+    另：``evidence`` 只保存**证据名**（字符串），**不持有**证据层的 ``EvidenceResult``
+    对象——状态层不依赖证据层的数据模型；"证据 → 状态"的映射由
+    :meth:`~src.vision.state.classifier.StateClassifier.classify_evidence` 通过配置规则完成。
 
     Attributes:
         state_name: 识别出的状态。构造时接受 :class:`StateName` 实例或字符串取值

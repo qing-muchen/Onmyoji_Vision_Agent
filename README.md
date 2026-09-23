@@ -63,7 +63,8 @@ UI 元素也能稳定定位（纯像素模板匹配对此类元素不可靠）�
 22. `detector.ocr.targets` / `detector.fusion` 配置段 —— 文字目标、权重、IoU 阈值与折价系数**全部配置驱动**；
 23. `examples/detector_debug_demo.py` —— 真实验证 Demo（红 = 最终结果、蓝 = OCR、绿 = 模板）。
 
-**Phase 3.0 — State Classification Foundation（已完成）**：把帧映射到游戏状态（三态）：
+**Phase 3.0 — State Classification Foundation（已完成）**：把帧映射到游戏状态（当时为三态；
+Phase 4.6.1 起扩展为完整状态集）：
 
 24. `StateClassifier` —— 编排"转场（强特征，优先）→ 庭院 → unknown"，输出 `StateResult`
     （`state_name / confidence / source / detail`，**不含坐标**）；
@@ -99,11 +100,91 @@ UI 元素也能稳定定位（纯像素模板匹配对此类元素不可靠）�
     变化才产生 `StateEvent`**，首次确认只建立基线；`examples/state_stabilizer_demo.py`
     对照展示 `raw state` 与 `stable state`。
 
-**尚未实现**：YOLO / 深度学习模型与训练、鼠标点击、键盘输入、**状态转移与状态机**
-（Phase 3.0/3.1/3.2 只回答"当前是什么状态"、"它是否稳定"，不回答"接下来该做什么"——
-后者属于 `src/state`）、任务系统、自动挂机逻辑，
-以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，
-Phase 2.1.1 只把它当作元素定位的语义锚点）。
+**Phase 4.1 — Evidence Detector Framework（已完成）**：把"证据"与"状态"解耦：
+
+35. `EvidenceResult` —— 一条视觉事实（`name / detected / confidence / bbox / source /
+    metadata / evidence_type`），**不携带状态名**（`battle_auto_button` 只说"左下角有自动按钮"）；
+36. `BaseEvidenceDetector` / `TemplateEvidenceDetector` —— ROI 裁剪 + 多尺度模板匹配
+    （可选 OCR 语义锚点融合），模板在构造期加载、`detect(frame)` 不读文件；
+37. `EvidenceRegistry` —— detector 注册表与批量检测（`detect_all`，异常不吞）；
+38. `EvidenceAggregator` —— 按**配置规则**（`requires` / `any_of` + `min_groups`）把证据
+    聚合为候选状态，源码里没有"证据名 → 状态"的硬编码映射；
+39. `examples/evidence_demo.py` —— 证据层 Demo（Frame → Evidence → StateCandidate）。
+
+**Phase 4.2 — Battle Evidence Expansion（已完成）**：battle 证据链拆成 4 个 detector
+（自动按钮 / 技能区 / 行动条 / 式神头像），规则按**视觉区域**计数（`min_groups=2`）。
+
+**Phase 4.3 — Reliability Scoring（已完成）**：每个 detector 带**长期可靠度**
+（`evidence.reliability`），聚合改为按可靠度加权平均
+（`Σ(confidence×reliability)/Σ(reliability)`）——低可靠度旁证不会显著拉低强证据。
+
+**Phase 4.4 — Evidence Group + Temporal Buffer（已完成）**：空间去重（同一视觉区域只贡献
+一次得分）与 `EvidenceHistory` 时间窗口（Phase 4.7 起 **deprecated**，见下）。
+
+**Phase 4.5 — Evidence-State Integration Review（已完成）**：架构 Review，冻结两层的职责边界、
+依赖方向、时间层归属与接口契约 → `docs/PHASE4_5_ARCHITECTURE_REVIEW.md`。
+
+**Phase 4.6 — Evidence → State 迁移（已完成：4.6.1–4.6.6）**：
+
+40. **4.6.1 状态词汇统一**：`StateName` 扩展为完整状态集（`yard` / `exploration` / `battle` /
+    `battle_result` / `battle_reward` / `transition` / `unknown`）+ 配置层状态名校验；
+41. **4.6.2 `StateResult` 契约**：新增 `reason` / `evidence`，新增 `to_dict` / `from_dict`
+    （兼容旧格式），`StateSource.EVIDENCE`；
+42. **4.6.3 证据驱动分类器**：`StateClassifier.classify(input)` 同时接受 `Frame` 与
+    `EvidenceResult` 序列；`classify_evidence` 复用聚合器（规则全部来自配置）；
+43. **4.6.4 transition 证据化**：新增包装型 detector `transition_banner`（判定逻辑仍复用
+    `TransitionClassifier`，由编排层注入），transition 成为普通证据；
+44. **4.6.5 yard 权威迁移**：帧路径不再产出 `yard`（返回 `unknown` 并说明原因）；
+    `SceneClassifier` / `YardClassifier` / `dataset/scenes` 保留为**独立视觉组件**；
+45. **4.6.6 置信度校准**：分离**证据得分**与**状态可信度**（`state_confidence` + 配置化
+    `rule_based` 校准），修复单样本证据导致 `battle_result` / `battle_reward` 无法稳定确认的问题
+    （稳定化门槛未降低、未新增样本）。
+
+**Phase 4.7 — Architecture Cleanup（已完成）**：架构收敛（不新增能力）：
+
+46. `EvidenceHistory` 标记 **deprecated**（时间滤波唯一归属 `StateStabilizer`；该模块无生产调用方）；
+47. 新增 `EvidenceFrameProcessor`（`src/vision/pipeline`）——`Frame → 证据 → StateResult` 的
+    组合单元，供 Phase 5 的 Runtime 接线使用（本层不做循环 / 采集 / 时间滤波）；
+48. 新增 `examples/evidence_state_demo.py`（证据驱动状态判定 Demo，覆盖 6 个状态）；
+49. 文档同步：本 README + `docs/ARCHITECTURE_OVERVIEW.md`。
+
+### 架构总览（Phase 4.x 完成后的主链路）
+
+```text
+Frame                                  采集：Window → Foreground → Calibration → Capture
+  ↓  EvidenceRegistry.detect_all(frame)
+[EvidenceResult, ...]                  证据层：看到了什么（含否定证据；bbox 位于帧像素坐标）
+  ↓  EvidenceAggregator.aggregate      规则来自配置：requires / any_of + min_groups / reliability
+StateCandidate                         候选状态 + 证据得分 + 状态可信度 + 判定理由
+  ↓  StateClassifier.classify_evidence 状态层：这些证据意味着什么（无硬编码映射）
+StateResult                            state_name / confidence / source / reason / evidence
+  ↓  StateStabilizer.update            runtime：时间滤波（唯一归属）+ 置信度门槛
+StableStateResult → StateEvent → StateHistoryStore（logs/state_history.json）
+```
+
+| 层 | 包 | 职责 | 明确不做 |
+| --- | --- | --- | --- |
+| 基础设施 | `src/core` | 配置、几何、路径、异常 | 不解读画面 |
+| 视觉输入 | `src/vision/{window,calibration,capture}` | 窗口定位、坐标映射、帧采集 | 不解读内容 |
+| 视觉判定 | `src/vision/{detector,scene,ocr}` | 元素定位 / 场景识别 / 文字识别（独立能力） | 不产出状态 |
+| **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释的视觉证据**（可靠度 / 分组 / 解释信息） | 不产出状态、不做时间滤波 |
+| **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
+| **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`） | 不做循环 / 采集 / 时间滤波 |
+| **运行时** | `src/runtime` | 固定节拍、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer`） | 不做视觉判定 |
+
+四个"置信度"语义互不混用（详见 `docs/ARCHITECTURE_OVERVIEW.md`）：
+
+| 配置项 | 语义 |
+| --- | --- |
+| `evidence.detectors[*].threshold` | detector 层：匹配分低于此值**不算命中** |
+| `evidence.aggregator.rules[*].min_confidence` | **证据准入阈值**：该证据是否足够参与状态判断 |
+| `evidence.aggregator.rules[*].state_confidence.min` | **状态可信度下限**（可选校准；`rule_based`） |
+| `runtime.stabilization.confidence_threshold` | 稳定化门槛（消费**状态可信度**） |
+
+**尚未实现**：Phase 5 的实时循环（500ms 截图 + 事件接线）、Phase 6/7/8 的 State Integration /
+Action /
+State Machine / Task System、YOLO 与深度学习模型、鼠标点击与键盘输入，以及任何**基于文字或界面的
+决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
 ## 目录结构
 
@@ -113,7 +194,7 @@ Onmyoji_Vision_Agent/
 │   └── config.yaml               # 唯一的运行期配置来源
 ├── dataset/                      # 截图/标注数据集（内容不入库）
 │                                 #   scenes/ 场景、templates/ UI 模板、states/ 状态样本
-├── docs/                         # 设计文档
+├── docs/                         # 设计文档（架构总览 + 各阶段 Review / 报告）
 ├── examples/
 │   ├── capture_demo.py               # 采集链路 Demo（Foreground -> Capture）
 │   ├── frame_pipeline_demo.py        # 帧流水线 Demo（Capture -> Buffer -> Stability）
@@ -121,7 +202,9 @@ Onmyoji_Vision_Agent/
 │   ├── detector_pipeline.py          # 检测链路公共装配与调试绘制（Demo 共用）
 │   ├── detector_debug_demo.py        # 检测调试 Demo（Template + OCR -> Fusion，含可视化）
 │   ├── scene_classifier_demo.py      # 场景识别 Demo（Frame -> SceneResult）
-│   ├── state_classifier_demo.py      # 状态识别 Demo（Frame -> StateResult）
+│   ├── evidence_demo.py              # 证据层 Demo（Frame -> EvidenceResult -> StateCandidate）
+│   ├── evidence_state_demo.py        # 证据驱动状态 Demo（Frame -> Evidence -> StateResult，Phase 4.7）
+│   ├── state_classifier_demo.py      # 状态识别 Demo（帧路径：Frame -> StateResult）
 │   ├── state_monitor_demo.py         # 实时状态监控 Demo（周期采集 -> 状态变化事件）
 │   ├── state_stabilizer_demo.py      # 状态稳定化 Demo（raw state -> stable state）
 │   └── ocr_demo.py                   # OCR Demo（Frame -> TextResult）
@@ -177,13 +260,23 @@ Onmyoji_Vision_Agent/
 │   │   │   ├── engine.py         #     OCREngine（Frame -> 预处理 -> Provider -> 结果）
 │   │   │   ├── preprocess.py     #     灰度化 / 放大 / 二值化 + 坐标映射
 │   │   │   └── providers/        #     OCR Provider（base / tesseract）
-│   │   └── state/                #   游戏状态识别（Phase 3.0）
-│   │       ├── base.py           #     BaseStateClassifier 抽象接口
-│   │       ├── models.py         #     StateName / StateSource / StateResult
-│   │       ├── classifier.py     #     StateClassifier（transition -> yard -> unknown）
-│   │       ├── transition/       #     转场判定：dataset / extractor / matcher / classifier
-│   │       └── yard/             #     庭院判定：包装 SceneClassifier
-│   ├── runtime/                  # 运行期编排（Phase 3.1）
+│   │   ├── evidence/             #   证据层（Phase 4.x）："看到了什么"
+│   │   │   ├── models.py         #     EvidenceResult / EvidenceScore / StateCandidate
+│   │   │   ├── base.py           #     BaseEvidenceDetector / TemplateEvidenceDetector
+│   │   │   ├── registry.py       #     EvidenceRegistry（注册表 + detect_all）
+│   │   │   ├── aggregator.py     #     EvidenceAggregator（配置规则 + 可靠度加权 + 状态可信度校准）
+│   │   │   ├── history.py        #     EvidenceHistory（已 deprecated：时间滤波归 StateStabilizer）
+│   │   │   ├── detectors/        #     ROI 模板型 detector + 包装型 transition_banner
+│   │   │   └── templates.py      #     证据模板加载（dataset/features/<name>/positive）
+│   │   ├── state/                #   状态层（Phase 3.0 / 4.6）："这些证据意味着什么"
+│   │   │   ├── base.py           #     BaseStateClassifier 抽象接口
+│   │   │   ├── models.py         #     StateName / StateSource / StateResult
+│   │   │   ├── classifier.py     #     StateClassifier（证据驱动；帧路径自 4.6.5 只判转场）
+│   │   │   ├── transition/       #     转场判定：dataset / extractor / matcher / classifier
+│   │   │   └── yard/             #     庭院视觉组件（Phase 4.6.5 起不参与状态判定）
+│   │   └── pipeline/             #   编排层（Phase 4.7）：Frame -> 证据 -> StateResult
+│   │       └── frame_processor.py#     EvidenceFrameProcessor（供 Phase 5 Runtime 接线）
+│   ├── runtime/                  # 运行期编排（Phase 3.1）：时间滤波的唯一归属
 │   │   └── state_monitor/        #   实时状态监控
 │   │       ├── monitor.py        #     StateMonitor（固定节拍循环 + 变化检测）
 │   │       ├── stabilizer.py     #     StateStabilizer（逐帧 -> 稳定状态）
@@ -191,9 +284,9 @@ Onmyoji_Vision_Agent/
 │   │       ├── events.py         #     StateEvent（状态变化事件）
 │   │       ├── history.py        #     StateHistoryStore（即时原子写 JSON）
 │   │       └── source.py         #     FrameSource / CaptureFrameSource / 前台门控
-│   ├── action/                   # 输入控制层
-│   ├── state/                    # 状态管理层（未来 State Machine，Phase 3 后续）
-│   └── task/                     # 任务调度层
+│   ├── action/                   # 输入控制层（Phase 7：受控键鼠输入与安全约束）
+│   ├── state/                    # 状态管理层（Phase 8：State Machine）
+│   └── task/                     # 任务调度层（Phase 8：任务编排与重试）
 ├── tests/                        # pytest 测试
 ├── requirements.txt              # 运行时依赖
 └── requirements-dev.txt          # 开发/测试依赖
@@ -255,6 +348,10 @@ python examples/state_monitor_demo.py --duration 30
 # 11. Demo：状态稳定化（对照 raw state 与 stable state）
 python examples/state_stabilizer_demo.py
 python examples/state_stabilizer_demo.py --raw unknown,yard,yard,yard,unknown,unknown,unknown
+
+# 12. Demo：证据驱动状态判定（Frame -> Evidence -> StateResult，Phase 4.7）
+python examples/evidence_state_demo.py
+python examples/evidence_state_demo.py --image dataset/raw/battle_result/battle_result_win_001.png --verbose
 ```
 
 `python src/main.py` 与 `python -m src.main` 等价，两者都在项目根目录下执行。
@@ -272,7 +369,8 @@ python examples/state_stabilizer_demo.py --raw unknown,yard,yard,yard,unknown,un
 | `detector` | 检测器配置（模板匹配方法、阈值、多尺度比例；OCR 文字目标；融合权重与 IoU 阈值） |
 | `scene` | 场景识别配置（置信度阈值、统一缩放尺寸） |
 | `ocr` | OCR 配置（Provider 名称与语言、预处理放大倍数与二值化阈值） |
-| `state` | 状态识别配置（转场底部裁剪比例、阈值与负样本间隔；庭院阈值） |
+| `state` | 状态识别配置（转场底部裁剪比例、阈值与负样本间隔；庭院**视觉组件**开关与阈值——自 Phase 4.6.5 起不参与状态判定） |
+| `evidence` | 证据层配置（detector 的 ROI/模板/阈值、**长期可靠度**表、视觉区域分组、聚合规则与**状态可信度校准**） |
 | `runtime` | 运行期编排配置（状态监控周期、历史文件路径与事件上限、前台检查开关、状态稳定化窗口与门槛） |
 | `window` | 目标窗口的匹配方式、标题关键字与前台控制（`auto_focus`） |
 | `logging` | 日志级别、目录、滚动策略与格式 |
@@ -318,7 +416,14 @@ python examples/state_stabilizer_demo.py --raw unknown,yard,yard,yard,unknown,un
 | `runtime.state_monitor.check_foreground` | `true` | 每周期只检查目标窗口是否在前台（不抢占），失焦跳过该轮 |
 | `runtime.stabilization.enabled` | `true` | 稳定化总开关；关闭时退化为"每帧立即确认" |
 | `runtime.stabilization.min_frames` | `3` | 稳定窗口：连续多少帧相同状态才确认 |
-| `runtime.stabilization.confidence_threshold` | `0.85` | 已知状态低于该值的帧不计入稳定计数（`unknown` 豁免） |
+| `runtime.stabilization.confidence_threshold` | `0.85` | 已知状态低于该值的帧不计入稳定计数（`unknown` 豁免）；消费的是 **`StateResult.confidence`（状态可信度）** |
+| `evidence.enabled` | `true` | 证据层总开关 |
+| `evidence.reliability.<name>` | 见配置 | 每条证据的**长期可靠度**（`(0,1]`），聚合按可靠度加权平均 |
+| `evidence.groups.<group>.members` | 见配置 | 同一视觉区域的证据分组（同组去重、`min_groups` 按区域计数） |
+| `evidence.detectors.<name>.threshold` | `0.85` | detector 层匹配阈值（低于此值不算命中） |
+| `evidence.aggregator.rules[*].min_confidence` | `0.6` | **证据准入阈值**（该证据是否足够参与状态判断，**不是**状态置信度） |
+| `evidence.aggregator.rules[*].state_confidence.min` / `min_reliability` | 仅单样本规则配 `0.85` / `0.9` | **状态可信度下限**（`rule_based` 校准：规则完整满足且平均可靠度达标时生效） |
+| `evidence.history.window_size` / `min_state_count` | `5` / `3` | `EvidenceHistory` 时间窗口（**已 deprecated**：时间滤波唯一归属 `StateStabilizer`） |
 
 环境变量可覆盖任意字段，格式为 `OVA_<段>__<字段>`：
 
@@ -883,13 +988,16 @@ python examples/ocr_demo.py --image dataset/scenes/yard/skin_001/scene_001/yard_
 Frame
         │  TransitionBottomExtractor（按 state.transition.crop_height_ratio 裁出底部条带）
         ▼
-TransitionClassifier（正样本阈值 + 负样本否决）  ─┐  命中即返回 transition
-                                                  │
-YardClassifier（包装 SceneClassifier）           ─┘  命中即返回 yard
-        │  Fallback（两分支都未命中）
+TransitionClassifier（正样本阈值 + 负样本否决）  ──  命中即返回 transition
+        │  Fallback
         ▼
-StateResult(state_name / confidence / source / detail)
+StateResult(state_name / confidence / source / detail / reason / evidence)
 ```
+
+> **Phase 4.6.5 起帧路径只判转场**：`yard` 已迁出帧路径（其权威来源是证据路径的
+> `bottom_menu_yard` 证据），帧路径遇到庭院界面会返回 `unknown` 并给出可读原因。
+> 证据驱动的完整链路（推荐路径）见上文"架构总览"与 `docs/ARCHITECTURE_OVERVIEW.md`；
+> 本节的判定顺序与阈值仍适用于帧驱动的转场判定。
 
 判定顺序是固定的：**转场 → 庭院 → unknown**。理由：转场底部条带是**专属强特征**，
 而场景识别是整图相似度、对"庭院风格插画"可能偏高；反过来条带匹配几乎不会对庭院界面
@@ -907,7 +1015,7 @@ StateResult(state_name / confidence / source / detail)
 | `TransitionBottomMatcher` | `transition/matcher.py` | 统一尺寸 + 灰度 + 归一化 MAE（**复用** scene 的 `normalized_similarity` / `resize_to`） |
 | `TransitionClassifier` | `transition/classifier.py` | 正样本阈值 + 负样本否决，输出 `TransitionMatch` |
 | `YardClassifier` | `yard/classifier.py` | 包装 `SceneClassifier`，阈值取 `state.yard.threshold` |
-| `StateClassifier` | `classifier.py` | 三态编排（`from_config` 装配、开关与降级） |
+| `StateClassifier` | `classifier.py` | 状态判定编排（证据驱动 + 帧路径；`from_config` / `from_evidence_config` 装配） |
 
 算法选择理由：条带是**固定 UI**（位置固定，无需滑动搜索，故不用 `cv2.matchTemplate`）；
 MAE 计算确定、可解释、**零新依赖**（SSIM 需 scikit-image，直方图会丢失结构）。
@@ -930,12 +1038,16 @@ negative_score = max 相似度(条带, 各 non_transition_bottom 样本的底部
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `state_name` | `StateName` | `yard` / `transition` / `unknown` |
-| `confidence` | `float` | `0 <= confidence <= 1`（越界即报错）；`unknown` 时为 `0.0` |
-| `source` | `StateSource` | `scene_classifier` / `transition_bottom_match` / `fallback` |
-| `detail` | `str \| None` | 可读说明，例如 `matched template transition_bottom_003.png (positive=1.0000, negative=0.9454)` |
+| `state_name` | `StateName` | 完整状态集：`yard` / `exploration` / `battle` / `battle_result` / `battle_reward` / `transition` / `unknown` |
+| `confidence` | `float` | **状态可信度**，`0 <= confidence <= 1`（越界即报错）；`unknown` 时为 `0.0` |
+| `source` | `StateSource` | `evidence`（证据路径）/ `scene_classifier` / `transition_bottom_match` / `fallback` |
+| `detail` | `str \| None` | 可读说明（帧路径用于记录命中的样本与分数） |
+| `reason` | `str` | 判定原因（证据路径必填），例如 `matched battle_result evidence rule: victory_icon=0.7000(r=0.95); calibrated state confidence` |
+| `evidence` | `tuple[str, ...]` | 参与判定的证据名（证据路径），例如 `("victory_icon",)` |
 
-便捷接口：`result.is_known`、`result.describe()`。**结果不含坐标**（与 `SceneResult` 一致）。
+便捷接口：`result.is_known`、`result.describe()`、`result.to_dict()` /
+`StateResult.from_dict(...)`（后者兼容不含 `reason` / `evidence` 的旧格式）。
+**结果不含坐标**（与 `SceneResult` 一致）。
 
 ```python
 from src.core import load_config
@@ -999,8 +1111,11 @@ Case 3  state=unknown     confidence=0.0000  source=fallback
 
 ### 当前限制
 
-* **只支持三态**：`yard` / `transition` / `unknown`；战斗、探索、商店等都归入 `unknown`，
-  尚无更细的界面分类；
+* **帧路径只判转场**（Phase 4.6.5 起）：`yard` 与其它状态由**证据路径**判定
+  （见上文"架构总览"与 `docs/ARCHITECTURE_OVERVIEW.md`）；帧路径对庭院图返回 `unknown`
+  并给出 `reason` 说明。`StateResult` 现已支持完整状态集
+  （`yard` / `exploration` / `battle` / `battle_result` / `battle_reward` / `transition` / `unknown`）；
+  战斗、探索、商店等界面若未命中规则仍归入 `unknown`；
 * **区分度有限**：正负样本的 gap 区间只有 `0.014 ~ 0.049`（因为各界面底部 UI 风格接近），
   未见过的界面可能落进灰区。改进方向（**不在本阶段**）：对条带分区/加权匹配、
   或引入语义证据（例如 OCR 读取底部"官网 yys.xyz"提示文字）；
@@ -1111,7 +1226,8 @@ History:      logs/state_history.json
 
 ### 当前限制
 
-* 状态识别能力与限制同 Phase 3.0（仅三态；正负样本 gap 区间只有 `0.014 ~ 0.049`）；
+* 状态识别能力与限制同 Phase 3.0 的转场分支（正负样本 gap 区间只有 `0.014 ~ 0.049`）；
+  状态集合自 Phase 4.6.1 起为完整状态集，`yard` 等已改由证据路径判定；
 * 监控**不做状态转移**、不统计"状态持续时长"，也不重试/纠错（属于 `src/state` / `src/task`）；
 * 前台检查只"跳过该轮"，不自动置前（需要抢占时显式使用 `WindowManager.ensure_foreground`）；
 * 历史文件受 `max_events` 限制，长时间运行需自行归档；历史写入失败会抛
@@ -1202,7 +1318,9 @@ Stable Changes: 0            # 首次确认是基线，不算变化
 * 稳定窗口固定为全局 `min_frames`，不支持"per-state 不同窗口"（如需为 `unknown` 单独设更长窗口，
   需要新增配置项——当前用统一窗口 + `unknown` 豁免门槛实现）；
 * 稳定化会**引入延迟**（最坏 `min_frames × interval`，默认 1.5s），这是刻意的精度/时延取舍；
-* 与 Phase 3.0 一致：状态集合仅三态，识别能力受样本量限制。
+* 状态集合自 Phase 4.6.1 起为完整状态集（7 个取值），但识别能力仍受样本量与阈值标定限制：
+  例如 `victory_icon` / `reward_panel` 各只有 1 张正样本（置信度被折价到 `0.70`），
+  靠 Phase 4.6.6 的**状态可信度校准**（`state_confidence`）补偿才达到稳定门槛。
 
 ## 代码规范
 
@@ -1223,14 +1341,22 @@ Stable Changes: 0            # 首次确认是基线，不算变化
 - **Phase 2.1.1（已完成）**：OCR Assisted Detection —— OCR 辅助检测与模板/OCR 结果融合。
 - **Phase 2.2（已完成）**：Scene Classifier Foundation —— 整图场景识别与多模板投票。
 - **Phase 2.3（已完成）**：OCR Foundation —— Provider 架构的文字识别（默认 Tesseract）。
-- **Phase 3.0（已完成）**：State Classification Foundation —— 三态状态识别
-  （庭院 / 转场 / 未知），转场只使用底部固定条带并结合正负样本双侧判别。
+- **Phase 3.0（已完成）**：State Classification Foundation —— 状态识别（当时为
+  庭院 / 转场 / 未知三态；Phase 4.6.1 起扩展为完整状态集），转场只使用底部固定条带并结合
+  正负样本双侧判别。
 - **Phase 3.1（已完成）**：State Monitor —— 固定周期状态监控、状态变化事件与
   `state_history.json` 持久化（只做"采集 → 识别 → 记录"）。
 - **Phase 3.2（已完成）**：State Stabilizer —— 连续窗口确认 + 置信度门槛 + `unknown` 语义，
   事件只由稳定状态驱动。
 - Phase 2.4：Detector 扩展 —— 更鲁棒的匹配策略、多目标检测与检测结果缓存。
 - Phase 2.5：感知融合 —— 把 scene / detector / ocr / state 的结果组合成统一的界面描述（仍不做决策）。
-- Phase 3：State Machine —— 界面状态建模与转移（`src/state`）。
-- Phase 4：Action Engine —— 受控的键鼠输入与安全约束（`src/action`，坐标一律经 `CoordinateTransform` 映射）。
-- Phase 5：Task System —— 任务编排、重试与中断处理（`src/task`）。
+- **Phase 4.0–4.7（已完成）**：Evidence Layer 与 State Layer 收敛 —— 证据框架、battle 证据链、
+  可靠度加权、空间分组与时间缓冲、架构 Review、Evidence → State 迁移（分类器 / transition / yard）、
+  置信度校准、架构收敛（详见上文"当前阶段"与 `docs/ARCHITECTURE_OVERVIEW.md`）。
+- Phase 5：Runtime Loop —— 500ms 截图循环 + 证据驱动的实时状态判定
+  （`src/vision/pipeline` 与 `src/runtime` 接线；**尚未实现**）。
+- Phase 6：State Integration —— 事件 / 落盘 / 观测与状态语义收敛。
+- Phase 7：Action Planning & Action Engine —— 受控的键鼠输入与安全约束
+  （`src/action`，坐标一律经 `CoordinateTransform` 映射）。
+- Phase 8：State Machine / Task System —— 状态转移建模、任务编排、重试与中断处理
+  （`src/state` / `src/task`）。

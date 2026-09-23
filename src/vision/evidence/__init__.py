@@ -9,9 +9,15 @@
       ↓  EvidenceRegistry.detect_all(frame)
     [EvidenceResult, ...]        # 每条 = 一条视觉事实（可能是否定结果）
       ↓  EvidenceAggregator.aggregate(evidence)
-    StateCandidate               # 候选状态 + 判定理由（because: xxx=0.9500(r=0.80), ...）
-      ↓  EvidenceHistory.push(candidate) → stable_state()
-    stable state                 # 时间窗口内的多数状态（未达门槛时为 None）
+    StateCandidate               # 候选状态 + 证据得分/状态可信度 + 判定理由
+
+本层到此结束——**证据层不产出状态、不做时间滤波**：
+
+* 语义映射与解释（``StateResult``）属于 :mod:`src.vision.state`；
+* 时间滤波的唯一归属是 runtime 层的
+  :class:`~src.runtime.state_monitor.stabilizer.StateStabilizer`；
+* :class:`~src.vision.evidence.history.EvidenceHistory` 已标记 deprecated
+  （**无生产调用方**，仅为兼容保留）。
 
 关键约定：
 
@@ -35,9 +41,11 @@
 * **空间去重（4.4）**：同一视觉区域（``group``）内的多条证据只贡献一次得分，
   规则也可按 group 数计数（``min_groups``）——避免"同一块 UI 被两个 detector 看到"
   被当成两条独立证据。
-* **时间稳定（4.4）**：:class:`~src.vision.evidence.history.EvidenceHistory` 对最近
-  N 帧的候选状态做多数判断，把瞬时抖动与真实切换区分开；它属于证据层内部，
-  既不替代也不依赖 ``StateMonitor`` / ``StateStabilizer``。
+* **两个分值（4.6.6）**：``confidence``/``score`` 是**证据得分**（规则满足判定与解释），
+  ``state_confidence`` 是**状态可信度**（校准后，供 ``StateResult.confidence``
+  与 ``StateStabilizer`` 使用）。
+* **时间层归属（4.7）**：时间滤波只由 runtime 的 ``StateStabilizer`` 负责；证据层不得
+  再做窗口累积。:class:`~src.vision.evidence.history.EvidenceHistory` 已 deprecated。
 
 依赖方向：``core`` → ``capture`` / ``detector`` / ``ocr`` → ``evidence``。
 本层**不依赖** ``state``（不产生 ``StateResult``），也不做任何交互或状态转移。

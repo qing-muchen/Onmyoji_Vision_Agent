@@ -841,9 +841,15 @@ class EvidenceAggregatorConfig(StrictModel):
 class EvidenceHistoryConfig(StrictModel):
     """证据历史窗口配置（Phase 4.4）。
 
+    .. deprecated:: Phase 4.7
+       时间滤波的唯一归属是 runtime 层（``runtime.stabilization`` +
+       :class:`~src.runtime.state_monitor.stabilizer.StateStabilizer`）。
+       本配置仅供已标记 deprecated 的
+       :class:`~src.vision.evidence.history.EvidenceHistory`（**无生产调用方**）使用，
+       保留是为兼容既有配置与离线分析。
+
     为 500ms 轮询下的**时间稳定性**提供基础：单帧判定会在转场 / 技能动画时抖动，
-    对最近若干帧的候选状态做多数判断可以显著降低抖动。本配置只描述窗口参数，
-    时间累积逻辑在 :class:`~src.vision.evidence.history.EvidenceHistory`。
+    对最近若干帧的候选状态做多数判断可以显著降低抖动。
 
     Attributes:
         window_size: 保留最近多少个候选状态（滑动窗口长度）。

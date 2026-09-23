@@ -1,5 +1,16 @@
 """证据历史窗口：候选状态的时间稳定性（Phase 4.4）。
 
+.. deprecated:: Phase 4.7
+   **时间滤波的唯一归属是 runtime 层**——
+   :class:`~src.runtime.state_monitor.stabilizer.StateStabilizer`（消费 ``StateResult``、
+   产出稳定状态、驱动事件与落盘）。本模块保留仅为**兼容与离线分析**：
+
+   * 它**没有任何生产调用方**（仅测试与 ``evidence.history`` 配置段引用）；
+   * 它不参与 ``Frame → Evidence → State → Runtime`` 主链路；
+   * 证据层的职责是"检测证据、输出事实"，不应再承担时间累积。
+
+   Phase 5（实时循环）接线时若确认无使用方，可直接删除本模块、其配置段与对应测试。
+
 单帧判定会在转场、技能动画、加载过程中抖动：同一段 500ms 轮询里可能出现
 ``battle, battle, unknown, battle, battle`` 这样的序列。对最近若干帧做多数判断，
 才能把"瞬时抖动"与"真实状态切换"区分开。
@@ -32,6 +43,10 @@ logger = get_logger("vision.evidence.history")
 
 class EvidenceHistory:
     """最近的候选状态滑动窗口。
+
+    .. deprecated:: Phase 4.7
+       时间滤波的唯一归属是 :class:`~src.runtime.state_monitor.stabilizer.StateStabilizer`；
+       本类**无生产调用方**，保留仅为兼容与离线分析（详见模块文档）。
 
     窗口满后自动丢弃最旧的候选；"稳定"的判定是**窗口内的多数**，
     因此短时间内来回抖动的状态不会通过门槛。

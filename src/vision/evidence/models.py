@@ -281,6 +281,18 @@ class StateCandidate:
     * :attr:`state_confidence` —— **状态可信度**（校准后），是 ``StateResult.confidence``
       的来源，也是 :class:`~src.runtime.state_monitor.stabilizer.StateStabilizer` 消费的值。
 
+    **边界（Phase 4.7）**——本类与 :class:`~src.vision.state.models.StateResult` 分工明确，
+    **不合并**：
+
+    * ``StateCandidate``（本类，**证据层**输出）：表示"**基于当前证据的候选状态**"。由
+      :class:`EvidenceAggregator` 依据配置规则聚合得出，回答"证据支持哪个状态、支持得多强"。
+      缺失证据（``missing``）位于聚合中间产物 :class:`EvidenceScore`——候选本身只保留
+      命中并计分的代表证据。
+    * ``StateResult``（**状态层**输出）：表示"**系统的最终状态判断**"，由
+      :class:`~src.vision.state.classifier.StateClassifier` 翻译候选而来，额外带上
+      结果来源（``source``）、面向人的说明（``detail``）与可序列化解释，并作为 Runtime
+      （稳定化 / 事件 / 落盘）的唯一输入。
+
     Attributes:
         state: 候选状态名（``yard`` / ``exploration`` / ``battle`` / ``battle_result`` /
             ``battle_reward`` / ``transition`` / ``unknown``）。

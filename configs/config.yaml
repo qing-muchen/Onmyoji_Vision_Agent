@@ -183,8 +183,11 @@ evidence:
     # 行动条与式神头像都落在战斗界面右侧同一块 UI 上，因此同组
     battle_right_ui:
       members: ["battle_action_bar", "battle_shikigami_icons"]
-  # 候选状态的时间窗口（Phase 4.4）：供证据层的 EvidenceHistory 使用，不涉及 StateMonitor。
-  # 500ms 轮询下单帧判定会在转场 / 技能动画时抖动，需按窗口内多数判断。
+  # 候选状态的时间窗口（Phase 4.4）。
+  # .. deprecated:: Phase 4.7
+  #    时间滤波的唯一归属是 runtime 层（runtime.stabilization + StateStabilizer）；
+  #    本段仅供已标记 deprecated 的 evidence.history.EvidenceHistory（无生产调用方）使用，
+  #    保留是为兼容既有配置与离线分析，Phase 5 可随该模块一起删除。
   history:
     # 保留最近多少个候选状态
     window_size: 5
