@@ -85,12 +85,32 @@
                                    │ （注入 scheduler 后：StateMonitor → Bridge → Scheduler.tick）
 ```
 
-完整闭环（Phase 9）：
+记忆层（Phase 10，**跨轮**）：
 
 ```text
-State → Scheduler → TaskInstance → StateMachine → Action
-Runtime → Vision → Snapshot → Resolver → TaskRuntimeBridge → TaskScheduler
-        → TaskInstance → TaskEngine → ActionDispatcher → DryRunBackend
+┌─ 观察记忆（src/runtime/observation/）Phase 10 ──────────────────────────────┐
+│ Observation（**只保存状态描述**：state_name / confidence / source / cycle_id /  │
+│              metadata 标量；禁止 Frame / Image / numpy / cv2 / bbox / 截图）   │
+│ ObservationStore（最近 N 条，默认 1000，FIFO 淘汰）                           │
+│ StateChangeDetector（ENTER / EXIT / CHANGE / STABLE）                         │
+└────────────────────────────────────────────────────────────────────────────┘
+                                   ↓ src/runtime/context_bridge.py（唯一转换点）
+┌─ 决策上下文（src/task/context.py，**纯数据模型**）Phase 10 ────────────────────┐
+│ DecisionContext：current_state / previous_state / state_history / last_action │
+│                  / last_error / task_variables（引擎**只读** + 写动作反馈/错误）│
+│ 动作反馈：ActionOutcome →（src/task/adapters/action_feedback.py）→ ActionRecord │
+└────────────────────────────────────────────────────────────────────────────┘
+                                   ↓ context_provider（Runtime 侧注入）
+                      TaskScheduler.tick(state) → TaskInstance → TaskEngine
+```
+
+完整闭环（Phase 10）：
+
+```text
+Observation → Context → Scheduler → Action
+Runtime → Vision → Snapshot → Resolver → TaskRuntimeBridge → ObservationStore
+        → DecisionContext → TaskScheduler → TaskInstance → TaskEngine
+        → ActionDispatcher → DryRunBackend
 ```
 
 帧路径（Phase 3.0，**兼容保留**）：`StateClassifier.classify_frame(frame)` 只判**转场**
@@ -116,8 +136,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释证据**（可靠度、分组、解释信息、状态可信度校准） | 不产出状态、不做时间滤波、不读文件 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`）+ 视觉目标转换（`VisionTargetAdapter`：证据 / 检测 → `VisionTargetCandidate` / `TargetSnapshot`，Phase 7.2） | 不做循环 / 采集 / 时间滤波 / 点击；**不 import** `src.action` / `src.task` / `src.runtime`，不调用 `ActionDispatcher`、不产生输入 |
-| **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`）、**视觉快照桥（`VisionSnapshotBridge`，Phase 7.3）**、**任务编排桥（`TaskRuntimeBridge`，Phase 7.5：稳定状态 + 节拍 → 触发/驱动 `TaskEngine`；Phase 9：注入 `scheduler` 后改为委托 `TaskScheduler.tick` / `on_cycle`）** | 不做视觉判定、不抢焦点、**不调用 `ActionDispatcher`、不产生任何输入**、不执行任务动作（只编排） |
-| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`TaskRegistry` / `TaskTriggerRegistry`（任务清单与状态触发映射，Phase 7.5）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`TaskActionAdapter`（动作意图 → 任务侧 `ActionRequest`，Phase 7.4）、**流程状态机（`src/task/state_machine/`，Phase 8：`TaskFlowStateMachine` 纯决策 + `TaskStateDefinition` / `StateTransition` / `StateAction` / `TaskFlowPlan`，`handle_state` 为统一状态入口）**、**多任务调度（`src/task/scheduler/`，Phase 9：`TaskScheduler` 队列 / 优先级 / 抢占 / `ResourceLock` 资源互斥 + `TaskInstance`（一实例一引擎）+ `PriorityPolicy` / `SchedulerConfig`）**、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**、不知道坐标（只给语义名）、不知道 Vision、不知道 Runtime |
+| **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`）、**视觉快照桥（`VisionSnapshotBridge`，Phase 7.3）**、**任务编排桥（`TaskRuntimeBridge`，Phase 7.5：稳定状态 + 节拍 → 触发/驱动 `TaskEngine`；Phase 9：注入 `scheduler` 后改为委托 `TaskScheduler.tick` / `on_cycle`）**、**观察记忆（`src/runtime/observation/`，Phase 10：`ObservationStore` / `Observation` / `StateChangeDetector`；纯 Runtime memory，不依赖 task）+ 观察→上下文桥（`src/runtime/context_bridge.py`，Phase 10：唯一转换点，依赖方向单向）** | 不做视觉判定、不抢焦点、**不调用 `ActionDispatcher`、不产生任何输入**、不执行任务动作（只编排） |
+| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`TaskRegistry` / `TaskTriggerRegistry`（任务清单与状态触发映射，Phase 7.5）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`TaskActionAdapter`（动作意图 → 任务侧 `ActionRequest`，Phase 7.4）、**流程状态机（`src/task/state_machine/`，Phase 8：`TaskFlowStateMachine` 纯决策 + `TaskStateDefinition` / `StateTransition` / `StateAction` / `TaskFlowPlan`，`handle_state` 为统一状态入口）**、**多任务调度（`src/task/scheduler/`，Phase 9：`TaskScheduler` 队列 / 优先级 / 抢占 / `ResourceLock` 资源互斥 + `TaskInstance`（一实例一引擎）+ `PriorityPolicy` / `SchedulerConfig`）**、**决策上下文（`src/task/context.py`，Phase 10：`DecisionContext` / `ActionRecord` / `ContextStats`；引擎只读上下文，动作结论经 `src/task/adapters/action_feedback.py` 写入）**、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**、不知道坐标（只给语义名）、不知道 Vision、不知道 Runtime |
 | **输入层** | `src/action` | 语义动作落地：`ActionRequest` / `ActionOutcome`（**无像素坐标**）、`ActionDispatcher`（门控 → 解析 → 坐标换算 → 后端）、`TargetResolver` 两种实现（`RegistryTargetResolver` 静态注册表 / `VisionAwareTargetResolver` 视觉快照 + TTL + 置信度）、`InputBackend`（默认 `DryRunBackend`；Win32 `SendInput` 后端）、`SafetyGuard`（5 道门）+ `EmergencyStop`（API + `logs/ESTOP`） | 不识别界面元素（模板 / OCR / YOLO）、不 import `vision` / `evidence` / `task` / `cv2`、**禁止 fallback click 与猜坐标**、不抢焦点、无全局热键、不主动读取视觉（只接受外部注入的 `VisionTargetCandidate` 快照） |
 
 **硬规则**：
@@ -197,6 +217,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | I-9 | 任务侧动作只用语义目标（禁止坐标）；`src/action` 仍不依赖 task | `tests/test_state_machine.py::test_action_model_rejects_coordinates`、`::test_engine_still_has_no_vision_imports` |
 | I-10 | `src/task/scheduler/**` 不依赖 vision / action / runtime（调度器只做编排，不做动作） | `tests/test_scheduler.py::test_scheduler_package_dependencies`、`::test_scheduler_has_no_vision_or_backend_types` |
 | I-11 | `TaskInstance` 不持有 backend / dispatcher（动作只能经引擎的 `ActionPort`） | `tests/test_scheduler.py::test_task_instance_does_not_hold_backend`、`::test_action_layer_untouched_by_scheduler` |
+| I-12 | 观察层是纯 Runtime memory：不含画面（禁止 Frame / Image / numpy / cv2 / bbox / 截图）且不依赖 task | `tests/test_observation.py::test_observation_layer_is_pure_runtime_memory`、`::test_observation_layer_has_no_visual_types`、`::test_observation_rejects_visual_payload` |
+| I-13 | 依赖方向单向 `Observation → ContextBridge → Task Context → Task`：Task 层不 import 观察层、Vision 层不 import Context / Observation、Context 不持有 Dispatcher / Backend | `tests/test_observation.py::test_task_layer_never_imports_observation_store`、`::test_vision_layer_does_not_import_context_or_observation`、`::test_context_has_no_dispatch_or_backend`、`::test_context_bridge_is_the_only_authorized_direction` |
 
 ---
 
@@ -230,7 +252,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 8 | 状态机驱动任务系统（`src/task/state_machine/` 包：`lifecycle` 迁入 + `TaskFlowStateMachine` 纯决策 / `TaskStateDefinition`（entry·actions·exit·timeout·allowed_next_states）/ `StateTransition`（条件 + 事件驱动）/ `StateAction`（语义目标，禁坐标）/ `TaskFlowPlan` + 严格校验；`TaskEngine.handle_state` 组合式接入；`StateMonitor → TaskRuntimeBridge → handle_state` 统一入口） | `PHASE8_STATE_MACHINE_REPORT.md` |
 
 | Phase 9 | 多任务调度与优先级编排（`src/task/scheduler/`：`TaskScheduler` 队列 / 优先级 / 抢占 / `ResourceLock` 资源互斥 / `TaskInstance`（一实例一 `TaskEngine`）/ `PriorityPolicy` / `configs/tasks/scheduler.yaml`；`TaskRuntimeBridge` 可委托调度器；`State → Scheduler → TaskInstance → StateMachine → Action`） | `PHASE9_TASK_SCHEDULER_REPORT.md` |
----
+
+| Phase 10 | 观察记忆与决策上下文层（`src/runtime/observation/`：`Observation`（只存状态描述，拒绝画面字段）/ `ObservationStore`（1000 条 FIFO）/ `ObservationQuery` / `StateChangeDetector`；`src/runtime/context_bridge.py` 唯一转换点；`src/task/context.py` `DecisionContext` + `src/task/adapters/action_feedback.py`；`TaskScheduler.context_provider`；`Observation → Context → Scheduler → Action`） | `PHASE10_OBSERVATION_MEMORY_REPORT.md` |---
 
 ## 8. 已知限制与后续
 
@@ -245,5 +268,5 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | `config.py` | 单文件承载全部配置模型（含 evidence / state / runtime 段），拆分方案见 Phase 4.7 报告 | Phase 5+（可选） |
 | 计算性能 | 单帧 ≈ 170 次 `matchTemplate`（10 detector）；未做性能优化与预算验证 | Phase 5（接线前先测） |
 | 样本量 | `victory_icon` / `reward_panel` 各 1 张正样本（靠状态可信度校准补偿） | 数据侧 |
-| Action / State Machine / Task | Action 层已实现（语义动作 + 视觉目标解析 + 5 道安全门，默认 dry-run）；**流程状态机已实现**（Phase 8）；**多任务调度 / 优先级 / 抢占 / 资源锁已实现**（Phase 9：`TaskScheduler` + `TaskInstance` + `ResourceLock`，`State → Scheduler → TaskInstance → StateMachine → Action`）；**看门狗 / 配额公平性 / 触发映射配置化未实现**（见 Phase 9 报告 §9） | Phase 10 |
+| Action / State Machine / Task | Action 层已实现（语义动作 + 视觉目标解析 + 5 道安全门，默认 dry-run）；**流程状态机已实现**（Phase 8）；**多任务调度已实现**（Phase 9）；**观察记忆与决策上下文已实现**（Phase 10：`ObservationStore` + `DecisionContext` + 桥 + 动作反馈，`Observation → Context → Scheduler → Action`）；**长期记忆 / 观察驱动谓词 / 看门狗 / 配额公平性未实现**（见 Phase 10 报告 §9） | Phase 11 |
 | `README` 与本文之外的历史章节 | 部分章节仍描述 Phase 3.x 的帧路径细节（已加注说明） | 文档迭代 |

@@ -48,6 +48,9 @@ __all__ = ["TaskBridgeStats", "TaskRuntimeBridge"]
 
 logger = get_logger("runtime.task_bridge")
 
+from src.runtime.context_bridge import ContextBridge  # noqa: E402 - Phase 10（观察 → 上下文）
+from src.task.context import ContextUpdateError  # noqa: E402 - Phase 10（上下文错误判定）
+
 #: 调度器实例状态 → 兼容运行记录状态（Phase 9；``TaskRunRecord`` 契约保持不变）
 _SCHEDULER_STATUS_MAP = {
     "queued": TaskRunStatus.IDLE,
@@ -185,6 +188,8 @@ class TaskRuntimeBridge:
         now: Callable[[], str] = _now_iso,
         allow_rerun_completed: bool = False,
         scheduler: Any = None,
+        context_bridge: ContextBridge | None = None,
+        observation_store: Any = None,
     ) -> None:
         if scheduler is not None:
             from src.task.scheduler import TaskScheduler
@@ -193,6 +198,11 @@ class TaskRuntimeBridge:
                 raise TypeError(
                     f"task_bridge.scheduler 需要 TaskScheduler（当前: {type(scheduler).__name__}）"
                 )
+        if context_bridge is not None and not isinstance(context_bridge, ContextBridge):
+            raise TypeError(
+                f"task_bridge.context_bridge 需要 ContextBridge"
+                f"（当前: {type(context_bridge).__name__}）"
+            )
         if not isinstance(task_engine, TaskEngine):
             raise TypeError(
                 f"task_bridge 需要 TaskEngine（当前: {type(task_engine).__name__}）"
@@ -204,9 +214,21 @@ class TaskRuntimeBridge:
         self._now = now
         self._allow_rerun_completed = bool(allow_rerun_completed)
         self._scheduler = scheduler
+        # Phase 10：观察记忆（ObservationStore 在 ContextBridge 内）+ 决策上下文
+        self._context_bridge = context_bridge
+        if self._context_bridge is None and observation_store is not None:
+            self._context_bridge = ContextBridge(store=observation_store)
+        self._cycle_id = 0
         self._records: dict[str, TaskRunRecord] = {}
         self._started_instances: set[str] = set()
         self._stats = TaskBridgeStats()
+        # 调度模式下自动接线：调度器每轮从桥取当前决策上下文（调度器不认识观察层）
+        if self._scheduler is not None and self._context_bridge is not None:
+            attach = getattr(self._scheduler, "set_context_provider", None)
+            if callable(attach):
+                attach(lambda: self._context_bridge.context)  # type: ignore[union-attr]
+        if self._context_bridge is not None:
+            self._engine.set_decision_context(self._context_bridge.context)
 
     # ---- 只读 ---------------------------------------------------------------
 
@@ -234,6 +256,31 @@ class TaskRuntimeBridge:
     def scheduler(self) -> Any:
         """多任务调度器（Phase 9；未注入时为 ``None``）。"""
         return self._scheduler
+
+    @property
+    def context_bridge(self) -> ContextBridge | None:
+        """观察 → 决策上下文桥（Phase 10；未接线时为 ``None``）。"""
+        return self._context_bridge
+
+    @property
+    def context(self) -> Any:
+        """当前决策上下文（Phase 10；未接线时为 ``None``）。"""
+        if self._context_bridge is None:
+            return None
+        return self._context_bridge.context
+
+    @property
+    def observations(self) -> Any:
+        """观察存储（短期记忆；未接线时为 ``None``）。"""
+        if self._context_bridge is None:
+            return None
+        return self._context_bridge.store
+
+    def history(self, limit: int | None = None) -> tuple[Any, ...]:
+        """最近若干条观察（未接线时为空元组）。"""
+        if self._context_bridge is None:
+            return ()
+        return self._context_bridge.history(limit)
 
     @property
     def records(self) -> dict[str, TaskRunRecord]:
@@ -272,6 +319,7 @@ class TaskRuntimeBridge:
         self._stats.events += 1
         state_name = _text(_read(state_result, "state_name", "state", default=""))
         self._stats.last_state = state_name
+        self._observe(state_result)
         if self._scheduler is not None:
             return self._tick_scheduler(state_result, state_name)
         try:
@@ -394,6 +442,50 @@ class TaskRuntimeBridge:
             self._engine.reset()
         except Exception as exc:  # noqa: BLE001
             logger.warning("引擎重置失败（已忽略）: %s", exc)
+
+    # ---- 观察与决策上下文（Phase 10） --------------------------------------
+
+    def _observe(self, state_result: Any) -> None:
+        """把本轮状态写入观察记忆与决策上下文（Phase 10）。
+
+        * 观察写入失败（非法元数据等）→ 只计数，**不影响 Runtime**；
+        * 上下文更新失败 → 把**当前活动任务**置为 ``FAILED``（用户要求），仍不抛异常。
+        """
+        if self._context_bridge is None:
+            return
+        self._cycle_id += 1
+        try:
+            self._context_bridge.observe(
+                state_result,
+                cycle_id=self._cycle_id,
+                source="runtime",
+                timestamp=_now_iso(),
+            )
+        except ContextUpdateError as exc:
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.error("决策上下文更新失败 → 任务置为失败: %s", exc)
+            self._fail_active(f"context update failed: {exc}")
+        except Exception as exc:  # noqa: BLE001 - 绝不影响 Runtime 主循环
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.warning("观察写入失败（已隔离）: %s", exc)
+
+    def _fail_active(self, reason: str) -> None:
+        """把当前活动任务置为失败（调度模式作用于运行中的实例）。"""
+        try:
+            if self._scheduler is None:
+                self._engine.fail(reason=reason)
+                return
+            for instance in list(self._scheduler.active_tasks):
+                engine = getattr(instance, "engine", None)
+                if engine is None:
+                    continue
+                engine.fail(reason=reason)
+        except Exception as exc:  # noqa: BLE001
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.warning("活动任务失败标记失败（已隔离）: %s", exc)
 
     # ---- 调度器模式（Phase 9） ---------------------------------------------
 

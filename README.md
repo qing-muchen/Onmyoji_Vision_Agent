@@ -1995,5 +1995,23 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   闭环升级为 `State → Scheduler → TaskInstance → StateMachine → Action`，
   测试 **1354 passed / 1 skipped**，仍**零真实输入**（dry-run）。
   看门狗 / 配额公平性 / 触发映射配置化仍留待后续（见 `docs/PHASE9_TASK_SCHEDULER_REPORT.md` §9）。
-- Phase 10：编排可靠性（看门狗 + 公平性 / 饥饿保护）、触发映射配置化、
-  状态机 `exit_actions` 与转移钩子、`DetectionResult` 接入快照桥、`drag` 语义落地。
+- Phase 10（**已完成：观察记忆与决策上下文层**）：新增 `src/runtime/observation/`
+  （**纯 Runtime memory**）—— `Observation`（`observation_id` / `timestamp` / `cycle_id` /
+  `source` / `state_name` / `confidence` / `metadata`；**只保存状态描述**，构造期拒绝
+  `frame` / `image` / `bbox` / `screenshot` / `pixels` / `numpy` 等画面与坐标字段，以及任何非标量）、
+  `ObservationStore`（`append` / `latest` / `history` / `query` / `clear`；默认容量 **1000**，
+  满则 **FIFO** 淘汰）、`ObservationQuery`（状态 / 节拍 / 来源 / 置信度筛选）、
+  `StateChangeDetector`（`ENTER` / `EXIT` / `CHANGE` / `STABLE`）；新增
+  `src/runtime/context_bridge.py`（**Observation → DecisionContext 的唯一转换点**）、
+  `src/task/context.py`（**纯数据模型** `DecisionContext` / `ActionRecord` / `ContextStats`）、
+  `src/task/adapters/action_feedback.py`（转换层 `ActionFeedbackAdapter`，为后续
+  `VisionFeedbackAdapter` / `SchedulerFeedbackAdapter` 预留）。引擎**只读** DecisionContext
+  （只写动作结果与失败说明，且**不接触** `ObservationStore`）；`TaskScheduler` 增加
+  `context_provider`（由 Runtime 侧注入，调度器**不认识**观察层）；`TaskRuntimeBridge` 接线
+  `context_bridge` / `observation_store`。闭环升级为
+  `Observation → Context → Scheduler → Action`，测试 **1392 passed / 1 skipped**，
+  仍**零真实输入**（dry-run）。长期记忆 / 观察驱动谓词 / 多任务各自上下文仍留待后续
+  （见 `docs/PHASE10_OBSERVATION_MEMORY_REPORT.md` §9）。
+- Phase 11：编排可靠性（看门狗 + 公平性 / 饥饿保护）、观察驱动的决策输入、
+  触发映射配置化、状态机 `exit_actions` 与转移钩子、`DetectionResult` 接入快照桥、
+  `drag` 语义落地、长期记忆（跨会话）设计。

@@ -31,6 +31,13 @@
 **本阶段不做**：不点击、不输入、不执行游戏任务、不接 Runtime（接线属 Phase 6.2）。
 """
 
+from src.task.adapters.action_feedback import ActionFeedbackAdapter
+from src.task.context import (
+    ActionRecord,
+    ContextStats,
+    ContextUpdateError,
+    DecisionContext,
+)
 from src.task.action_adapter import (
     FORBIDDEN_TARGET_KEYS,
     SEMANTIC_TARGET_KEYS,
@@ -224,4 +231,9 @@ __all__ = [
     "load_flow_plans",
     "states_from_mapping",
     "validate_flow_document",
+    "ActionFeedbackAdapter",
+    "ActionRecord",
+    "ContextStats",
+    "ContextUpdateError",
+    "DecisionContext",
 ]

@@ -42,6 +42,8 @@ from src.task.hooks import (
     build_predicate,
 )
 from src.task.action_adapter import TaskActionAdapter
+from src.task.adapters.action_feedback import ActionFeedbackAdapter
+from src.task.context import ContextUpdateError, DecisionContext
 from src.task.models import (
     TERMINAL_STATE_NAME,
     RuntimeSnapshot,
@@ -138,6 +140,7 @@ class TaskEngine:
         action_port: ActionPort | None = None,
         runtime: Any = None,
         estop: EStop | None = None,
+        decision_context: DecisionContext | None = None,
     ) -> None:
         self._clock = clock
         self._now = now
@@ -145,6 +148,10 @@ class TaskEngine:
         self._action_port: ActionPort = action_port if action_port is not None else NullActionPort()
         self._runtime_source = runtime
         self._estop = estop
+        # Phase 10：决策上下文（引擎**只读**该对象，并只写入动作结果与失败说明；
+        # 观察记忆 ObservationStore 属 Runtime 层，引擎永不接触）
+        self._decision_context: DecisionContext | None = decision_context
+        self._feedback = ActionFeedbackAdapter(decision_context)
 
         self._context: TaskContext | None = None
         self._result: TaskResult | None = None
@@ -217,6 +224,31 @@ class TaskEngine:
     def estop(self) -> EStop | None:
         """紧急停止开关（未注入时为 ``None``）。"""
         return self._estop
+
+    @property
+    def decision_context(self) -> DecisionContext | None:
+        """决策上下文（Phase 10；未注入时为 ``None``）。
+
+        引擎只读（当前 / 上一状态、最近动作、最近错误、任务变量），
+        并只写入"动作结果"与"失败说明"。
+        """
+        return self._decision_context
+
+    @property
+    def feedback_adapter(self) -> ActionFeedbackAdapter:
+        """动作反馈转换器（Phase 10）：``ActionOutcome`` → ``ActionRecord`` → 上下文。"""
+        return self._feedback
+
+    def set_decision_context(self, context: DecisionContext | None) -> None:
+        """注入 / 替换决策上下文（Phase 10；调度器与桥用它把上下文接入实例引擎）。
+
+        Args:
+            context: 决策上下文；``None`` 表示解除接线（引擎不再回写动作反馈）。
+        """
+        self._decision_context = context
+        self._feedback.bind(context)
+        if context is not None:
+            logger.debug("引擎已接入决策上下文: %s", context.describe())
 
     @property
     def flow_plan(self) -> TaskFlowPlan | None:
@@ -512,6 +544,24 @@ class TaskEngine:
         self._apply_runtime_gate(context)
         return context
 
+    def fail(self, *, reason: str = "failed") -> TaskContext | None:
+        """把当前任务直接标记为失败（Phase 10）。
+
+        供编排层在**任务外部**的严重后果上使用（例如决策上下文更新失败 ⇒ 任务 FAILED），
+        语义与内部失败路径一致（终态 ``FAILED`` + 结果快照 + 事件 + 上下文错误记录）。
+
+        Args:
+            reason: 失败原因。
+
+        Returns:
+            当前任务上下文；没有活动任务或已是终态时返回 ``None``。
+        """
+        context = self._context
+        if context is None or context.machine.is_terminal:
+            return None
+        self._fail(context, reason=reason)
+        return context
+
     def stop(self, *, reason: str = "stopped") -> TaskContext | None:
         """停止任务：任意活动状态 → ``FAILED``（终态，幂等）。
 
@@ -683,6 +733,15 @@ class TaskEngine:
             if action.kind != "wait":
                 context.note_action()
             outcome = self._action_port.request(request)
+            if not self._record_action_feedback(
+                context,
+                outcome,
+                kind=action.kind,
+                target=str((action.target or {}).get("element", "")),
+                step_id=machine.current_state_name or "",
+                attempt=1,
+            ):
+                return
             self._emit(
                 HookKind.ACTION_REQUESTED,
                 context,
@@ -939,6 +998,15 @@ class TaskEngine:
             context.note_dispatch(retry=self._attempts > 1)
             context.note_action()
             outcome = self._action_port.request(request)
+            if not self._record_action_feedback(
+                context,
+                outcome,
+                kind=str(kind),
+                target="",
+                step_id=step.step_id,
+                attempt=self._attempts,
+            ):
+                return
             self._emit(
                 HookKind.ACTION_REQUESTED,
                 context,
@@ -1050,11 +1118,63 @@ class TaskEngine:
         self._emit(HookKind.TASK_COMPLETED, context, reason=reason)
         logger.info("任务完成: %s", self._result.describe())
 
+    def _record_action_feedback(
+        self,
+        context: TaskContext,
+        outcome: Any,
+        *,
+        kind: str = "",
+        target: str = "",
+        step_id: str = "",
+        attempt: int = 1,
+    ) -> bool:
+        """把动作结果写入决策上下文（Phase 10）。
+
+        上下文写入失败 ⇒ 按用户要求把任务置为 ``FAILED``，并返回 ``False``
+        （调用方应立即停止本轮动作派发）。
+
+        Args:
+            context: 任务上下文。
+            outcome: ``ActionOutcome``（按字段视图读取，**不** import ``src.action``）。
+            kind / target / step_id / attempt: 记录补充字段。
+
+        Returns:
+            ``True`` = 已记录（或未注入上下文）；``False`` = 上下文更新失败。
+        """
+        if self._decision_context is None:
+            return True
+        try:
+            self._feedback.record(
+                outcome,
+                kind=kind,
+                target=target,
+                task_id=context.task.task_id,
+                step_id=step_id,
+                cycle_id=context.cycles,
+                timestamp=self._now(),
+                attempt=attempt,
+            )
+            return True
+        except ContextUpdateError as exc:
+            logger.error("决策上下文写入失败（任务置为失败）: %s", exc)
+            self._fail(context, reason=f"context update failed: {exc}")
+            return False
+
+    def _record_context_error(self, reason: str) -> None:
+        """把失败说明写入决策上下文（内部隔离，**绝不抛**：失败路径不得再失败）。"""
+        if self._decision_context is None:
+            return
+        try:
+            self._decision_context.record_error(reason)
+        except Exception as exc:  # noqa: BLE001 - 失败路径不得再抛异常
+            logger.warning("决策上下文错误记录失败（已忽略）: %s", exc)
+
     def _fail(self, context: TaskContext, *, reason: str) -> None:
         """标记任务失败（终态）。"""
         self._phase = StepPhase.DONE
         if not context.machine.is_terminal:
             context.machine.fail(reason=reason)
+        self._record_context_error(reason)
         self._result = self._build_result(context, reason=reason)
         self._emit(HookKind.TASK_FAILED, context, reason=reason)
         logger.warning("任务失败: %s", self._result.describe())

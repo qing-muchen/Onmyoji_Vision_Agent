@@ -728,6 +728,8 @@ def test_runtime_task_bridge_dependencies() -> None:
             top_level.add(node.module.split(".")[0])
 
     assert {module for module in project_imports if module.startswith("src.")} <= {
+        "src.runtime.context_bridge",  # Phase 10：观察 → 决策上下文（Runtime 侧单向桥）
+        "src.task.context",  # Phase 10：决策上下文数据模型
         "src.task.engine",
         "src.task.registry",
         "src.task.scheduler",  # Phase 9：编排桥把驱动权交给多任务调度器
@@ -745,12 +747,19 @@ def test_runtime_task_bridge_dependencies() -> None:
 
 
 def test_runtime_monitor_does_not_import_action_or_task() -> None:
-    """``src/runtime`` 内不得 import ``src.action``；``src.task`` 只允许出现在 ``task_bridge.py``。"""
+    """``src/runtime`` 内不得 import ``src.action``。
+
+    ``src.task`` 只允许出现在两个**授权的编排入口**：
+
+    * ``task_bridge.py``（Phase 7.5/9：Runtime ↔ Task 编排）；
+    * ``context_bridge.py``（Phase 10：观察 → 决策上下文的单向桥）。
+    """
+    allowed = {"task_bridge.py", "context_bridge.py"}
     violations = [
         f"{path.name}: {module}"
         for path, module in _iter_imports("runtime")
         if module.startswith("src.action")
-        or (module.startswith("src.task") and path.name != "task_bridge.py")
+        or (module.startswith("src.task") and path.name not in allowed)
     ]
 
     assert violations == [], f"Runtime 出现越界依赖: {violations}"

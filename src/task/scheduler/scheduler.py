@@ -31,6 +31,7 @@ from datetime import datetime
 from time import monotonic
 from typing import Any
 
+from src.task.context import DecisionContext
 from src.task.engine import TaskEngine
 from src.task.models import TaskDefinitionError
 from src.task.registry import TaskRegistry
@@ -93,6 +94,7 @@ class TaskScheduler:
         default_resources: Sequence[str] = (DEFAULT_RESOURCE,),
         history_limit: int = 0,
         allow_rerun_completed: bool = False,
+        context_provider: Callable[[], DecisionContext | None] | None = None,
     ) -> None:
         if int(max_concurrent) < 1:
             raise TaskDefinitionError(f"max_concurrent 必须 >= 1（当前 {max_concurrent}）")
@@ -114,6 +116,10 @@ class TaskScheduler:
         ) or (DEFAULT_RESOURCE,)
         self._history_limit = int(history_limit)
         self._allow_rerun_completed = bool(allow_rerun_completed)
+        # Phase 10：决策上下文提供者（Runtime 侧注入；调度器**不认识** ObservationStore）
+        if context_provider is not None and not callable(context_provider):
+            raise TaskDefinitionError("context_provider 必须是可调用对象")
+        self._context_provider = context_provider
         self._instances: dict[str, TaskInstance] = {}
         self._history: list[TaskInstance] = []
         self._sequence = 0
@@ -135,6 +141,28 @@ class TaskScheduler:
     def locks(self) -> ResourceLock:
         """资源锁表。"""
         return self._locks
+
+    @property
+    def context_provider(self) -> Callable[[], DecisionContext | None] | None:
+        """决策上下文提供者（Phase 10；未注入时为 ``None``）。"""
+        return self._context_provider
+
+    def set_context_provider(
+        self, provider: Callable[[], DecisionContext | None] | None
+    ) -> None:
+        """注入 / 替换决策上下文提供者（Phase 10）。
+
+        提供者由 **Runtime 侧**（``TaskRuntimeBridge`` / ``ContextBridge``）注入，
+        每轮 ``tick`` 调用一次；调度器把返回的上下文绑定到各实例引擎。
+        调度器自身**不 import** 观察层，从而保持 ``Task 禁止 ObservationStore`` 边界。
+
+        Args:
+            provider: 无参可调用对象（返回 ``DecisionContext`` 或 ``None``）。
+        """
+        if provider is not None and not callable(provider):
+            raise TaskDefinitionError("context_provider 必须是可调用对象")
+        self._context_provider = provider
+        logger.debug("调度器已接入决策上下文提供者: %s", provider is not None)
 
     @property
     def stats(self) -> SchedulerStats:
@@ -360,6 +388,7 @@ class TaskScheduler:
         self._stats.ticks += 1
         tick = SchedulerTick()
         try:
+            self._attach_context()
             self._reap(tick)
             self._schedule(tick)
             self._feed(state_result, tick)
@@ -453,6 +482,30 @@ class TaskScheduler:
         if not same_task:
             return None
         return max(same_task, key=lambda item: item.ordinal)
+
+    def _current_context(self) -> DecisionContext | None:
+        """取当前决策上下文（提供者异常时返回 ``None``，不影响调度）。"""
+        if self._context_provider is None:
+            return None
+        try:
+            return self._context_provider()
+        except Exception as exc:  # noqa: BLE001 - 提供者异常不影响调度
+            self._record_error("决策上下文获取失败（已隔离）", exc)
+            return None
+
+    def _attach_context(self) -> None:
+        """把当前决策上下文绑定到全部活跃实例的引擎（Phase 10）。"""
+        if self._context_provider is None:
+            return
+        context = self._current_context()
+        for instance in list(self._instances.values()):
+            engine = instance.engine
+            if engine is None:
+                continue
+            try:
+                engine.set_decision_context(context)
+            except Exception as exc:  # noqa: BLE001 - 单实例异常不影响其它任务
+                self._record_error(f"上下文接入失败: {instance.instance_id}", exc)
 
     def _has_capacity(self) -> bool:
         """是否还有并发槽位。"""
@@ -555,6 +608,7 @@ class TaskScheduler:
             )
             return False
         instance.engine.reset()
+        instance.engine.set_decision_context(self._current_context())
         instance.engine.start(definition)
         instance.mark_running(at=self._now(), reason=reason)
         self._stats.started += 1
