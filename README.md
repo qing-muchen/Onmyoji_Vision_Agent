@@ -2024,6 +2024,22 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **失败隔离**（实例上下文失败只终结该实例，共享视图失败不再牵连任何实例）。
   测试 **1421 passed / 1 skipped**；仍**零真实输入**。详见
   `docs/PHASE10_1_CONTEXT_HARDENING_REPORT.md`。
-- Phase 11：编排可靠性（看门狗 + 公平性 / 饥饿保护）、观察驱动的决策输入、
-  触发映射配置化、状态机 `exit_actions` 与转移钩子、`DetectionResult` 接入快照桥、
-  `drag` 语义落地、长期记忆（跨会话）设计。
+- Phase 11.0（**已完成：视觉目标可靠性与安全基线**）：**明确区分 State Evidence 与
+  Actionable Target** —— `VisionTargetAdapter` 新增显式登记表
+  （`ACTIONABLE_EVIDENCE` / `ELEMENT_LEVEL_EVIDENCE`，默认 `actionable_only=True`）：
+  只有登记为可执行目标、且 bbox 已人工核对为**元素框**的证据才产生可执行候选，
+  搜索 ROI / 状态证据不再冒充可点击目标；`resolver` 的 `calibrated` 改为依据
+  `metadata["element_level"]`（真实后端下未标定目标会被安全门拒绝）。
+  **快照安全失效**：`VisionSnapshotBridge.invalidate(reason)` + `update(frame=None)` 立即失效
+  （发布空快照 ⇒ Action 侧得到 `target_not_found`，而不是等 TTL 的 `target_expired`）；
+  失效原因可区分（`no_frame` / `window_unavailable`）。**修复潜伏缺陷**：
+  空快照路径的 `now=None` 会抛异常（Phase 7.3 起潜伏）。
+  **数据集审查**：`raw/` **178** 张独立原图，`features/` 1602 是 ×9 同源 ROI 派生，
+  `states/` 697 同样是派生 —— 独立样本数是 178 而非 1602；分辨率只有
+  1704–1706×957–963 单一家族；**无元素级 bbox 真值** ⇒ 报告不给定位精度结论
+  （统一标记 `insufficient_data`）。测试 **1442 passed / 1 skipped**（+21），
+  仍**零真实输入**、`backend=dry_run`、`action.enabled=false`。详见
+  `docs/PHASE11_0_VISUAL_TARGET_RELIABILITY_REPORT.md`（含数据补采清单）。
+- Phase 11.1：按补采清单扩充数据（元素级 bbox 真值 / 跨分辨率 / 会话分组）、
+  在数据允许后建立可验证的定位基准；编排可靠性（看门狗 + 公平性）、观察驱动的决策输入、
+  触发映射配置化、`exit_actions` 与转移钩子、`drag` 语义、长期记忆。

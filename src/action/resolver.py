@@ -173,6 +173,25 @@ class ResolverWithReason(Protocol):
         ...
 
 
+def _is_element_level(candidate: Any) -> bool:
+    """候选是否为**元素级定位**（Phase 11.0）。
+
+    只有来自已登记证据（``element_level=True``）的候选才允许被标记为"已标定"——
+    真实输入后端下，未标定目标会被 :class:`~src.action.safety.guard.SafetyGuard` 拒绝
+    （见 ``require_calibrated_target``），从而避免把"搜索 ROI 内的命中点"当成按钮中心点下去。
+
+    Args:
+        candidate: :class:`~src.core.vision_target.VisionTargetCandidate` 或字段视图。
+
+    Returns:
+        ``True`` 表示该候选具有元素级定位依据。
+    """
+    metadata = getattr(candidate, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("element_level") is True:
+        return True
+    return False
+
+
 def _explicit_ratio_resolution(
     target: SemanticTarget, *, trusted: bool
 ) -> TargetResolution:
@@ -310,7 +329,10 @@ class VisionAwareTargetResolver:
         minimum_confidence: 最低置信度。
         clock: 单调时钟函数（TTL 判定；测试可注入）。
         aliases: 语义名 → 视觉候选名的别名映射（大小写不敏感）。
-        trust_vision_targets: 视觉解析结果是否视为"已标定"（默认 ``True``：
+        trust_vision_targets: 视觉解析结果是否视为"已标定"（默认 ``True``，但**仍要求**
+            候选满足 :func:`_is_element_level`：即该候选已被**登记为元素级定位**
+            （``metadata['element_level'] is True``，由 Phase 11.0 的
+            ``ELEMENT_LEVEL_EVIDENCE`` 白名单标注）。这条链路的语义是：
             当帧实测 + 通过 TTL/置信度门；置 ``False`` 时真实后端会拒绝）。
         trust_explicit_ratio: 调用方直接给出的比例是否视为可信（默认 ``False``，同注册表实现）。
         snapshot: 初始快照（可选）。
@@ -546,7 +568,7 @@ class VisionAwareTargetResolver:
                 y_ratio=float(candidate.y_ratio),
                 confidence=float(candidate.confidence),
                 source=VISION_TARGET_SOURCE,
-                calibrated=self._trust_vision_targets,
+                calibrated=self._trust_vision_targets and _is_element_level(candidate),
             )
         except (ActionTargetError, ValueError) as exc:  # pragma: no cover - 防御性
             return TargetResolution.reject(

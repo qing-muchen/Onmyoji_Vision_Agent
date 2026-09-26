@@ -42,9 +42,31 @@ from src.core.vision_target import TargetSnapshot
 from src.utils.logger import get_logger
 from src.vision.pipeline.target_adapter import VisionTargetAdapter
 
-__all__ = ["VisionBridgeStats", "VisionSnapshotBridge"]
+__all__ = [
+    "INVALIDATION_NO_FRAME",
+    "INVALIDATION_REASONS",
+    "INVALIDATION_WINDOW_UNAVAILABLE",
+    "VisionBridgeStats",
+    "VisionSnapshotBridge",
+]
 
 logger = get_logger("runtime.vision_bridge")
+
+
+def _local_now_iso() -> str:
+    """本地 ISO 8601 时间戳（Phase 11.0：桥的默认时间戳来源）。"""
+    from datetime import datetime
+
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+#: 失效原因（Phase 11.0）：明确区分"没有新帧"与"窗口当前不可操作"，
+#: 不把不同情况统一伪装成 ``target_not_found``（后者是 Action 侧对"目标不在快照中"的结论）。
+INVALIDATION_NO_FRAME: str = "no_frame"
+INVALIDATION_WINDOW_UNAVAILABLE: str = "window_unavailable"
+INVALIDATION_REASONS: tuple[str, ...] = (
+    INVALIDATION_NO_FRAME,
+    INVALIDATION_WINDOW_UNAVAILABLE,
+)
 
 
 @dataclass(slots=True)
@@ -61,6 +83,8 @@ class VisionBridgeStats:
     push_errors: int = 0
     #: capture 失败轮数（本轮不更新快照）
     no_frame: int = 0
+    #: 主动失效次数（capture 失败 / 窗口不可操作；Phase 11.0）
+    invalidated: int = 0
     #: adapter 异常次数（已隔离，推送空快照）
     adapter_errors: int = 0
     #: 空快照次数（视觉无结果或 adapter 异常）
@@ -82,6 +106,7 @@ class VisionBridgeStats:
             "rejected_stale": self.rejected_stale,
             "push_errors": self.push_errors,
             "no_frame": self.no_frame,
+            "invalidated": self.invalidated,
             "adapter_errors": self.adapter_errors,
             "empty_snapshots": self.empty_snapshots,
             "candidates": self.candidates,
@@ -96,7 +121,8 @@ class VisionBridgeStats:
         return (
             f"VisionBridgeStats(updates={self.updates}, published={self.published}, "
             f"stale={self.rejected_stale}, push_errors={self.push_errors}, "
-            f"no_frame={self.no_frame}, adapter_errors={self.adapter_errors}, "
+            f"no_frame={self.no_frame}, invalidated={self.invalidated}, "
+            f"adapter_errors={self.adapter_errors}, "
             f"empty={self.empty_snapshots}, candidates={self.candidates})"
         )
 
@@ -107,6 +133,7 @@ class VisionBridgeStats:
         self.rejected_stale = 0
         self.push_errors = 0
         self.no_frame = 0
+        self.invalidated = 0
         self.adapter_errors = 0
         self.empty_snapshots = 0
         self.candidates = 0
@@ -146,7 +173,10 @@ class VisionSnapshotBridge:
         self._resolver = resolver
         self._adapter = adapter if adapter is not None else VisionTargetAdapter()
         self._clock = clock
-        self._now = now
+        # Phase 11.0：``now`` 省略时必须回落到默认时间戳函数——
+        # 空快照（视觉无结果 / 适配失败 / **主动失效**）同样需要合法时间戳，
+        # 否则 TargetSnapshot.create(..., now=None) 会在这些路径上抛异常。
+        self._now = now if callable(now) else _local_now_iso
         self._stats = VisionBridgeStats()
 
     # ---- 只读 ---------------------------------------------------------------
@@ -185,7 +215,8 @@ class VisionSnapshotBridge:
         """处理一轮：转换证据 → 构造快照 → 单向 push。
 
         Args:
-            frame: 本轮的帧（``None`` 表示 capture 失败 → 本轮不更新快照）。
+            frame: 本轮的帧（``None`` 表示 capture 失败 → 本轮**主动失效**快照，
+                见 Phase 11.0："没有新帧"与"新帧里没有目标"是两种不同的失效原因）。
             evidences: 本轮的证据结果（``[]`` / ``None`` 视为"视觉无结果" → 推送空快照）。
             frame_id: 帧号（**必须来自 Runtime 轮次**，不在此生成；见
                 :attr:`~src.runtime.state_monitor.monitor.StateMonitor.cycles`）。
@@ -194,18 +225,25 @@ class VisionSnapshotBridge:
             frame_size: 覆盖帧尺寸（默认从 ``frame`` 读取；读不到则按缺料跳过所有候选）。
 
         Returns:
-            resolver 中当前生效的快照；capture 失败时为 ``None``（未推送）。
+            resolver 中当前生效的快照。capture 失败时返回**失效快照**（空候选，
+            ``reason="no_frame"``）——旧目标立即不可用，不再依赖 TTL 兜底；
+            若连失效快照都被 resolver 拒收（乱序），返回当前生效快照。
         """
         self._stats.updates += 1
         self._stats.last_frame_id = frame_id
         self._stats.last_cycle_id = cycle_id
 
-        # 情况 1：capture 失败 → 本轮不更新（旧快照自然超时，Action 侧给 target_expired）
+        # 情况 1：capture 失败 → **主动失效**（Phase 11.0）
+        # 语义：没有新帧 ⇒ 上一帧的目标位置**不再可信**（窗口可能移动 / 遮挡 / 失去焦点），
+        # 因此立即发布空快照，而不是等 TTL 到期；Action 侧因此得到明确的 target_not_found，
+        # 而不是"目标仍然存在"的过期结论。
         if frame is None:
             self._stats.no_frame += 1
-            self._stats.last_reason = "no_frame"
-            logger.debug("本轮无可用帧（cycle=%s），不更新视觉快照", cycle_id)
-            return None
+            logger.debug("本轮无可用帧（cycle=%s）→ 失效视觉快照", cycle_id)
+            # 计数统一在 invalidate() 内完成（避免双计）
+            return self.invalidate(
+                reason=INVALIDATION_NO_FRAME, frame_id=frame_id, cycle_id=cycle_id
+            )
 
         self._stats.last_reason = "processed"
         active_frame_size = (
@@ -247,6 +285,51 @@ class VisionSnapshotBridge:
             self._stats.push_errors += 1
         else:
             self._stats.rejected_stale += 1
+        return accepted
+
+    # ---- 失效（Phase 11.0） -------------------------------------------------
+
+    def invalidate(
+        self,
+        *,
+        reason: str = INVALIDATION_NO_FRAME,
+        frame_id: int | None = None,
+        cycle_id: int | None = None,
+    ) -> TargetSnapshot | None:
+        """**主动失效**视觉快照（Phase 11.0）：发布空快照并记录失效原因。
+
+        与"新帧里没有目标"的区别（两者都产生空快照，但原因不同、可追踪）：
+
+        | 情况 | 触发 | ``last_reason`` |
+        | --- | --- | --- |
+        | 没有新帧（capture 失败） | :meth:`update` ``frame=None`` | ``no_frame`` |
+        | 窗口当前不可操作（失焦 / 最小化 / 暂停） | Runtime 调用本方法 | ``window_unavailable`` |
+        | 快照过期 | resolver 侧 TTL 判定 | ``target_expired``（Action 侧） |
+        | 快照乱序 | resolver 拒收更旧 ``frame_id`` | ``rejected_stale``（本桥统计） |
+
+        Args:
+            reason: 失效原因（默认 :data:`INVALIDATION_NO_FRAME`）。
+            frame_id: 帧号（通常传当前轮次，保证乱序保护仍然生效）。
+            cycle_id: 节拍轮号（审计）。
+
+        Returns:
+            resolver 中当前生效的快照；推送失败（乱序 / 异常）时为当前生效值。
+        """
+        self._stats.invalidated += 1
+        self._stats.last_reason = str(reason)
+        self._stats.last_frame_id = frame_id if frame_id is not None else self._stats.last_frame_id
+        self._stats.last_cycle_id = cycle_id if cycle_id is not None else self._stats.last_cycle_id
+        snapshot = self._empty_snapshot(frame_id=frame_id)
+        self._stats.empty_snapshots += 1
+        self._stats.last_candidates = 0
+        accepted = self._push(snapshot)
+        if accepted is snapshot:
+            self._stats.published += 1
+        elif accepted is None:
+            self._stats.push_errors += 1
+        else:
+            self._stats.rejected_stale += 1
+        logger.debug("视觉快照已失效（reason=%s, frame_id=%s）", reason, frame_id)
         return accepted
 
     # ---- 内部 ---------------------------------------------------------------

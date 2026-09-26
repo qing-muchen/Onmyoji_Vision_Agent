@@ -154,14 +154,21 @@ def make_candidate(
     y_ratio: float = 0.91,
     confidence: float = 0.96,
     source: str = "evidence",
+    metadata: dict | None = None,
 ) -> VisionTargetCandidate:
-    """构造一个视觉候选。"""
+    """构造一个视觉候选。
+
+    Phase 11.0：``metadata={'element_level': True}`` 表示该候选具有**元素级定位**依据
+    （由 ``VisionTargetAdapter`` 的 ``ELEMENT_LEVEL_EVIDENCE`` 白名单标注），
+    只有这类候选才会被解析为 ``calibrated=True``。
+    """
     return VisionTargetCandidate(
         target_name=name,
         x_ratio=x_ratio,
         y_ratio=y_ratio,
         confidence=confidence,
         source=source,
+        metadata=dict(metadata or {}),
     )
 
 
@@ -220,9 +227,11 @@ def click_request(name: str = "battle_auto_button") -> ActionRequest:
 
 
 def test_vision_candidate_resolves_to_resolved_target() -> None:
-    """候选注入后，语义名可解析为 ResolvedTarget（source=vision）。"""
+    """候选注入后，语义名可解析为 ResolvedTarget（source=vision，元素级 → calibrated）。"""
     resolver, _ = make_vision_resolver()
-    resolver.update_candidates([make_candidate()])
+    # Phase 11.0：calibrated 只对**元素级定位**候选为真（由 VisionTargetAdapter 的
+    # ELEMENT_LEVEL_EVIDENCE 白名单标注）；此处显式标注，模拟适配器产出的元素级候选。
+    resolver.update_candidates([make_candidate(metadata={"element_level": True})])
 
     resolution = resolver.resolve_detail(SemanticTarget.from_name("battle_auto_button"))
 

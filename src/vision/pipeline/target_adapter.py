@@ -40,7 +40,9 @@ from src.vision.detector.result import DetectionResult
 from src.vision.evidence.models import EvidenceResult
 
 __all__ = [
+    "ACTIONABLE_EVIDENCE",
     "DEFAULT_DETECTOR_SOURCE",
+    "ELEMENT_LEVEL_EVIDENCE",
     "ConfidenceMode",
     "DetectionAdapterStats",
     "EvidenceAdapterStats",
@@ -50,6 +52,32 @@ logger = get_logger("vision.pipeline.target_adapter")
 
 #: ``DetectionResult`` 转换后的默认来源标记
 DEFAULT_DETECTOR_SOURCE: str = "detector"
+
+#: **可执行目标**登记表（Phase 11.0）；未登记的**证据**不会被转换为可执行候选。
+#
+# 语义边界（本阶段核心里程碑）：
+#
+#   * **State Evidence**：证明"当前处于什么界面"（例如 ``bottom_menu_yard`` 证明存在庭院底部
+#     功能栏）。它的 ``bbox`` 是"ROI 内命中框"，**不保证**定位到某个具体可点击控件；
+#   * **Actionable Target**：证明"某语义目标在当前帧具有可执行位置"，其 ``bbox`` 必须已被
+#     人工核对为**元素级定位框**（不是搜索 ROI、不是区域）。
+#
+# 因此两者**默认不等价**：只有登记在这里的证据才能产生可执行候选。
+ACTIONABLE_EVIDENCE: frozenset[str] = frozenset(
+    {
+        "battle_auto_button",  # 战斗左下角「自动/手动」按钮（ROI + OCR 文字锚点 + 模板）
+    }
+)
+
+#: **元素级定位**登记表（Phase 11.0）：``bbox`` 已人工核对为"元素框"而非"搜索区域"。
+#:
+#: 只有同时出现在 :data:`ACTIONABLE_EVIDENCE` 与本集合里的证据，才把候选标记为
+#: ``element_level=True``，从而在 Action 侧获得 ``calibrated=True``（真实后端下才允许点击）。
+ELEMENT_LEVEL_EVIDENCE: frozenset[str] = frozenset(
+    {
+        "battle_auto_button",  # OCR 文字框 + 模板框，已核对落在按钮内
+    }
+)
 
 
 class ConfidenceMode(StrEnum):
@@ -67,6 +95,7 @@ class EvidenceAdapterStats:
 
     processed: int = 0
     converted: int = 0
+    skipped_not_actionable: int = 0
     skipped_undetected: int = 0
     skipped_missing_bbox: int = 0
     skipped_missing_frame_size: int = 0
@@ -77,6 +106,7 @@ class EvidenceAdapterStats:
         """归零（每次批量转换前调用）。"""
         self.processed = 0
         self.converted = 0
+        self.skipped_not_actionable = 0
         self.skipped_undetected = 0
         self.skipped_missing_bbox = 0
         self.skipped_missing_frame_size = 0
@@ -87,7 +117,8 @@ class EvidenceAdapterStats:
     def skipped(self) -> int:
         """跳过总数。"""
         return (
-            self.skipped_undetected
+            self.skipped_not_actionable
+            + self.skipped_undetected
             + self.skipped_missing_bbox
             + self.skipped_missing_frame_size
             + self.skipped_low_confidence
@@ -100,6 +131,7 @@ class EvidenceAdapterStats:
             "processed": self.processed,
             "converted": self.converted,
             "skipped": self.skipped,
+            "skipped_not_actionable": self.skipped_not_actionable,
             "skipped_undetected": self.skipped_undetected,
             "skipped_missing_bbox": self.skipped_missing_bbox,
             "skipped_missing_frame_size": self.skipped_missing_frame_size,
@@ -169,6 +201,9 @@ class VisionTargetAdapter:
             **注意**：过滤只是"本适配器不上报"，真正的"能不能动作"由 Action 侧的
             ``action.vision_target_min_confidence`` 判定（单一策略点）。
         confidence_mode: 置信度映射方式（``raw`` / ``weighted``）。
+        actionable_only: 是否**只**转换登记在 :data:`ACTIONABLE_EVIDENCE` 里的证据
+            （默认 ``True``：状态证据不会被当作可执行目标；``False`` 仅供明确的诊断 /
+            离线统计场景使用）。
         skip_invalid: 是否在转换阶段丢弃"比例越界"的候选（默认 ``False`` = 如实上报，
             让 Action 侧给出 ``invalid_target`` 拒绝原因）。
         source_override: 强制统一来源标记（``None`` = 忠实传递来源自身的标记）。
@@ -181,11 +216,13 @@ class VisionTargetAdapter:
         *,
         min_confidence: float = 0.0,
         confidence_mode: ConfidenceMode | str = ConfidenceMode.RAW,
+        actionable_only: bool = True,
         skip_invalid: bool = False,
         source_override: str | None = None,
         name_map: Mapping[str, str] | None = None,
         include_undetected: bool = False,
     ) -> None:
+        self._actionable_only = bool(actionable_only)
         self._min_confidence = float(min_confidence)
         self._confidence_mode = ConfidenceMode(confidence_mode)
         self._skip_invalid = bool(skip_invalid)
@@ -270,6 +307,12 @@ class VisionTargetAdapter:
         Returns:
             候选；不满足条件时返回 ``None``（并计入统计）。
         """
+        name = str(evidence.name)
+        if self._actionable_only and name not in ACTIONABLE_EVIDENCE:
+            # Phase 11.0：**状态证据 ≠ 可执行目标** —— 未登记的证据不产生可执行候选
+            logger.debug("跳过未登记为可执行目标的证据: %s", name)
+            self._evidence_stats.skipped_not_actionable += 1
+            return None
         if not self._include_undetected and not evidence.detected:
             logger.debug("跳过未检出证据: %s", evidence.name)
             self._evidence_stats.skipped_undetected += 1
@@ -304,7 +347,11 @@ class VisionTargetAdapter:
             source=self._map_source(source or _text(evidence.source), evidence=evidence),
             timestamp=float(timestamp) if timestamp is not None else 0.0,
             frame_id=frame_id,
-            metadata=self._evidence_metadata(evidence),
+            metadata={
+                **self._evidence_metadata(evidence),
+                "actionable": True,
+                "element_level": name in ELEMENT_LEVEL_EVIDENCE,
+            },
         )
         if self._skip_invalid and not candidate.is_valid:
             logger.warning("跳过越界候选（skip_invalid=True）: %s", candidate.describe())
@@ -546,6 +593,7 @@ class VisionTargetAdapter:
         """返回可读描述。"""
         return (
             f"VisionTargetAdapter(min_confidence={self._min_confidence}, "
+            f"actionable_only={self._actionable_only}, "
             f"mode={self._confidence_mode.value}, skip_invalid={self._skip_invalid}, "
             f"source_override={self._source_override or 'none'}, "
             f"names={len(self._name_map)})"

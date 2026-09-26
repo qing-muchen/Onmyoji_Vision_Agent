@@ -140,7 +140,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | 视觉判定 | `src/vision/{detector,scene,ocr}` | 元素定位 / 整图场景识别 / 文字识别（可独立使用的视觉能力） | 不产出状态 |
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释证据**（可靠度、分组、解释信息、状态可信度校准） | 不产出状态、不做时间滤波、不读文件 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
-| **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`）+ 视觉目标转换（`VisionTargetAdapter`：证据 / 检测 → `VisionTargetCandidate` / `TargetSnapshot`，Phase 7.2） | 不做循环 / 采集 / 时间滤波 / 点击；**不 import** `src.action` / `src.task` / `src.runtime`，不调用 `ActionDispatcher`、不产生输入 |
+| **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`）+ 视觉目标转换（`VisionTargetAdapter`：证据 / 检测 → `VisionTargetCandidate` / `TargetSnapshot`，Phase 7.2；**Phase 11.0：只有显式登记为可执行目标（`ACTIONABLE_EVIDENCE`）且为元素级定位（`ELEMENT_LEVEL_EVIDENCE`）的证据才产生可执行候选，状态证据 / 搜索 ROI 不冒充可点击目标**） | 不做循环 / 采集 / 时间滤波 / 点击；**不 import** `src.action` / `src.task` / `src.runtime`，不调用 `ActionDispatcher`、不产生输入 |
 | **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`）、**视觉快照桥（`VisionSnapshotBridge`，Phase 7.3）**、**任务编排桥（`TaskRuntimeBridge`，Phase 7.5：稳定状态 + 节拍 → 触发/驱动 `TaskEngine`；Phase 9：注入 `scheduler` 后改为委托 `TaskScheduler.tick` / `on_cycle`）**、**观察记忆（`src/runtime/observation/`，Phase 10：`ObservationStore` / `Observation` / `StateChangeDetector`；纯 Runtime memory，不依赖 task）+ 观察→上下文桥（`src/runtime/context_bridge.py`，Phase 10：唯一转换点，依赖方向单向）** | 不做视觉判定、不抢焦点、**不调用 `ActionDispatcher`、不产生任何输入**、不执行任务动作（只编排） |
 | **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`TaskRegistry` / `TaskTriggerRegistry`（任务清单与状态触发映射，Phase 7.5）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`TaskActionAdapter`（动作意图 → 任务侧 `ActionRequest`，Phase 7.4）、**流程状态机（`src/task/state_machine/`，Phase 8：`TaskFlowStateMachine` 纯决策 + `TaskStateDefinition` / `StateTransition` / `StateAction` / `TaskFlowPlan`，`handle_state` 为统一状态入口）**、**多任务调度（`src/task/scheduler/`，Phase 9：`TaskScheduler` 队列 / 优先级 / 抢占 / `ResourceLock` 资源互斥 + `TaskInstance`（一实例一引擎）+ `PriorityPolicy` / `SchedulerConfig`）**、**决策上下文（`src/task/context.py`，Phase 10：`DecisionContext` / `ActionRecord` / `ContextStats`；引擎只读上下文，动作结论经 `src/task/adapters/action_feedback.py` 写入）**；Phase 10.1：**每实例一份**（默认隔离，`context_factory` 可定制），`ActionRecord` 带 `instance_id` / `action_id` / `dry_run`、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**、不知道坐标（只给语义名）、不知道 Vision、不知道 Runtime |
 | **输入层** | `src/action` | 语义动作落地：`ActionRequest` / `ActionOutcome`（**无像素坐标**）、`ActionDispatcher`（门控 → 解析 → 坐标换算 → 后端）、`TargetResolver` 两种实现（`RegistryTargetResolver` 静态注册表 / `VisionAwareTargetResolver` 视觉快照 + TTL + 置信度）、`InputBackend`（默认 `DryRunBackend`；Win32 `SendInput` 后端）、`SafetyGuard`（5 道门）+ `EmergencyStop`（API + `logs/ESTOP`） | 不识别界面元素（模板 / OCR / YOLO）、不 import `vision` / `evidence` / `task` / `cv2`、**禁止 fallback click 与猜坐标**、不抢焦点、无全局热键、不主动读取视觉（只接受外部注入的 `VisionTargetCandidate` 快照） |
@@ -226,6 +226,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | I-13 | 依赖方向单向 `Observation → ContextBridge → Task Context → Task`：Task 层不 import 观察层、Vision 层不 import Context / Observation、Context 不持有 Dispatcher / Backend | `tests/test_observation.py::test_task_layer_never_imports_observation_store`、`::test_vision_layer_does_not_import_context_or_observation`、`::test_context_has_no_dispatch_or_backend`、`::test_context_bridge_is_the_only_authorized_direction` |
 | I-14 | 每个 `TaskInstance` 拥有**独立** `DecisionContext`（动作反馈 / 失败原因 / 任务变量不跨实例污染）；`ok` 只表示请求被接受，dry-run 恒 `confirmed=False` | `tests/test_phase101_context_hardening.py::test_two_instances_have_isolated_decision_contexts`、`::test_dry_run_skipped_is_not_real_input` |
 | I-15 | 一个有效视觉判定帧最多一条观察：跳过轮 / capture 失败 / 未确认帧不产生观察；重复与乱序观察被去重 / 拒绝 | `::test_invalid_state_results_do_not_produce_observations`、`::test_same_observation_is_deduplicated`、`::test_out_of_order_observation_is_rejected` |
+| I-16 | 状态证据 ≠ 可执行目标：只有登记在 `ACTIONABLE_EVIDENCE`（且元素级登记）的证据才产生可执行候选；未确认候选的 `calibrated=False`（真实后端下被安全门拒绝） | `tests/test_phase110_visual_reliability.py::test_search_roi_evidence_never_becomes_clickable_target`、`::test_candidate_without_element_level_is_not_calibrated` |
+| I-17 | 快照失效必须显式：没有新帧 / 窗口不可操作 ⇒ 立即发布空快照（`target_not_found`），TTL 只作兜底；失效原因可区分（`no_frame` / `window_unavailable`） | `::test_capture_failure_invalidates_snapshot_immediately`、`::test_window_unavailable_invalidation_reason` |
 
 ---
 
@@ -263,7 +265,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 10 | 观察记忆与决策上下文层（`src/runtime/observation/`：`Observation`（只存状态描述，拒绝画面字段）/ `ObservationStore`（1000 条 FIFO）/ `ObservationQuery` / `StateChangeDetector`；`src/runtime/context_bridge.py` 唯一转换点；`src/task/context.py` `DecisionContext` + `src/task/adapters/action_feedback.py`；`TaskScheduler.context_provider`；`Observation → Context → Scheduler → Action`） | `PHASE10_OBSERVATION_MEMORY_REPORT.md` |---
 
 | Phase 10.1 | Observation 与 DecisionContext 加固（实例级 `DecisionContext` 隔离 / 观察有效性判定 + 去重 + 乱序保护 / Runtime `cycle_id` 复用 / `ActionRecord` 归属字段 / dry-run `confirmed` 语义 / 实例级失败隔离） | `PHASE10_1_CONTEXT_HARDENING_REPORT.md` |
-## 8. 已知限制与后续
+
+| Phase 11.0 | 视觉目标可靠性与安全基线（State Evidence vs Actionable Target 登记表 / `calibrated` 依据元素级定位 / 快照主动失效 `invalidate()` + 失效原因 / 空快照 `now` 缺陷修复 / 数据集独立性审查：178 独立原图 vs 1602 ROI） | `PHASE11_0_VISUAL_TARGET_RELIABILITY_REPORT.md` |## 8. 已知限制与后续
 
 | 项 | 现状 | 归属 |
 | --- | --- | --- |
@@ -276,5 +279,5 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | `config.py` | 单文件承载全部配置模型（含 evidence / state / runtime 段），拆分方案见 Phase 4.7 报告 | Phase 5+（可选） |
 | 计算性能 | 单帧 ≈ 170 次 `matchTemplate`（10 detector）；未做性能优化与预算验证 | Phase 5（接线前先测） |
 | 样本量 | `victory_icon` / `reward_panel` 各 1 张正样本（靠状态可信度校准补偿） | 数据侧 |
-| Action / State Machine / Task | Action 层已实现（默认 dry-run）；**流程状态机**（Phase 8）、**多任务调度**（Phase 9）、**观察记忆 + 实例级决策上下文**（Phase 10 / 10.1：隔离 + 去重 + dry-run 语义 + 实例级失败隔离）均已实现；**长期记忆 / 观察驱动谓词 / 看门狗 / 配额公平性未实现**（见 Phase 10.1 报告 §11） | Phase 11 |
+| Action / State Machine / Task | Action 层已实现（默认 dry-run）；**流程状态机**（Phase 8）、**多任务调度**（Phase 9）、**观察记忆 + 实例级决策上下文**（Phase 10 / 10.1）、**视觉目标可靠性基线**（Phase 11.0：可执行目标登记 + 快照主动失效）均已实现；**元素级定位精度未验证（缺真值）/ 跨分辨率与多 DPI 未验证 / 看门狗与配额公平性未实现**（见 Phase 11.0 报告 §10） | Phase 11.1 |
 | `README` 与本文之外的历史章节 | 部分章节仍描述 Phase 3.x 的帧路径细节（已加注说明） | 文档迭代 |

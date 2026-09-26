@@ -288,8 +288,8 @@ def test_undetected_evidences_produce_empty_snapshot() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_capture_failure_does_not_update_snapshot() -> None:
-    """capture 失败 → **不更新** resolver；旧快照随后由 TTL 判定过期。"""
+def test_capture_failure_invalidates_snapshot() -> None:
+    """capture 失败 → **主动失效**快照（Phase 11.0）：旧目标立即不可用，不再等 TTL。"""
     clock = FakeClock(100.0)
     bridge, resolver, _ = make_bridge(clock=clock)
     bridge.update(frame=FrameStub(timestamp=100.0), evidences=[make_evidence()], frame_id=1)
@@ -297,16 +297,22 @@ def test_capture_failure_does_not_update_snapshot() -> None:
 
     accepted = bridge.update(frame=None, evidences=[], frame_id=2, cycle_id=2)
 
-    assert accepted is None
+    # 失效快照被推送：resolver 里是**空候选**快照，frame_id 前进到 2
+    assert accepted is not None and accepted.count == 0
     assert bridge.stats.no_frame == 1
-    assert bridge.stats.published == 1  # 没有新增推送
-    assert resolver.snapshot is not None and resolver.snapshot.frame_id == 1
+    assert bridge.stats.invalidated == 1
+    assert bridge.stats.last_reason == "no_frame"
+    assert resolver.snapshot is not None and resolver.snapshot.frame_id == 2
+    assert resolver.snapshot.count == 0
 
-    # 旧快照不再"假装有效"：超过 TTL 后 Action 侧给出 target_expired
-    clock.advance(6.0)
+    # 目标立即不可用（不需要等 TTL）：语义是"目标不在当前快照"（target_not_found），
+    # 而不是"旧位置仍然有效、只是过期"（target_expired）。
     resolution = resolver.resolve_detail(SemanticTarget.from_name("battle_auto_button"))
     assert resolution.ok is False
-    assert resolution.reason.value == "target_expired"
+    assert resolution.reason.value == "target_not_found"
+
+    # TTL 兜底依然存在（若外部绕过 invalidate 直接停止推送）
+    assert bridge.stats.published == 2
 
 
 def test_capture_failure_then_recovery_publishes_again() -> None:
@@ -603,8 +609,9 @@ def test_monitor_capture_failure_skips_publish(tmp_path: Path) -> None:
 
     assert bridge.stats.updates == 2
     assert bridge.stats.no_frame == 1
-    assert bridge.stats.published == 1
-    assert resolver.snapshot is not None
+    assert bridge.stats.invalidated == 1  # Phase 11.0：无帧轮会主动失效
+    assert bridge.stats.published == 2  # 有效帧 + 失效快照各一次
+    assert resolver.snapshot is not None and resolver.snapshot.count == 0
 
 
 def test_monitor_bridge_exception_does_not_break_loop(tmp_path: Path) -> None:

@@ -176,7 +176,10 @@ def click_request(name: str = "battle_auto_button") -> ActionRequest:
 
 def test_evidence_converts_to_candidate() -> None:
     """证据 → 候选：比例取 bbox 中心，confidence / source / timestamp / frame_id 全部传递。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
 
     candidate = adapter.from_evidence(
         make_evidence(), frame_size=FRAME_SIZE, timestamp=12.5, frame_id=42
@@ -198,7 +201,10 @@ def test_evidence_converts_to_candidate() -> None:
 
 def test_frame_field_view_is_supported() -> None:
     """可用帧的字段视图取尺寸与时间戳（不需要 numpy / Frame 实例）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     frame = FrameStub(timestamp=3.25)
 
     frame_size = adapter.frame_size_of(frame)
@@ -214,7 +220,10 @@ def test_frame_field_view_is_supported() -> None:
 
 def test_frame_size_of_returns_none_for_bad_frame() -> None:
     """帧尺寸读不到时返回 ``None``（调用方据此跳过，不猜尺寸）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
 
     assert adapter.frame_size_of(None) is None
     assert adapter.frame_size_of(object()) is None
@@ -229,7 +238,10 @@ def test_frame_size_of_returns_none_for_bad_frame() -> None:
 
 def test_detection_converts_through_coordinate_transform() -> None:
     """检测结果：参考分辨率 rect → 当前坐标 → 比例（经既有 CoordinateTransform）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     transform = make_transform()
     detection = make_detection()
 
@@ -252,7 +264,10 @@ def test_detection_converts_through_coordinate_transform() -> None:
 
 def test_detection_without_transform_is_skipped() -> None:
     """缺坐标变换 → 不换算、不上报（不猜）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
 
     candidate = adapter.from_detection(make_detection())
     adapter.candidates_from_detections([make_detection()], transform=None)
@@ -269,7 +284,10 @@ def test_detection_without_transform_is_skipped() -> None:
 
 def test_empty_results_produce_empty_snapshot() -> None:
     """空结果 → 空快照（``count == 0``），不抛异常。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
 
     snapshot = adapter.snapshot_from_evidence([], frame_size=FRAME_SIZE, frame_id=1)
 
@@ -282,7 +300,10 @@ def test_empty_results_produce_empty_snapshot() -> None:
 
 def test_all_undetected_produces_empty_snapshot() -> None:
     """全部未检出 → 空快照（并统计跳过原因）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     evidences = [make_evidence("battle_auto_button", detected=False, confidence=0.0, bbox=None)]
 
     snapshot = adapter.snapshot_from_evidence(evidences, frame_size=FRAME_SIZE)
@@ -293,7 +314,7 @@ def test_all_undetected_produces_empty_snapshot() -> None:
 
 def test_include_undetected_flag() -> None:
     """``include_undetected=True`` 时未检出证据也会被上报（用于排障 / 观测）。"""
-    adapter = VisionTargetAdapter(include_undetected=True)
+    adapter = VisionTargetAdapter(include_undetected=True, actionable_only=False)
     evidence = make_evidence(detected=False, confidence=0.0, bbox=Rect(x=10, y=10, width=10, height=10))
 
     candidate = adapter.from_evidence(evidence, frame_size=FRAME_SIZE)
@@ -309,7 +330,10 @@ def test_include_undetected_flag() -> None:
 
 def test_evidence_without_bbox_is_skipped() -> None:
     """没有 bbox → 无法定位 → 跳过（不猜坐标）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
 
     candidate = adapter.from_evidence(make_evidence(bbox=None), frame_size=FRAME_SIZE)
 
@@ -319,7 +343,10 @@ def test_evidence_without_bbox_is_skipped() -> None:
 
 def test_evidence_without_frame_size_is_skipped() -> None:
     """有 bbox 但拿不到帧尺寸 → 跳过（并计数）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
 
     candidate = adapter.from_evidence(make_evidence(), frame_size=None)
 
@@ -334,7 +361,7 @@ def test_evidence_without_frame_size_is_skipped() -> None:
 
 def test_low_confidence_filtered_when_threshold_set() -> None:
     """适配器阈值（``min_confidence``）过滤低置信证据。"""
-    adapter = VisionTargetAdapter(min_confidence=0.8)
+    adapter = VisionTargetAdapter(min_confidence=0.8, actionable_only=False)
 
     candidate = adapter.from_evidence(make_evidence(confidence=0.55), frame_size=FRAME_SIZE)
 
@@ -344,7 +371,10 @@ def test_low_confidence_filtered_when_threshold_set() -> None:
 
 def test_low_confidence_passes_through_by_default() -> None:
     """默认不过滤：低置信度如实上报，由 Action 侧拒绝（单一策略点）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
 
     candidate = adapter.from_evidence(make_evidence(confidence=0.55), frame_size=FRAME_SIZE)
@@ -358,7 +388,7 @@ def test_low_confidence_passes_through_by_default() -> None:
 
 def test_confidence_boundary_inclusive_in_filter() -> None:
     """过滤边界：恰好等于阈值时保留（``<`` 判定）。"""
-    adapter = VisionTargetAdapter(min_confidence=0.8)
+    adapter = VisionTargetAdapter(min_confidence=0.8, actionable_only=False)
 
     candidate = adapter.from_evidence(make_evidence(confidence=0.8), frame_size=FRAME_SIZE)
 
@@ -372,7 +402,10 @@ def test_confidence_boundary_inclusive_in_filter() -> None:
 
 def test_out_of_window_bbox_reported_by_default() -> None:
     """窗口外的 bbox **如实上报**（比例越界），由 Action 侧判为 ``invalid_target``。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
     # 帧尺寸 1704×960，但 bbox 在 (2000, 1200) → 中心比例 > 1
     outside = Rect(x=1950, y=1150, width=100, height=100)
@@ -400,7 +433,10 @@ def test_out_of_window_bbox_skipped_when_requested() -> None:
 
 def test_batch_skips_only_the_bad_item() -> None:
     """单条异常（缺 bbox / 越界）不影响同批其它条目。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     evidences = [
         make_evidence("good_button"),
         make_evidence("no_bbox", bbox=None),
@@ -447,7 +483,10 @@ def test_name_map_and_source_override() -> None:
 
 def test_metadata_excludes_non_scalar_values() -> None:
     """审计元信息只搬运标量，避免把数组 / 图像带进契约。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     evidence = make_evidence(metadata={"template_id": "x", "blob": b"\x00\x01", "count": 3})
 
     candidate = adapter.from_evidence(evidence, frame_size=FRAME_SIZE)
@@ -460,7 +499,10 @@ def test_metadata_excludes_non_scalar_values() -> None:
 
 def test_adapter_and_resolver_agree_on_names() -> None:
     """适配器产出的名称可直接被 resolver 查找（大小写不敏感）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
     snapshot = adapter.snapshot_from_evidence(
         [make_evidence("battle_auto_button")], frame_size=FRAME_SIZE, frame_id=3
@@ -481,7 +523,10 @@ def test_adapter_and_resolver_agree_on_names() -> None:
 
 def test_out_of_order_snapshot_is_rejected() -> None:
     """乱序：较旧的帧晚到时被拒收，保留较新的候选。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
 
     newer = adapter.snapshot_from_evidence(
@@ -507,7 +552,10 @@ def test_out_of_order_snapshot_is_rejected() -> None:
 
 def test_out_of_order_can_be_accepted_explicitly() -> None:
     """显式 ``accept_out_of_order=True`` 时允许覆盖（调试 / 回放场景）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
     newer = adapter.snapshot_from_evidence(
         [make_evidence("new_button")], frame_size=FRAME_SIZE, frame_id=10
@@ -527,7 +575,10 @@ def test_out_of_order_can_be_accepted_explicitly() -> None:
 
 def test_in_order_snapshots_replace_normally() -> None:
     """顺序正常（帧号递增）时正常替换。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
 
     for frame_id in (1, 2, 3):
@@ -545,7 +596,10 @@ def test_in_order_snapshots_replace_normally() -> None:
 
 def test_snapshot_without_frame_id_is_always_accepted() -> None:
     """没有 frame_id 的快照不受乱序保护影响（向后兼容 Phase 7.1 用法）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
     with_id = adapter.snapshot_from_evidence(
         [make_evidence("with_id")], frame_size=FRAME_SIZE, frame_id=5
@@ -660,7 +714,10 @@ def test_adapter_only_imports_vision_and_core() -> None:
 
 def test_end_to_end_pipeline_produces_no_real_input() -> None:
     """端到端链路：证据 → 候选 → 快照 → 解析 → 分发（dry-run，坐标正确）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
     dispatcher = make_dispatcher(resolver)
     backend = dispatcher.backend
@@ -693,7 +750,10 @@ def test_end_to_end_pipeline_produces_no_real_input() -> None:
 
 def test_end_to_end_missing_target_is_rejected() -> None:
     """端到端：快照里没有该目标 → ``REJECTED``（stage=target，零输入）。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver()
     dispatcher = make_dispatcher(resolver)
     backend = dispatcher.backend
@@ -712,7 +772,10 @@ def test_end_to_end_missing_target_is_rejected() -> None:
 def test_end_to_end_expired_snapshot_is_rejected() -> None:
     """端到端：快照过期 → ``target_expired``（TTL 由 Action 侧判定）。"""
     clock = FakeClock(100.0)
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
     resolver = make_resolver(clock=clock, ttl_s=1.0)
     dispatcher = make_dispatcher(resolver)
 
@@ -730,7 +793,10 @@ def test_end_to_end_expired_snapshot_is_rejected() -> None:
 
 def test_adapter_does_not_hold_runtime_state() -> None:
     """适配器无运行期状态逃逸：同一实例可反复用，产物只取决于入参。"""
-    adapter = VisionTargetAdapter()
+    # 本文件测的是**转换机制**（像素 → 比例 / 跳过规则），因此显式关闭
+    # Phase 11.0 的"可执行目标白名单"；白名单语义由
+    # tests/test_phase110_visual_reliability.py 覆盖。
+    adapter = VisionTargetAdapter(actionable_only=False)
 
     first = adapter.from_evidence(make_evidence("a"), frame_size=FRAME_SIZE, frame_id=1)
     second = adapter.from_evidence(make_evidence("b"), frame_size=FRAME_SIZE, frame_id=2)
