@@ -46,18 +46,24 @@ class ContextUpdateError(RuntimeError):
 
 @dataclass(slots=True)
 class ActionRecord:
-    """一次动作结果的**结论记录**（Phase 10；不含画面 / 坐标）。
+    """一次动作结果的**结论记录**（Phase 10；Phase 10.1 补归属字段；不含画面 / 坐标）。
 
     Attributes:
-        task_id / step_id: 来源任务与步骤（审计）。
+        task_id / instance_id / step_id / action_id: 归属信息（同一任务重跑时靠
+            ``instance_id`` 区分实例；``action_id`` 来自 ``ActionRequest``）。
         kind: 动作类型（``click`` / ``key`` / ``wait`` …）。
         target: 语义目标名（例如 ``battle_auto_button``；无目标为空）。
         status: 动作状态字符串（``executed`` / ``skipped`` / ``rejected`` / ``failed``）。
-        ok: 是否成功（``execcuted`` 或 ``skipped`` 视为成功，``rejected`` / ``failed`` 为失败）。
-        reason: 动作说明 / 失败原因。
+        ok: **请求是否被接受**（``executed`` / ``skipped`` 为 ``True``；
+            ``rejected`` / ``failed`` 为 ``False``）。
+            ⚠️ ``ok=True`` **不代表**游戏界面已经响应：dry-run 的 ``skipped`` 也是 ``True``，
+            真实效果必须由后续稳定状态确认（见 ``dry_run``）。
+        dry_run: 是否**没有产生真实输入**（``skipped``：dry-run 后端或无需输入）。
+        reason: 动作说明 / 失败原因（**保留 Action 层原始语义**，不做改写）。
         latency_ms: 后端耗时（毫秒）。
         attempt: 第几次尝试。
-        cycle_id: 记录时的节拍号。
+        cycle_id: 记录时的**任务节拍**（``TaskContext.cycles``）。
+        runtime_cycle_id: 记录时的**运行时节拍**（与观察 ``Observation.cycle_id`` 同口径）。
         timestamp: 记录时间。
     """
 
@@ -69,14 +75,28 @@ class ActionRecord:
     latency_ms: float = 0.0
     attempt: int = 1
     task_id: str = ""
+    instance_id: str = ""
     step_id: str = ""
+    action_id: str = ""
     cycle_id: int = 0
+    runtime_cycle_id: int = 0
+    dry_run: bool = False
     timestamp: str = ""
 
     @property
     def failed(self) -> bool:
-        """是否为失败结果。"""
+        """是否为失败结果（请求被拒 / 执行失败）。"""
         return not self.ok
+
+    @property
+    def accepted(self) -> bool:
+        """请求是否被接受（与 :attr:`ok` 同义，语义更明确）。"""
+        return self.ok
+
+    @property
+    def confirmed(self) -> bool:
+        """是否**可以据此推断真实界面已变化**——只有真正产生输入且被接受才是。"""
+        return self.ok and not self.dry_run
 
     def to_dict(self) -> dict[str, Any]:
         """返回可 JSON 序列化的字典。"""
@@ -85,21 +105,33 @@ class ActionRecord:
             "target": self.target,
             "status": self.status,
             "ok": self.ok,
+            "accepted": self.accepted,
+            "confirmed": self.confirmed,
+            "dry_run": self.dry_run,
             "reason": self.reason,
             "latency_ms": round(float(self.latency_ms), 3),
             "attempt": self.attempt,
             "task_id": self.task_id,
+            "instance_id": self.instance_id,
             "step_id": self.step_id,
+            "action_id": self.action_id,
             "cycle_id": self.cycle_id,
+            "runtime_cycle_id": self.runtime_cycle_id,
             "timestamp": self.timestamp,
         }
 
     def describe(self) -> str:
         """返回可读描述。"""
-        verdict = "ok" if self.ok else "failed"
+        if self.failed:
+            verdict = "failed"
+        elif self.dry_run:
+            verdict = "accepted(dry-run)"
+        else:
+            verdict = "accepted"
         target = f":{self.target}" if self.target else ""
+        owner = f"@{self.instance_id}" if self.instance_id else ""
         reason = f"（{self.reason}）" if self.reason else ""
-        return f"ActionRecord({self.kind}{target} {verdict} {self.status}{reason})"
+        return f"ActionRecord({self.kind}{target} {verdict} {self.status}{owner}{reason})"
 
 
 @dataclass(slots=True)
@@ -511,7 +543,17 @@ def _record_from(value: Any) -> ActionRecord:
         latency_ms=float(_read(value, "latency_ms", default=0.0) or 0.0),
         attempt=int(_read(value, "attempt", default=1) or 1),
         task_id=str(_read(value, "task_id", default="") or ""),
+        instance_id=str(_read(value, "instance_id", default="") or ""),
         step_id=str(_read(value, "step_id", default="") or ""),
-        cycle_id=int(_read(value, "cycle_id", default=0) or 0),
+        action_id=str(_read(value, "action_id", "request_id", default="") or ""),
+        cycle_id=int(_read(value, "cycle_id", "task_cycle", default=0) or 0),
+        runtime_cycle_id=int(
+            _read(value, "runtime_cycle_id", "observation_cycle", default=0) or 0
+        ),
+        dry_run=bool(
+            _read(value, "dry_run", "skip_input", default=None)
+            if _read(value, "dry_run", "skip_input", default=None) is not None
+            else status_text.casefold() == "skipped"
+        ),
         timestamp=str(_read(value, "timestamp", "executed_at", default="") or ""),
     )

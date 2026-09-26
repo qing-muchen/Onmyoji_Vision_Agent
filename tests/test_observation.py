@@ -576,7 +576,7 @@ def test_context_bridge_isolates_store_failures() -> None:
     assert bridge.observe({"state_name": "battle"}, metadata={"frame": object()}) is None
 
     assert bridge.store.count == 0
-    assert bridge.stats.store_errors == 1
+    assert bridge.stats.invalid == 1  # 观察非法（画面字段）→ 不产生观察
     assert bridge.stats.observed == 0
 
 
@@ -618,33 +618,42 @@ def test_context_bridge_reset_and_bind() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scheduler_context_provider_binds_engines() -> None:
-    """调度器通过 ``context_provider`` 把上下文接入实例引擎（不 import 观察层）。"""
+def test_scheduler_context_provider_syncs_observation_view() -> None:
+    """调度器把 ``context_provider``（共享观察视图）同步到**实例私有**上下文（Phase 10.1）。
+
+    动作反馈只落在实例上下文里；共享视图只承载观察（不承载 last_action）。
+    """
     registry = TaskRegistry()
     registry.register(validate_flow_document(flow_document()))
-    context = DecisionContext(task_id=FLOW_TASK)
+    shared = DecisionContext(task_id=FLOW_TASK)  # 只作为"全局观察视图"
     scheduler = TaskScheduler(
         registry,
         max_concurrent=1,
         now=lambda: "T",
-        context_provider=lambda: context,
+        context_provider=lambda: shared,
     )
 
     instance = scheduler.submit(FLOW_TASK)
     scheduler.tick({"state_name": "battle"})
 
+    private = scheduler.instance_context(instance)
     assert scheduler.context_provider is not None
-    assert instance.engine.decision_context is context
-    assert context.last_action is not None  # 动作反馈经引擎写入同一上下文
-    assert context.last_action.target == TARGET_NAME
+    assert private is not None and private is not shared
+    assert instance.engine.decision_context is private
+    assert instance.decision_context is private
+    assert private.last_action is not None  # 动作反馈落在**实例私有**上下文
+    assert private.last_action.target == TARGET_NAME
+    assert private.last_action.instance_id == instance.instance_id
+    assert shared.last_action is None  # 共享视图不被动作反馈污染
+    assert shared.task_variables == {}
 
     scheduler.tick({"state_name": "yard"})
     assert instance.status is TaskInstanceStatus.COMPLETED
-    assert len(context.actions) == 1
+    assert len(private.actions) == 1
 
 
 def test_scheduler_context_provider_failure_is_isolated() -> None:
-    """提供者抛异常 → 调度继续，只计错误。"""
+    """提供者抛异常 → 调度继续，只计错误；实例私有上下文照常存在（只是没有观察视图）。"""
     registry = TaskRegistry()
     registry.register(validate_flow_document(flow_document()))
 
@@ -656,13 +665,14 @@ def test_scheduler_context_provider_failure_is_isolated() -> None:
 
     scheduler.tick({"state_name": "battle"})
 
-    assert instance.engine.decision_context is None
+    private = scheduler.instance_context(instance)
+    assert private is not None and private.current_state == ""
     assert scheduler.stats.errors >= 1
     assert instance.status is TaskInstanceStatus.RUNNING
 
 
 def test_scheduler_without_provider_is_unchanged() -> None:
-    """未接上下文：调度行为与 Phase 9 一致。"""
+    """未接观察视图：调度行为与 Phase 9 一致，实例上下文仍默认独立（Phase 10.1）。"""
     registry = TaskRegistry()
     registry.register(validate_flow_document(flow_document()))
     scheduler = TaskScheduler(registry, now=lambda: "T")
@@ -670,8 +680,9 @@ def test_scheduler_without_provider_is_unchanged() -> None:
     instance = scheduler.submit(FLOW_TASK)
     scheduler.tick({"state_name": "battle"})
 
+    private = scheduler.instance_context(instance)
     assert scheduler.context_provider is None
-    assert instance.engine.decision_context is None
+    assert private is not None and private.current_state == ""
     assert instance.current_state == "running"
 
 
@@ -833,12 +844,17 @@ def test_end_to_end_observation_pipeline(tmp_path: Path) -> None:
     assert bridge.observations.count == 2
     assert bridge.observations.states() == (TRIGGER_STATE, "yard")
     assert bridge_ctx.stats.changes == 2  # ENTER(battle) + CHANGE(yard)
-    # 决策上下文
+    # 决策上下文：共享视图承载观察，实例上下文承载动作反馈（Phase 10.1 隔离）
     assert context.current_state == "yard"
     assert context.previous_state == TRIGGER_STATE
-    assert context.last_action is not None and context.last_action.ok is True
+    instance_ctx = scheduler.instance_context(FLOW_TASK)
+    assert instance_ctx is not None and instance_ctx is not context
+    assert instance_ctx.last_action is not None and instance_ctx.last_action.ok is True
+    assert instance_ctx.last_action.dry_run is True  # dry-run 的 skipped 不算真实输入
+    assert context.last_action is None  # 共享视图不被动作反馈污染
     # 调度 + 状态机 + 后端
     instance = scheduler.history[0]
+    assert instance_ctx.last_action.instance_id == instance.instance_id
     assert instance.status is TaskInstanceStatus.COMPLETED
     assert [record.target for record in instance.state_machine.history] == ["running", "COMPLETE"]
     backend = dispatcher.backend
@@ -855,7 +871,7 @@ def test_end_to_end_observation_pipeline(tmp_path: Path) -> None:
 
 
 def test_end_to_end_context_failure_stops_task(tmp_path: Path) -> None:
-    """上下文更新失败 → 活动任务被置为 FAILED，Runtime 主循环不中断。"""
+    """**实例**上下文更新失败 → 只把该实例置为 FAILED，Runtime 主循环不中断。"""
 
     class ExplodingContext(DecisionContext):
         def update_observation(self, observation: object, **kwargs: object):
@@ -863,8 +879,13 @@ def test_end_to_end_context_failure_stops_task(tmp_path: Path) -> None:
 
     registry = TaskRegistry()
     registry.register(validate_flow_document(flow_document()))
-    context = ExplodingContext(task_id=FLOW_TASK)
-    scheduler = TaskScheduler(registry, now=lambda: "T", context_provider=lambda: context)
+    shared = DecisionContext(task_id=FLOW_TASK)  # 共享观察视图（正常）
+    scheduler = TaskScheduler(
+        registry,
+        now=lambda: "T",
+        context_provider=lambda: shared,
+        context_factory=lambda task_id: ExplodingContext(task_id=task_id),
+    )
     bridge = TaskRuntimeBridge(
         task_engine=scheduler._create_engine(),
         task_registry=registry,
@@ -872,7 +893,7 @@ def test_end_to_end_context_failure_stops_task(tmp_path: Path) -> None:
         clock=lambda: 0.0,
         now=lambda: "T",
         scheduler=scheduler,
-        context_bridge=ContextBridge(context=context),
+        context_bridge=ContextBridge(context=shared),
     )
 
     monitor = make_monitor(
@@ -883,10 +904,10 @@ def test_end_to_end_context_failure_stops_task(tmp_path: Path) -> None:
     )
     monitor.run(max_cycles=2)  # 不抛
 
-    assert bridge.stats.errors >= 1
-    assert "ctx boom" in bridge.stats.last_error
+    assert scheduler.stats.errors >= 1
+    assert "ctx boom" in scheduler.stats.last_error
     assert any(
-        item.status in (TaskInstanceStatus.FAILED, TaskInstanceStatus.QUEUED)
+        item.status is TaskInstanceStatus.FAILED
         for item in list(scheduler.instances) + list(scheduler.history)
     )
 

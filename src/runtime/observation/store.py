@@ -47,6 +47,8 @@ class ObservationStoreStats:
     evicted: int = 0
     errors: int = 0
     cleared: int = 0
+    deduplicated: int = 0
+    out_of_order: int = 0
     last_reason: str = ""
     last_error: str = ""
 
@@ -63,6 +65,7 @@ class ObservationStoreStats:
         """返回可读描述。"""
         return (
             f"appended={self.appended} evicted={self.evicted} "
+            f"deduplicated={self.deduplicated} out_of_order={self.out_of_order} "
             f"cleared={self.cleared} errors={self.errors}"
         )
 
@@ -209,6 +212,21 @@ class ObservationStore:
                 item = Observation.from_state_result(payload, metadata=metadata)
             else:
                 item = Observation.from_state_result(observation)
+            # ---- 一致性保护（Phase 10.1）----
+            # 1) 同口径重复（与最新一条同 observation_id）→ 去重，不污染历史顺序
+            latest = self._items[-1] if self._items else None
+            if latest is not None and latest.observation_id == item.observation_id:
+                self._stats.deduplicated += 1
+                self._stats.last_reason = f"deduplicated {item.describe()}"
+                return None
+            # 2) 乱序（cycle_id 小于最新观察）→ 拒绝，避免破坏当前状态与变化顺序
+            if latest is not None and item.cycle_id < latest.cycle_id:
+                self._stats.out_of_order += 1
+                self._stats.last_reason = f"out_of_order {item.describe()}"
+                logger.debug(
+                    "观察乱序被拒: cycle=%s < latest=%s", item.cycle_id, latest.cycle_id
+                )
+                return None
             if self.is_full and self._items:
                 self._stats.evicted += 1
             self._items.append(item)

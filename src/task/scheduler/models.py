@@ -263,9 +263,28 @@ class TaskInstance:
 
     @property
     def context(self) -> Any:
-        """该实例的任务上下文视图（``TaskContext``；未启动时为 ``None``）。"""
+        """该实例的**任务上下文**（``TaskContext``：生命周期 / 计数 / 步骤执行；未启动时 ``None``）。
+
+        注意与 :attr:`decision_context` 的区别（Phase 10.1）：``context`` 是引擎的
+        运行期上下文，``decision_context`` 是该实例**私有**的决策上下文（观察视图 +
+        动作反馈 + 任务变量）。两者不合并。
+        """
         engine = self.engine
         return getattr(engine, "context", None) if engine is not None else None
+
+    @property
+    def decision_context(self) -> Any:
+        """该实例**私有**的决策上下文（``DecisionContext``；未接线时为 ``None``）。
+
+        Phase 10.1：每个实例一份，动作反馈 / 失败原因 / 任务变量互不污染。
+        """
+        engine = self.engine
+        return getattr(engine, "decision_context", None) if engine is not None else None
+
+    @property
+    def instance_id_owner(self) -> str:
+        """归属标识（= ``instance_id``；用于动作反馈归属断言）。"""
+        return self.instance_id
 
     @property
     def current_state(self) -> str | None:

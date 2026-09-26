@@ -2012,6 +2012,18 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `Observation → Context → Scheduler → Action`，测试 **1392 passed / 1 skipped**，
   仍**零真实输入**（dry-run）。长期记忆 / 观察驱动谓词 / 多任务各自上下文仍留待后续
   （见 `docs/PHASE10_OBSERVATION_MEMORY_REPORT.md` §9）。
+- Phase 10.1（**已完成：Observation 与 DecisionContext 加固**）：不重新设计记忆系统，只解决
+  多任务可靠性问题 —— **实例级 `DecisionContext`**（默认每实例独立；`context_provider` 语义收窄为
+  共享观察视图来源，动作反馈 / 失败原因 / 任务变量**永不共享**；实例终结移入有界的
+  `closed_contexts` 供诊断）、**观察一致性**（`ContextBridge.is_valid_state_result()` 拒绝跳过轮 /
+  capture 失败 / 未确认帧，真 `unknown` 仍如实记录；`ObservationStore` 增加**去重**与**乱序保护**；
+  观察 `cycle_id` 复用 Runtime 的 `CycleSchedule.cycle_id`，不另建计数器）、**ActionFeedback 归属**
+  （`ActionRecord` 增 `instance_id` / `action_id` / `runtime_cycle_id` / `dry_run`；引擎 `instance_id`
+  由调度器注入；失败原因逐字保留）、**dry-run 语义**（`ok`/`accepted` = 请求被接受，
+  `confirmed` = 可据此推断界面已变化 ⇒ dry-run 恒为 `False`；状态机仍只依据后续稳定状态推进）、
+  **失败隔离**（实例上下文失败只终结该实例，共享视图失败不再牵连任何实例）。
+  测试 **1421 passed / 1 skipped**；仍**零真实输入**。详见
+  `docs/PHASE10_1_CONTEXT_HARDENING_REPORT.md`。
 - Phase 11：编排可靠性（看门狗 + 公平性 / 饥饿保护）、观察驱动的决策输入、
   触发映射配置化、状态机 `exit_actions` 与转移钩子、`DetectionResult` 接入快照桥、
   `drag` 语义落地、长期记忆（跨会话）设计。

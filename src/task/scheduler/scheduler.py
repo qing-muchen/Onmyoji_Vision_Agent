@@ -26,12 +26,13 @@ Runtime → TaskRuntimeBridge → TaskScheduler → TaskInstance → TaskFlowSta
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from time import monotonic
 from typing import Any
 
-from src.task.context import DecisionContext
+from src.task.context import ContextUpdateError, DecisionContext
 from src.task.engine import TaskEngine
 from src.task.models import TaskDefinitionError
 from src.task.registry import TaskRegistry
@@ -95,6 +96,8 @@ class TaskScheduler:
         history_limit: int = 0,
         allow_rerun_completed: bool = False,
         context_provider: Callable[[], DecisionContext | None] | None = None,
+        context_factory: Callable[[str], DecisionContext] | None = None,
+        closed_context_limit: int = 20,
     ) -> None:
         if int(max_concurrent) < 1:
             raise TaskDefinitionError(f"max_concurrent 必须 >= 1（当前 {max_concurrent}）")
@@ -116,10 +119,21 @@ class TaskScheduler:
         ) or (DEFAULT_RESOURCE,)
         self._history_limit = int(history_limit)
         self._allow_rerun_completed = bool(allow_rerun_completed)
-        # Phase 10：决策上下文提供者（Runtime 侧注入；调度器**不认识** ObservationStore）
+        # Phase 10/10.1：决策上下文
+        #   * context_provider = "全局观察**视图**来源"（Runtime 侧注入，可选）
+        #   * context_factory  = "每个实例自己的上下文"工厂（可选；缺省由调度器创建）
+        # 关键：动作反馈 / 任务变量**永不共享**（Phase 10.1 隔离修复）
         if context_provider is not None and not callable(context_provider):
             raise TaskDefinitionError("context_provider 必须是可调用对象")
+        if context_factory is not None and not callable(context_factory):
+            raise TaskDefinitionError("context_factory 必须是可调用对象")
+        # 推荐组合：provider = 共享观察视图来源，factory = 实例私有上下文工厂。
+        # 两者可以同时提供（这正是"共享观察 + 独立反馈"的标准接线）。
         self._context_provider = context_provider
+        self._context_factory = context_factory
+        self._closed_context_limit = max(0, int(closed_context_limit))
+        self._instance_contexts: dict[str, DecisionContext] = {}
+        self._closed_contexts: dict[str, DecisionContext] = OrderedDict()
         self._instances: dict[str, TaskInstance] = {}
         self._history: list[TaskInstance] = []
         self._sequence = 0
@@ -144,8 +158,40 @@ class TaskScheduler:
 
     @property
     def context_provider(self) -> Callable[[], DecisionContext | None] | None:
-        """决策上下文提供者（Phase 10；未注入时为 ``None``）。"""
+        """**共享观察视图**来源（Phase 10；未注入时为 ``None``）。
+
+        注意（Phase 10.1）：它提供的上下文只被当作"当前观察视图"
+        （``current_state`` / ``cycle_id``）同步给各实例；
+        实例的 ``last_action`` / ``last_error`` / ``task_variables`` **始终私有**。
+        """
         return self._context_provider
+
+    @property
+    def context_factory(self) -> Callable[[str], DecisionContext] | None:
+        """实例上下文工厂（Phase 10.1；未注入时由调度器按 ``task_id`` 自动创建）。"""
+        return self._context_factory
+
+    def instance_context(self, handle: Any) -> DecisionContext | None:
+        """取某个实例的**私有**决策上下文（Phase 10.1）。
+
+        Args:
+            handle: :class:`~src.task.scheduler.models.TaskInstance` /
+                ``instance_id`` / ``task_id``。
+
+        Returns:
+            该实例的上下文；已终结实例仍可从关闭区查到（有界保留）；未知时 ``None``。
+        """
+        instance = handle if isinstance(handle, TaskInstance) else self.instance(str(handle))
+        if instance is None:
+            return None
+        return self._instance_contexts.get(instance.instance_id) or self._closed_contexts.get(
+            instance.instance_id
+        )
+
+    @property
+    def closed_contexts(self) -> dict[str, DecisionContext]:
+        """已终结实例的上下文（有界保留，供终态诊断；Phase 10.1）。"""
+        return dict(self._closed_contexts)
 
     def set_context_provider(
         self, provider: Callable[[], DecisionContext | None] | None
@@ -235,6 +281,7 @@ class TaskScheduler:
             f"TaskScheduler(max_concurrent={self._max_concurrent}, "
             f"running={len(self._running())}, queued={len(self._queued())}, "
             f"paused={len(self._paused())}, history={len(self._history)}, "
+            f"contexts={len(self._instance_contexts)}+{len(self._closed_contexts)}, "
             f"{self._stats.describe()})"
         )
 
@@ -388,7 +435,7 @@ class TaskScheduler:
         self._stats.ticks += 1
         tick = SchedulerTick()
         try:
-            self._attach_context()
+            self._sync_instance_contexts()
             self._reap(tick)
             self._schedule(tick)
             self._feed(state_result, tick)
@@ -441,9 +488,12 @@ class TaskScheduler:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("复位时停止实例失败（已忽略）: %s", exc)
             self._locks.release_all(instance.instance_id)
+        for instance in list(self._instances.values()):
+            self._close_context(instance)
         self._instances.clear()
         if not keep_history:
             self._history.clear()
+            self._closed_contexts.clear()
             self._stats.reset()
         self._locks.clear()
         self._sequence = 0
@@ -493,19 +543,74 @@ class TaskScheduler:
             self._record_error("决策上下文获取失败（已隔离）", exc)
             return None
 
-    def _attach_context(self) -> None:
-        """把当前决策上下文绑定到全部活跃实例的引擎（Phase 10）。"""
-        if self._context_provider is None:
-            return
-        context = self._current_context()
+    def _context_of(self, instance: TaskInstance) -> DecisionContext:
+        """取（必要时创建）某实例的**私有**决策上下文（Phase 10.1）。
+
+        创建规则：优先 ``context_factory(task_id)``；否则新建
+        ``DecisionContext(task_id=<task_id>)``。**绝不**复用其它实例的上下文
+        （避免 ``last_action`` / ``last_error`` / ``task_variables`` 互相污染）。
+
+        Args:
+            instance: 目标实例。
+
+        Returns:
+            该实例的私有上下文。
+        """
+        existing = self._instance_contexts.get(instance.instance_id)
+        if existing is not None:
+            return existing
+        created: DecisionContext | None = None
+        if self._context_factory is not None:
+            try:
+                created = self._context_factory(instance.task_id)
+            except Exception as exc:  # noqa: BLE001 - 工厂异常不影响调度
+                self._record_error(f"实例上下文创建失败: {instance.instance_id}", exc)
+                created = None
+        if created is None:
+            created = DecisionContext(task_id=instance.task_id)
+        else:
+            created._task_id = instance.task_id  # 归属：工厂返回值也强制带上任务标识
+        self._instance_contexts[instance.instance_id] = created
+        return created
+
+    def _sync_instance_contexts(self) -> None:
+        """把**共享观察视图**同步到各实例的私有上下文，并绑定到实例引擎（Phase 10.1）。
+
+        * 观察视图（``current_state`` / ``cycle_id``）来自 ``context_provider``（可选）；
+        * 实例私有字段（``last_action`` / ``last_error`` / ``task_variables``）**不**被覆盖；
+        * 单实例异常只影响该实例（``stats.errors``），不影响其它任务与 Runtime。
+        """
+        template = self._current_context() if self._context_provider is not None else None
         for instance in list(self._instances.values()):
             engine = instance.engine
             if engine is None:
                 continue
             try:
+                context = self._context_of(instance)
+                if template is not None and template.current_state:
+                    context.update_observation(
+                        {
+                            "state_name": template.current_state,
+                            "cycle_id": template.cycle_id,
+                        }
+                    )
                 engine.set_decision_context(context)
+                engine.set_instance_id(instance.instance_id)
+            except ContextUpdateError as exc:
+                # 实例私有上下文更新失败：只终结**该实例**（不牵连其它任务）
+                self._record_error(f"实例上下文更新失败: {instance.instance_id}", exc)
+                self._fail_instance(instance, reason=f"context update failed: {exc}")
             except Exception as exc:  # noqa: BLE001 - 单实例异常不影响其它任务
                 self._record_error(f"上下文接入失败: {instance.instance_id}", exc)
+
+    def _fail_instance(self, instance: TaskInstance, *, reason: str) -> None:
+        """只把**指定实例**置为失败（Phase 10.1：不终结其它 TaskInstance）。"""
+        try:
+            engine = instance.engine
+            if engine is not None and not engine.is_terminal:
+                engine.fail(reason=reason)
+        except Exception as exc:  # noqa: BLE001
+            self._record_error(f"实例失败标记失败: {instance.instance_id}", exc)
 
     def _has_capacity(self) -> bool:
         """是否还有并发槽位。"""
@@ -608,7 +713,8 @@ class TaskScheduler:
             )
             return False
         instance.engine.reset()
-        instance.engine.set_decision_context(self._current_context())
+        instance.engine.set_decision_context(self._context_of(instance))
+        instance.engine.set_instance_id(instance.instance_id)
         instance.engine.start(definition)
         instance.mark_running(at=self._now(), reason=reason)
         self._stats.started += 1
@@ -719,6 +825,7 @@ class TaskScheduler:
     ) -> None:
         """把实例移入历史并释放资源。"""
         instance.mark_terminal(status, at=self._now(), reason=reason, error=error)
+        self._close_context(instance)
         self._locks.release_all(instance.instance_id)
         self._instances.pop(instance.instance_id, None)
         self._history.append(instance)
@@ -732,6 +839,22 @@ class TaskScheduler:
         elif status is TaskInstanceStatus.FAILED:
             self._stats.last_error = instance.last_error
             logger.warning("实例失败: %s（%s）", instance.instance_id, instance.last_error)
+
+    def _close_context(self, instance: TaskInstance) -> None:
+        """实例终结：把其私有上下文移入关闭区（有界保留，供终态诊断；Phase 10.1）。
+
+        策略：**保留**（不清空）——同一任务重跑时新实例会拿到**全新**上下文
+        （默认隔离），旧上下文留在 ``closed_contexts`` 供追查；超出上限则淘汰最旧。
+        """
+        context = self._instance_contexts.pop(instance.instance_id, None)
+        if context is None:
+            return
+        self._closed_contexts[instance.instance_id] = context
+        while (
+            self._closed_context_limit
+            and len(self._closed_contexts) > self._closed_context_limit
+        ):
+            self._closed_contexts.popitem(last=False)
 
     def _record_error(self, message: str, exc: BaseException) -> None:
         """统一记录调度异常（隔离，不抛出）。"""

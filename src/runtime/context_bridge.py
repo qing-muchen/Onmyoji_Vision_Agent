@@ -36,7 +36,7 @@ Observation（只保存状态描述）
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -68,6 +68,9 @@ class ContextBridgeStats:
 
     observed: int = 0
     skipped: int = 0
+    invalid: int = 0
+    deduplicated: int = 0
+    out_of_order: int = 0
     store_errors: int = 0
     context_updates: int = 0
     context_failures: int = 0
@@ -75,6 +78,7 @@ class ContextBridgeStats:
     errors: int = 0
     last_state: str = ""
     last_change: str = ""
+    last_reason: str = ""
     last_error: str = ""
 
     def reset(self) -> None:
@@ -89,7 +93,8 @@ class ContextBridgeStats:
     def describe(self) -> str:
         """返回可读描述。"""
         return (
-            f"observed={self.observed} changes={self.changes} "
+            f"observed={self.observed} skipped={self.skipped} invalid={self.invalid} "
+            f"deduplicated={self.deduplicated} changes={self.changes} "
             f"context_updates={self.context_updates} errors={self.errors}"
         )
 
@@ -209,6 +214,11 @@ class ContextBridge:
             ContextUpdateError: ``update_context=True`` 且上下文更新失败
                 （调用方应把任务置为 ``FAILED``）。
         """
+        # Phase 10.1：只有"有效视觉判定"才产生观察
+        if not self.is_valid_state_result(state_result):
+            self._stats.skipped += 1
+            self._stats.last_reason = "skipped: 非有效视觉观察（跳过轮 / 未确认帧 / 空状态）"
+            return None
         try:
             observation = Observation.from_state_result(
                 state_result,
@@ -218,13 +228,24 @@ class ContextBridge:
                 metadata=metadata,
             )
         except Exception as exc:  # noqa: BLE001 - 观察非法绝不影响 Runtime
-            self._stats.store_errors += 1
+            self._stats.invalid += 1
             self._stats.last_error = str(exc)
             logger.warning("观察构造失败（已隔离）: %s", exc)
             return None
 
+        before_dedup = self._store.stats.deduplicated
+        before_order = self._store.stats.out_of_order
         stored = self._store.append(observation)
         if stored is None:
+            # 区分"被一致性保护拒绝"与"写入失败"（Phase 10.1）
+            if self._store.stats.deduplicated > before_dedup:
+                self._stats.deduplicated += 1
+                self._stats.last_reason = f"deduplicated: {observation.describe()}"
+                return None
+            if self._store.stats.out_of_order > before_order:
+                self._stats.out_of_order += 1
+                self._stats.last_reason = f"out_of_order: {observation.describe()}"
+                return None
             self._stats.store_errors += 1
             self._stats.last_error = self._store.stats.last_error
             return None
@@ -246,6 +267,57 @@ class ContextBridge:
                 logger.warning("决策上下文更新失败: %s", exc)
                 raise
         return observation
+
+    @staticmethod
+    def is_valid_state_result(state_result: Any) -> bool:
+        """判断输入是否为**有效视觉观察**（Phase 10.1）。
+
+        拒绝（不产生观察）：
+
+        * ``None`` / 空值 → 跳过轮、capture 失败轮（Runtime 已保证不传，但此处兜底）；
+        * 状态名为空串 → 没有状态结论；
+        * ``is_confirmed is False`` → 稳定化**未确认**的帧（不能伪装成有效观察）；
+        * ``stable`` 标记为假且带 ``support_frames``（= 稳定化结果但未确认）。
+
+        接受（产生观察）：带有明确状态名的判定结果，**包括** ``unknown``
+        （真 unknown 是真实语义，processor 失败 / 认不出画面都应如实记录）。
+
+        Args:
+            state_result: 状态结果 / 字段视图 / 字符串。
+
+        Returns:
+            ``True`` 表示可以产生观察。
+        """
+        if state_result is None:
+            return False
+        if isinstance(state_result, str):
+            return bool(state_result.strip())
+        state = None
+        for name in ("state_name", "state", "raw_state"):
+            if isinstance(state_result, Mapping):
+                if name in state_result:
+                    state = state_result[name]
+                    break
+                continue
+            if hasattr(state_result, name):
+                state = getattr(state_result, name)
+                break
+        state_text = str(getattr(state, "value", state) or "").strip()
+        if not state_text:
+            return False
+        confirmed = None
+        for name in ("is_confirmed", "confirmed"):
+            if isinstance(state_result, Mapping):
+                if name in state_result:
+                    confirmed = state_result[name]
+                    break
+                continue
+            if hasattr(state_result, name):
+                confirmed = getattr(state_result, name)
+                break
+        if confirmed is False:
+            return False
+        return True
 
     def apply_context(self, observation: Observation, *, change: StateChangeEvent | None = None) -> str:
         """把一条观察写入决策上下文（失败向上抛，供引擎判定任务失败）。

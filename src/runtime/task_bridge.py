@@ -219,6 +219,8 @@ class TaskRuntimeBridge:
         if self._context_bridge is None and observation_store is not None:
             self._context_bridge = ContextBridge(store=observation_store)
         self._cycle_id = 0
+        # Phase 10.1：复用 Runtime 的 cycle_id（来自 CycleSchedule），不另建互不关联的计数器
+        self._runtime_cycle: int = 0
         self._records: dict[str, TaskRunRecord] = {}
         self._started_instances: set[str] = set()
         self._stats = TaskBridgeStats()
@@ -268,6 +270,11 @@ class TaskRuntimeBridge:
         if self._context_bridge is None:
             return None
         return self._context_bridge.context
+
+    @property
+    def runtime_cycle(self) -> int:
+        """最近一次 Runtime 节拍号（Phase 10.1；与观察 ``cycle_id`` 同口径）。"""
+        return self._runtime_cycle
 
     @property
     def observations(self) -> Any:
@@ -358,6 +365,7 @@ class TaskRuntimeBridge:
             当前任务的运行记录（无运行时为 ``None``）。
         """
         self._stats.cycles += 1
+        self._remember_runtime_cycle(cycle_schedule)
         if self._scheduler is not None:
             try:
                 self._scheduler.on_cycle(cycle_schedule)
@@ -454,34 +462,52 @@ class TaskRuntimeBridge:
         if self._context_bridge is None:
             return
         self._cycle_id += 1
+        cycle_id = self._runtime_cycle or self._cycle_id
         try:
             self._context_bridge.observe(
                 state_result,
-                cycle_id=self._cycle_id,
+                cycle_id=cycle_id,
                 source="runtime",
                 timestamp=_now_iso(),
             )
         except ContextUpdateError as exc:
+            # Phase 10.1：共享观察视图更新失败**不归因于任何实例**——
+            # 记错误并跳过本轮；实例私有上下文的失败由调度器按实例终结（见 _fail_active）。
             self._stats.errors += 1
             self._stats.last_error = str(exc)
-            logger.error("决策上下文更新失败 → 任务置为失败: %s", exc)
-            self._fail_active(f"context update failed: {exc}")
+            logger.error("共享观察上下文更新失败（本轮跳过，不影响实例）: %s", exc)
         except Exception as exc:  # noqa: BLE001 - 绝不影响 Runtime 主循环
             self._stats.errors += 1
             self._stats.last_error = str(exc)
             logger.warning("观察写入失败（已隔离）: %s", exc)
 
-    def _fail_active(self, reason: str) -> None:
-        """把当前活动任务置为失败（调度模式作用于运行中的实例）。"""
+    def _remember_runtime_cycle(self, cycle_schedule: Any) -> None:
+        """缓存 Runtime 本轮节拍号（Phase 10.1；复用 ``CycleSchedule.cycle_id``）。"""
+        if cycle_schedule is None:
+            return
+        value = _read(cycle_schedule, "cycle_id", "cycle", "index", default=None)
+        if value is None:
+            return
         try:
-            if self._scheduler is None:
-                self._engine.fail(reason=reason)
-                return
-            for instance in list(self._scheduler.active_tasks):
-                engine = getattr(instance, "engine", None)
-                if engine is None:
-                    continue
-                engine.fail(reason=reason)
+            self._runtime_cycle = int(value)
+        except (TypeError, ValueError):
+            return
+
+    def _fail_active(self, reason: str) -> None:
+        """把**当前单实例模式**的任务置为失败。
+
+        Phase 10.1：调度模式下**不再**由桥终结实例——多个 TaskInstance 时无法归因
+        （会错误终结其它任务）。实例级失败由 :class:`~src.task.scheduler.TaskScheduler`
+        在处理"该实例的私有上下文失败"时单独处置（``_fail_instance``）。
+
+        Args:
+            reason: 失败原因。
+        """
+        if self._scheduler is not None:
+            logger.debug("调度模式：跳过桥侧的实例终结（交由调度器按实例处理）")
+            return
+        try:
+            self._engine.fail(reason=reason)
         except Exception as exc:  # noqa: BLE001
             self._stats.errors += 1
             self._stats.last_error = str(exc)

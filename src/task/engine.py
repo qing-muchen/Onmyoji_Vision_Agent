@@ -97,6 +97,18 @@ __all__ = [
 logger = get_logger("task.engine")
 
 
+def _read_request_id(outcome: Any) -> str:
+    """从动作结果字段视图读取请求标识（Phase 10.1；缺失时返回空串）。
+
+    仅按字段视图读取，**不** import ``src.action``（保持 Task 层边界）。
+    """
+    for name in ("action_id", "request_id"):
+        value = getattr(outcome, name, None)
+        if isinstance(value, str) and value:
+            return value
+    return 
+
+
 class TaskEngineError(TaskError):
     """Task Engine 运行期错误（例如谓词执行失败）。"""
 
@@ -151,6 +163,8 @@ class TaskEngine:
         # Phase 10：决策上下文（引擎**只读**该对象，并只写入动作结果与失败说明；
         # 观察记忆 ObservationStore 属 Runtime 层，引擎永不接触）
         self._decision_context: DecisionContext | None = decision_context
+        # Phase 10.1：实例标识（调度器在启动实例时注入；同一任务重跑时可区分归属）
+        self._instance_id: str = ""
         self._feedback = ActionFeedbackAdapter(decision_context)
 
         self._context: TaskContext | None = None
@@ -233,6 +247,24 @@ class TaskEngine:
         并只写入"动作结果"与"失败说明"。
         """
         return self._decision_context
+
+    @property
+    def instance_id(self) -> str:
+        """任务**实例**标识（Phase 10.1；未注入时为空串）。
+
+        归属语义：``task_id`` 表示"哪个任务"，``instance_id`` 表示"哪一次运行"，
+        用于把动作反馈准确记到对应实例（避免抢占 / 重跑时互相覆盖）。
+        """
+        return self._instance_id
+
+    def set_instance_id(self, instance_id: str) -> None:
+        """注入实例标识（Phase 10.1；由调度器在启动实例时调用）。
+
+        Args:
+            instance_id: 实例标识（空串表示未归属）。
+        """
+        self._instance_id = str(instance_id)
+        self._feedback.set_instance_id(self._instance_id)
 
     @property
     def feedback_adapter(self) -> ActionFeedbackAdapter:
@@ -740,6 +772,7 @@ class TaskEngine:
                 target=str((action.target or {}).get("element", "")),
                 step_id=machine.current_state_name or "",
                 attempt=1,
+                action_id=getattr(request, "action_id", "") or "",
             ):
                 return
             self._emit(
@@ -1005,6 +1038,7 @@ class TaskEngine:
                 target="",
                 step_id=step.step_id,
                 attempt=self._attempts,
+                action_id=getattr(request, "action_id", "") or "",
             ):
                 return
             self._emit(
@@ -1127,8 +1161,9 @@ class TaskEngine:
         target: str = "",
         step_id: str = "",
         attempt: int = 1,
+        action_id: str = "",
     ) -> bool:
-        """把动作结果写入决策上下文（Phase 10）。
+        """把动作结果写入决策上下文（Phase 10 / 10.1）。
 
         上下文写入失败 ⇒ 按用户要求把任务置为 ``FAILED``，并返回 ``False``
         （调用方应立即停止本轮动作派发）。
@@ -1136,7 +1171,8 @@ class TaskEngine:
         Args:
             context: 任务上下文。
             outcome: ``ActionOutcome``（按字段视图读取，**不** import ``src.action``）。
-            kind / target / step_id / attempt: 记录补充字段。
+            kind / target / step_id / attempt / action_id: 记录补充字段
+                （``action_id`` 来自 ``ActionRequest``，用于把反馈追溯回请求）。
 
         Returns:
             ``True`` = 已记录（或未注入上下文）；``False`` = 上下文更新失败。
@@ -1149,8 +1185,11 @@ class TaskEngine:
                 kind=kind,
                 target=target,
                 task_id=context.task.task_id,
+                instance_id=self._instance_id,
                 step_id=step_id,
+                action_id=action_id or _read_request_id(outcome),
                 cycle_id=context.cycles,
+                runtime_cycle_id=self._decision_context.cycle_id,
                 timestamp=self._now(),
                 attempt=attempt,
             )

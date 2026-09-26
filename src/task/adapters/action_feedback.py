@@ -1,4 +1,4 @@
-"""动作结果反馈转换（Phase 10）：``ActionFeedbackAdapter``。
+"""动作结果反馈转换（Phase 10 / 10.1）：``ActionFeedbackAdapter``。
 
 ```text
 ActionOutcome（Action 层对象，**按字段视图读取**）
@@ -30,10 +30,19 @@ from typing import Any
 
 from src.task.context import ActionRecord, ContextUpdateError, DecisionContext
 
-__all__ = ["ACTION_SUCCESS_STATUSES", "ACTION_FAILURE_STATUSES", "ActionFeedbackAdapter"]
+__all__ = [
+    "ACTION_DRY_RUN_STATUSES",
+    "ACTION_FAILURE_STATUSES",
+    "ACTION_SUCCESS_STATUSES",
+    "ActionFeedbackAdapter",
+]
 
-#: 视为"成功"的动作状态（``skipped`` = 无需输入 / dry-run，不算失败）
+#: 视为"请求被接受"的动作状态（``skipped`` = 无需输入 / dry-run，不算失败，
+#: 但**不代表**游戏界面已经响应——见 :attr:`ActionRecord.dry_run`）
 ACTION_SUCCESS_STATUSES: frozenset[str] = frozenset({"executed", "skipped"})
+
+#: 明确"没有产生真实输入"的状态（dry-run 语义，Phase 10.1）
+ACTION_DRY_RUN_STATUSES: frozenset[str] = frozenset({"skipped"})
 
 #: 视为"失败"的动作状态（``rejected`` = 被门控拒绝；``failed`` = 执行期失败）
 ACTION_FAILURE_STATUSES: frozenset[str] = frozenset({"rejected", "failed"})
@@ -64,6 +73,8 @@ class ActionFeedbackAdapter:
         context: 目标决策上下文（省略时只做转换，不写入）。
         task_id: 缺省任务标识（结果未携带时使用）。
         step_id: 缺省步骤标识（结果未携带时使用）。
+        instance_id: 缺省实例标识（Phase 10.1：同一任务重跑时区分实例，
+            由 :class:`~src.task.scheduler.scheduler.TaskScheduler` 在启动实例时注入）。
 
     Notes:
         ``to_record()`` 幂等且无副作用；``record()`` 会写入上下文并更新统计。
@@ -77,15 +88,30 @@ class ActionFeedbackAdapter:
         *,
         task_id: str = "",
         step_id: str = "",
+        instance_id: str = "",
     ) -> None:
         self._context = context
         self._task_id = str(task_id)
         self._step_id = str(step_id)
+        self._instance_id = str(instance_id)
 
     @property
     def context(self) -> DecisionContext | None:
         """目标决策上下文（未绑定时 ``None``）。"""
         return self._context
+
+    @property
+    def instance_id(self) -> str:
+        """缺省实例标识（Phase 10.1）。"""
+        return self._instance_id
+
+    def set_instance_id(self, instance_id: str) -> None:
+        """设置缺省实例标识（调度器启动实例时调用）。
+
+        Args:
+            instance_id: 实例标识（空串表示未归属）。
+        """
+        self._instance_id = str(instance_id)
 
     def bind(self, context: DecisionContext | None) -> ActionFeedbackAdapter:
         """绑定 / 解绑目标上下文（返回自身便于链式调用）。
@@ -103,6 +129,24 @@ class ActionFeedbackAdapter:
     def status_of(outcome: Any) -> str:
         """读取动作状态字符串（枚举归一）。"""
         return _text(_read(outcome, "status", default=""))
+
+    @classmethod
+    def is_dry_run(cls, outcome: Any) -> bool:
+        """判断动作结果是否**没有产生真实输入**（Phase 10.1 的 dry-run 语义）。
+
+        规则：显式 ``dry_run`` / ``skip_input`` 属性优先；否则按 ``status == skipped``
+        判定（dry-run 后端与"无需输入"都会返回 ``skipped``）。
+
+        Args:
+            outcome: ``ActionOutcome`` 或字段视图。
+
+        Returns:
+            ``True`` 表示未产生真实输入。
+        """
+        explicit = _read(outcome, "dry_run", "skip_input", default=None)
+        if isinstance(explicit, bool):
+            return explicit
+        return cls.status_of(outcome).casefold() in ACTION_DRY_RUN_STATUSES
 
     @classmethod
     def is_failure(cls, outcome: Any) -> bool:
@@ -134,8 +178,11 @@ class ActionFeedbackAdapter:
         kind: str = "",
         target: str = "",
         task_id: str = "",
+        instance_id: str = "",
         step_id: str = "",
+        action_id: str = "",
         cycle_id: int = 0,
+        runtime_cycle_id: int = 0,
         timestamp: str = "",
         attempt: int | None = None,
     ) -> ActionRecord:
@@ -145,8 +192,10 @@ class ActionFeedbackAdapter:
             outcome: ``ActionOutcome`` 或字段视图。
             kind: 动作类型（结果未携带时使用）。
             target: 语义目标名（结果未携带时使用）。
-            task_id / step_id: 覆盖值（缺省用构造参数）。
-            cycle_id: 节拍号。
+            task_id / instance_id / step_id / action_id: 覆盖值（缺省用构造参数 /
+                结果字段视图）。
+            cycle_id: 任务节拍号（``TaskContext.cycles``）。
+            runtime_cycle_id: 运行时节拍号（与观察 ``cycle_id`` 同口径）。
             timestamp: 时间戳。
             attempt: 尝试次数（``None`` 表示从结果读取）。
 
@@ -163,12 +212,22 @@ class ActionFeedbackAdapter:
             target=str(target or target_value or ""),
             status=status,
             ok=not self.is_failure(outcome),
+            dry_run=self.is_dry_run(outcome),
             reason=str(_read(outcome, "reason", "message", default="") or ""),
             latency_ms=float(_read(outcome, "latency_ms", default=0.0) or 0.0),
             attempt=int(attempt if attempt is not None else (raw_attempt or 1)),
-            task_id=str(task_id or self._task_id),
-            step_id=str(step_id or self._step_id),
+            task_id=str(task_id or _read(outcome, "task_id", default="") or self._task_id),
+            instance_id=str(
+                instance_id
+                or _read(outcome, "instance_id", default="")
+                or self._instance_id
+            ),
+            step_id=str(step_id or _read(outcome, "step_id", default="") or self._step_id),
+            action_id=str(
+                action_id or _read(outcome, "action_id", "request_id", default="") or ""
+            ),
             cycle_id=int(cycle_id or 0),
+            runtime_cycle_id=int(runtime_cycle_id or 0),
             timestamp=str(timestamp or ""),
         )
 
@@ -179,8 +238,11 @@ class ActionFeedbackAdapter:
         kind: str = "",
         target: str = "",
         task_id: str = "",
+        instance_id: str = "",
         step_id: str = "",
+        action_id: str = "",
         cycle_id: int = 0,
+        runtime_cycle_id: int = 0,
         timestamp: str = "",
         attempt: int | None = None,
     ) -> ActionRecord:
@@ -188,7 +250,8 @@ class ActionFeedbackAdapter:
 
         Args:
             outcome: ``ActionOutcome`` 或字段视图。
-            kind / target / task_id / step_id / cycle_id / timestamp / attempt: 同 :meth:`to_record`。
+            kind / target / task_id / instance_id / step_id / action_id / cycle_id /
+                runtime_cycle_id / timestamp / attempt: 同 :meth:`to_record`。
 
         Returns:
             写入的记录。
@@ -201,8 +264,11 @@ class ActionFeedbackAdapter:
             kind=kind,
             target=target,
             task_id=task_id,
+            instance_id=instance_id,
             step_id=step_id,
+            action_id=action_id,
             cycle_id=cycle_id,
+            runtime_cycle_id=runtime_cycle_id,
             timestamp=timestamp,
             attempt=attempt,
         )
@@ -217,7 +283,8 @@ class ActionFeedbackAdapter:
         """返回可读描述。"""
         return (
             f"ActionFeedbackAdapter(task={self._task_id or '-'}, "
-            f"step={self._step_id or '-'}, bound={self._context is not None})"
+            f"instance={self._instance_id or '-'}, step={self._step_id or '-'}, "
+            f"bound={self._context is not None})"
         )
 
     def __repr__(self) -> str:
