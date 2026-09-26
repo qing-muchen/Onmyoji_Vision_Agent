@@ -70,6 +70,10 @@ from src.runtime.state_monitor.runtime_diagnostics import (
     RuntimeDiagnostics,
     RuntimeHealth,
 )
+from src.runtime.vision_bridge import (  # Phase 11.1：快照失效原因（同层常量）
+    INVALIDATION_RUNTIME_STOPPED,
+    INVALIDATION_WINDOW_UNAVAILABLE,
+)
 from src.runtime.state_monitor.runtime_lifecycle import (
     LifecycleTransition,
     RuntimeLifecycle,
@@ -833,6 +837,32 @@ class StateMonitor:
         except Exception as exc:  # noqa: BLE001 - 桥的异常绝不影响主循环
             logger.error("推送视觉快照失败（已隔离，不影响监控循环）: %s", exc)
 
+    def _invalidate_vision_snapshot(self, reason: str) -> None:
+        """**主动失效**视觉快照（Phase 11.1）。
+
+        用于"画面结论不再可信"的场景（暂停 / Runtime 停止）——此前只有 capture 失败
+        （``frame=None``）会触发失效，暂停与结束路径会留下**仍然有效**的旧快照。
+
+        Args:
+            reason: 失效原因（见 :mod:`src.runtime.vision_bridge` 的 ``INVALIDATION_*``）。
+        """
+        bridge = self._vision_bridge
+        if bridge is None:
+            return
+        invalidate = getattr(bridge, "invalidate", None)
+        if not callable(invalidate):
+            return
+        try:
+            invalidate(reason=reason, frame_id=self._cycles)
+        except TypeError:
+            # 兼容仅有 ``invalidate(reason)`` 的桥实现
+            try:
+                invalidate(reason)
+            except Exception as exc:  # noqa: BLE001 - 绝不影响主循环
+                logger.error("失效视觉快照失败（已隔离）: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - 桥的异常绝不影响主循环
+            logger.error("失效视觉快照失败（已隔离）: %s", exc)
+
     def _notify_task_bridge(
         self, *, stable: StableStateResult | None, schedule: CycleSchedule
     ) -> None:
@@ -970,6 +1000,10 @@ class StateMonitor:
                     # 暂停：保持节拍，但**不处理新帧**（不计轮次、不判定、不写指标）
                     paused_started = self._scheduler.begin()
                     self._scheduler.finish(paused_started)
+                    if self._paused_cycles == 0:
+                        # Phase 11.1：进入暂停的**首个**轮次立即失效视觉快照——
+                        # 暂停期间画面不可信（不再更新），旧目标不应继续可用。
+                        self._invalidate_vision_snapshot(INVALIDATION_WINDOW_UNAVAILABLE)
                     logger.debug("已暂停，本轮不处理新帧（累计暂停轮次 %d）", self._paused_cycles + 1)
                     self._paused_cycles += 1
                     continue
@@ -1044,6 +1078,8 @@ class StateMonitor:
             stop_reason = StopReason.INTERRUPT
             logger.warning("收到中断信号（Ctrl+C），正在收尾并保存历史")
 
+        # Phase 11.1：本轮监控结束 ⇒ 快照失效（停止后画面结论不再可信）
+        self._invalidate_vision_snapshot(INVALIDATION_RUNTIME_STOPPED)
         ended_at = self._now()
         self._history.update_progress(cycles=self._cycles, skipped=self._skipped, timestamp=ended_at)
         self._history.save()

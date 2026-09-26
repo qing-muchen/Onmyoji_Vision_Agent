@@ -75,6 +75,9 @@ class TaskScheduler:
         history_limit: 历史实例保留上限（0 = 不限制）。
         allow_rerun_completed: 完成的实例是否允许再次 ``submit``（默认 ``False``：
             重复提交返回已有实例）。
+        watchdog_timeout_s: **看门狗**超时（秒；``0`` 或负数 = 关闭，默认关闭）。
+            语义：``RUNNING`` 实例连续超过该时长**既未推进也未终结** ⇒ 判定挂起，
+            强制置为 ``FAILED(reason="watchdog timeout")`` 并释放资源（Phase 11.1）。
 
     Raises:
         TaskDefinitionError: ``max_concurrent < 1`` 或 ``engine_factory`` 非法。
@@ -98,6 +101,7 @@ class TaskScheduler:
         context_provider: Callable[[], DecisionContext | None] | None = None,
         context_factory: Callable[[str], DecisionContext] | None = None,
         closed_context_limit: int = 20,
+        watchdog_timeout_s: float = 0.0,
     ) -> None:
         if int(max_concurrent) < 1:
             raise TaskDefinitionError(f"max_concurrent 必须 >= 1（当前 {max_concurrent}）")
@@ -132,6 +136,7 @@ class TaskScheduler:
         self._context_provider = context_provider
         self._context_factory = context_factory
         self._closed_context_limit = max(0, int(closed_context_limit))
+        self._watchdog_timeout_s = float(watchdog_timeout_s)
         self._instance_contexts: dict[str, DecisionContext] = {}
         self._closed_contexts: dict[str, DecisionContext] = OrderedDict()
         self._instances: dict[str, TaskInstance] = {}
@@ -165,6 +170,20 @@ class TaskScheduler:
         实例的 ``last_action`` / ``last_error`` / ``task_variables`` **始终私有**。
         """
         return self._context_provider
+
+    @property
+    def watchdog_timeout_s(self) -> float:
+        """看门狗超时（秒；``<= 0`` 表示关闭）。"""
+        return self._watchdog_timeout_s
+
+    def set_watchdog_timeout(self, timeout_s: float) -> None:
+        """运行时调整看门狗超时（``<= 0`` 关闭）。
+
+        Args:
+            timeout_s: 超时秒数。
+        """
+        self._watchdog_timeout_s = float(timeout_s)
+        logger.debug("看门狗超时已设为 %ss", self._watchdog_timeout_s)
 
     @property
     def context_factory(self) -> Callable[[str], DecisionContext] | None:
@@ -282,6 +301,7 @@ class TaskScheduler:
             f"running={len(self._running())}, queued={len(self._queued())}, "
             f"paused={len(self._paused())}, history={len(self._history)}, "
             f"contexts={len(self._instance_contexts)}+{len(self._closed_contexts)}, "
+            f"watchdog={self._watchdog_timeout_s:g}s, "
             f"{self._stats.describe()})"
         )
 
@@ -440,6 +460,7 @@ class TaskScheduler:
             self._schedule(tick)
             self._feed(state_result, tick)
             self._reap(tick)
+            self._check_watchdog(tick)
         except Exception as exc:  # noqa: BLE001 - 绝不影响 Runtime 主循环
             tick.errors += 1
             self._record_error("调度失败（已隔离）", exc)
@@ -470,6 +491,7 @@ class TaskScheduler:
                     self._record_error(f"实例节拍失败: {instance.instance_id}", exc)
             self._reap(tick)
             self._schedule(tick)
+            self._check_watchdog(tick)
         except Exception as exc:  # noqa: BLE001 - 绝不影响 Runtime 主循环
             tick.errors += 1
             self._record_error("调度节拍失败（已隔离）", exc)
@@ -717,6 +739,7 @@ class TaskScheduler:
         instance.engine.set_instance_id(instance.instance_id)
         instance.engine.start(definition)
         instance.mark_running(at=self._now(), reason=reason)
+        instance.watchdog_armed_at = float(self._clock())
         self._stats.started += 1
         self._stats.last_instance_id = instance.instance_id
         self._stats.last_reason = reason
@@ -759,6 +782,7 @@ class TaskScheduler:
             self._record_error(f"恢复实例失败: {instance.instance_id}", exc)
             return False
         instance.mark_running(at=self._now(), reason=reason)
+        instance.watchdog_armed_at = float(self._clock())
         self._stats.resumed += 1
         self._stats.last_instance_id = instance.instance_id
         self._stats.last_reason = reason
@@ -775,6 +799,7 @@ class TaskScheduler:
                 result = instance.engine.result
                 if result is not None:
                     instance.cycles = result.cycles
+                instance.watchdog_armed_at = float(self._clock())
                 tick.advanced += 1
             except Exception as exc:  # noqa: BLE001 - 单实例异常不影响其它任务
                 tick.errors += 1
@@ -856,6 +881,50 @@ class TaskScheduler:
         ):
             self._closed_contexts.popitem(last=False)
 
+    def _check_watchdog(self, tick: SchedulerTick) -> None:
+        """看门狗：把长时间"既不推进也不终结"的运行实例判定为挂起（Phase 11.1）。
+
+        判据：``RUNNING`` 且 ``now - watchdog_armed_at > watchdog_timeout_s``。
+        ``watchdog_armed_at`` 在实例启动 / 恢复 / **每轮成功推进**时刷新，
+        因此只有真正的"卡住"（引擎既不终结也不前进）才会超时。
+
+        Args:
+            tick: 本轮决策摘要（累加 ``watchdog_kills`` / ``failed``）。
+        """
+        if self._watchdog_timeout_s <= 0:
+            return
+        now = float(self._clock())
+        for instance in list(self._running()):
+            armed = float(instance.watchdog_armed_at or 0.0)
+            if not armed:
+                instance.watchdog_armed_at = now
+                continue
+            idle = now - armed
+            if idle <= self._watchdog_timeout_s:
+                continue
+            logger.warning(
+                "看门狗超时：实例 %s 已 %.1fs 无推进（阈值 %.1fs）→ 强制失败",
+                instance.instance_id,
+                idle,
+                self._watchdog_timeout_s,
+            )
+            self._stats.watchdog_kills += 1
+            tick.watchdog_kills += 1
+            tick.failed += 1
+            reason = (
+                f"watchdog timeout（{idle:.1f}s 无推进，"
+                f"阈值 {self._watchdog_timeout_s:.1f}s）"
+            )
+            self._fail_instance(instance, reason=reason)
+            # 立即收割：本轮的 kill 不必等到下一轮 _reap，
+            # 这样实例状态、资源锁与统计在同一轮内落定（避免滞留 RUNNING）。
+            self._finish(
+                instance,
+                TaskInstanceStatus.FAILED,
+                reason=reason,
+                error=reason,
+            )
+
     def _record_error(self, message: str, exc: BaseException) -> None:
         """统一记录调度异常（隔离，不抛出）。"""
         self._stats.errors += 1
@@ -885,6 +954,8 @@ class TaskScheduler:
         kwargs.setdefault("policy", config.policy())
         kwargs.setdefault("default_resources", config.resources)
         kwargs.setdefault("history_limit", config.history_limit)
+        if config.watchdog_timeout_s:
+            kwargs.setdefault("watchdog_timeout_s", config.watchdog_timeout_s)
         return cls(registry, **kwargs)
 
 

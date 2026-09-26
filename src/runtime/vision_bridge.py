@@ -45,6 +45,7 @@ from src.vision.pipeline.target_adapter import VisionTargetAdapter
 __all__ = [
     "INVALIDATION_NO_FRAME",
     "INVALIDATION_REASONS",
+    "INVALIDATION_RUNTIME_STOPPED",
     "INVALIDATION_WINDOW_UNAVAILABLE",
     "VisionBridgeStats",
     "VisionSnapshotBridge",
@@ -63,9 +64,11 @@ def _local_now_iso() -> str:
 #: 不把不同情况统一伪装成 ``target_not_found``（后者是 Action 侧对"目标不在快照中"的结论）。
 INVALIDATION_NO_FRAME: str = "no_frame"
 INVALIDATION_WINDOW_UNAVAILABLE: str = "window_unavailable"
+INVALIDATION_RUNTIME_STOPPED: str = "runtime_stopped"
 INVALIDATION_REASONS: tuple[str, ...] = (
     INVALIDATION_NO_FRAME,
     INVALIDATION_WINDOW_UNAVAILABLE,
+    INVALIDATION_RUNTIME_STOPPED,
 )
 
 
@@ -304,6 +307,7 @@ class VisionSnapshotBridge:
         | --- | --- | --- |
         | 没有新帧（capture 失败） | :meth:`update` ``frame=None`` | ``no_frame`` |
         | 窗口当前不可操作（失焦 / 最小化 / 暂停） | Runtime 调用本方法 | ``window_unavailable`` |
+        | Runtime 已停止（本轮结束 / 主动停止） | Runtime 调用本方法 | ``runtime_stopped`` |
         | 快照过期 | resolver 侧 TTL 判定 | ``target_expired``（Action 侧） |
         | 快照乱序 | resolver 拒收更旧 ``frame_id`` | ``rejected_stale``（本桥统计） |
 

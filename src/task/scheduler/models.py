@@ -240,6 +240,8 @@ class TaskInstance:
     last_error: str = ""
     preempted_by: str = ""
     cycles: int = 0
+    #: 看门狗计时基准（单调时钟秒；启动 / 恢复 / 每轮成功推进时刷新；Phase 11.1）
+    watchdog_armed_at: float = 0.0
 
     def __post_init__(self) -> None:
         identity = str(self.instance_id).strip()
@@ -362,6 +364,7 @@ class TaskInstance:
             "last_error": self.last_error,
             "preempted_by": self.preempted_by,
             "cycles": self.cycles,
+            "watchdog_armed_at": round(float(self.watchdog_armed_at), 3),
             "current_state": self.current_state,
         }
 
@@ -389,6 +392,8 @@ class SchedulerTick:
     failed: int = 0
     cancelled: int = 0
     lock_conflicts: int = 0
+    #: 看门狗强制失败的实例数（Phase 11.1）
+    watchdog_kills: int = 0
     errors: int = 0
     reason: str = ""
 
@@ -410,6 +415,7 @@ class SchedulerTick:
             "failed": self.failed,
             "cancelled": self.cancelled,
             "lock_conflicts": self.lock_conflicts,
+            "watchdog_kills": self.watchdog_kills,
             "errors": self.errors,
             "reason": self.reason,
         }
@@ -420,7 +426,8 @@ class SchedulerTick:
             f"SchedulerTick(started={self.started}, resumed={self.resumed}, "
             f"preempted={self.preempted}, advanced={self.advanced}, "
             f"completed={self.completed}, failed={self.failed}, cancelled={self.cancelled}, "
-            f"lock_conflicts={self.lock_conflicts}, errors={self.errors})"
+            f"lock_conflicts={self.lock_conflicts}, "
+            f"watchdog_kills={self.watchdog_kills}, errors={self.errors})"
         )
 
 
@@ -440,6 +447,8 @@ class SchedulerStats:
     completed: int = 0
     failed: int = 0
     lock_conflicts: int = 0
+    #: 被看门狗强制失败的实例数（Phase 11.1）
+    watchdog_kills: int = 0
     errors: int = 0
     last_instance_id: str = ""
     last_reason: str = ""
@@ -458,6 +467,7 @@ class SchedulerStats:
         """返回可读描述。"""
         return (
             f"ticks={self.ticks} submits={self.submits} started={self.started} "
+            f"watchdog={self.watchdog_kills} "
             f"preempted={self.preempted} resumed={self.resumed} completed={self.completed} "
             f"failed={self.failed} errors={self.errors}"
         )

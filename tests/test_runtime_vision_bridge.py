@@ -548,10 +548,14 @@ def test_monitor_publishes_snapshot_every_cycle(tmp_path: Path) -> None:
 
     assert report.cycles == 2
     assert bridge.stats.updates == 2
-    assert bridge.stats.published == 2
+    # Phase 11.1：run() 结束时再失效一次（画面结论不再可信）→ 每轮 2 次 + 结束 1 次
+    assert bridge.stats.published == 3
+    assert bridge.stats.invalidated == 1
+    assert bridge.stats.last_reason == "runtime_stopped"
     assert resolver.snapshot is not None
+    # 结束时的失效快照沿用最后一轮帧号（frame_id 只增不减）
     assert resolver.snapshot.frame_id == monitor.cycles == 2
-    assert resolver.resolve(SemanticTarget.from_name("battle_auto_button")) is not None
+    assert resolver.snapshot.count == 0  # 已失效：不再保留可点击目标
 
 
 def test_monitor_without_bridge_behaviour_unchanged(tmp_path: Path) -> None:
@@ -609,8 +613,9 @@ def test_monitor_capture_failure_skips_publish(tmp_path: Path) -> None:
 
     assert bridge.stats.updates == 2
     assert bridge.stats.no_frame == 1
-    assert bridge.stats.invalidated == 1  # Phase 11.0：无帧轮会主动失效
-    assert bridge.stats.published == 2  # 有效帧 + 失效快照各一次
+    # Phase 11.0 无帧轮失效 + Phase 11.1 run() 结束失效
+    assert bridge.stats.invalidated == 2
+    assert bridge.stats.published == 3  # 有效帧 + 无帧失效 + 结束失效
     assert resolver.snapshot is not None and resolver.snapshot.count == 0
 
 

@@ -26,6 +26,7 @@ tasks:
   auto_battle:  {priority: 50}
   recover:      {priority: 100}
 resources: [GAME_WINDOW]
+watchdog_timeout_s: 30      # 看门狗（0 = 关闭）；RUNNING 实例超时无推进 → FAILED
 ```
 
 依赖边界（AST 用例固化）：**禁止** import `src.vision` / `src.action` / `src.runtime` / `cv2` / `numpy`。
@@ -77,6 +78,7 @@ SCHEDULER_CONFIG_FIELDS: frozenset[str] = frozenset(
         "tasks",
         "resources",
         "history_limit",
+        "watchdog_timeout_s",
     }
 )
 
@@ -203,6 +205,7 @@ class SchedulerConfig:
         preemption: 是否允许抢占（默认 ``True``）。
         resources: 默认资源集合（默认 ``["GAME_WINDOW"]``）。
         history_limit: 历史实例保留条数（0 表示不限制）。
+        watchdog_timeout_s: 看门狗超时（秒；``0`` = 关闭，默认关闭；Phase 11.1）。
         source_path: 来源文件（审计）。
     """
 
@@ -212,6 +215,7 @@ class SchedulerConfig:
     preemption: bool = True
     resources: tuple[str, ...] = (DEFAULT_RESOURCE,)
     history_limit: int = 0
+    watchdog_timeout_s: float = 0.0
     source_path: str | None = None
 
     def __post_init__(self) -> None:
@@ -224,6 +228,9 @@ class SchedulerConfig:
         self.resources = tuple(dict.fromkeys(str(item) for item in self.resources))
         if not self.resources:
             raise TaskDefinitionError("resources 不能为空（至少需要一个默认资源）")
+        self.watchdog_timeout_s = float(self.watchdog_timeout_s)
+        if self.watchdog_timeout_s < 0:
+            raise TaskDefinitionError("watchdog_timeout_s 不能为负")
 
     def policy(self) -> PriorityPolicy:
         """构造对应的优先级策略。"""
@@ -241,6 +248,7 @@ class SchedulerConfig:
             "preemption": self.preemption,
             "resources": list(self.resources),
             "history_limit": self.history_limit,
+            "watchdog_timeout_s": self.watchdog_timeout_s,
             "tasks": {
                 task_id: {"priority": value}
                 for task_id, value in sorted(dict(self.priorities).items())
@@ -253,7 +261,8 @@ class SchedulerConfig:
         return (
             f"SchedulerConfig(max_concurrent={self.max_concurrent}, "
             f"default_priority={self.default_priority}, preemption={self.preemption}, "
-            f"resources={list(self.resources)}, tasks={len(self.priorities)})"
+            f"resources={list(self.resources)}, tasks={len(self.priorities)}, "
+            f"watchdog={self.watchdog_timeout_s:g}s)"
         )
 
 
@@ -324,6 +333,7 @@ def scheduler_config_from_mapping(
         preemption=bool(data.get("preemption", True)),
         resources=resources,
         history_limit=data.get("history_limit", 0),
+        watchdog_timeout_s=data.get("watchdog_timeout_s", 0.0),
         source_path=source_path,
     )
 

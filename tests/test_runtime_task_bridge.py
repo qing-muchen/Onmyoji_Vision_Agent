@@ -832,7 +832,10 @@ def test_end_to_end_runtime_to_action_dry_run(tmp_path: Path) -> None:
     # ① 一轮 Runtime：帧 → 证据 → 快照 → resolver；稳定状态触发任务 → 派发动作
     monitor.run(max_cycles=1)
 
-    assert vision_bridge.stats.published == 1
+    # Phase 11.1：run() 结束时快照会被失效（画面结论不再可信）→ 本轮有效推送 + 结束失效
+    assert vision_bridge.stats.published == 2
+    assert vision_bridge.stats.invalidated == 1
+    assert vision_bridge.stats.last_reason == "runtime_stopped"
     assert bridge.stats.starts == 1
     record = bridge.record("auto_battle")
     assert record is not None and record.status is TaskRunStatus.RUNNING

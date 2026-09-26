@@ -6,6 +6,7 @@
 #   preemption        是否允许高优先级抢占低优先级（默认 true）
 #   resources         默认独占资源列表（默认 [GAME_WINDOW]）
 #   history_limit     历史实例保留条数（0 = 不限制）
+#   watchdog_timeout_s 看门狗超时（秒；0 = 关闭）
 #   tasks             task_id → {priority, resources, enabled}
 #
 # 优先级规则：**数字越大优先级越高**
@@ -23,6 +24,9 @@ preemption: true
 resources:
   - GAME_WINDOW
 history_limit: 50
+# 看门狗（秒；0 = 关闭）：RUNNING 实例连续超过该时长既未推进也未终结 ⇒ 判定挂起，
+# 强制 FAILED 并释放资源（Phase 11.1）。默认 0（关闭），按实际节拍与任务时长调整。
+watchdog_timeout_s: 0
 
 tasks:
   # 后台任务：优先级最低，随时可被让位

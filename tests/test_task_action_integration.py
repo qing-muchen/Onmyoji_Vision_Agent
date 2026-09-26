@@ -574,7 +574,24 @@ def test_end_to_end_dry_run_full_chain(tmp_path: Path) -> None:
     # ① Runtime 循环：帧 → 证据 → 快照 → resolver
     monitor.run(max_cycles=1)
     assert resolver.snapshot is not None
-    assert resolver.snapshot.count == 1
+    # Phase 11.1：run() 结束会失效快照（"停止后画面结论不再可信"），因此此处为**空快照**；
+    # 下面的动作链路验证改为显式重新注入候选（模拟新一轮 Runtime 的结论）。
+    assert resolver.snapshot.count == 0
+    from src.core.vision_target import VisionTargetCandidate
+
+    resolver.update_candidates(
+        [
+            VisionTargetCandidate(
+                target_name="battle_auto_button",
+                x_ratio=0.5,
+                y_ratio=0.5,
+                confidence=0.96,
+                metadata={"element_level": True},
+            )
+        ],
+        frame_id=99,
+    )
+    assert resolver.snapshot is not None and resolver.snapshot.count == 1
 
     # ② Task：点击语义目标（Task 不知道 Vision，也不知道坐标）
     engine.start(click_task("battle_auto_button"))
