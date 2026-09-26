@@ -191,7 +191,21 @@ ROI 用**相对完整截图的百分比**表示（`x0, y0, x1, y1`），裁剪�
 }
 ```
 
-## Element-level Annotations（Phase 11.1）
+## Element-level Annotations（Phase 11.1 / 11.2）
+
+**Phase 11.2 试点**：`annotations/elements.jsonl` 现有 **8 条候选草稿**（4 张独立原图），
+全部为 `pending_review`，**经独立审核的真值为 0** ⇒ 元素级定位精度仍不可测量。
+
+```bash
+python tools/annotate.py list                      # 查看标注与统计
+python tools/annotate.py pending                   # 导出待审核清单
+python tools/annotate.py render --out <dir>        # 渲染 bbox 预览（不修改原图）
+python tools/annotate.py promote --id <id> \
+    --annotator <a> --reviewer <b> --approve       # 独立审核（自审被拒绝）
+python tools/evaluate_localization.py --generate   # 离线定位评估（无真值时输出 insufficient_data）
+```
+
+
 
 `annotations/` 保存**元素级人工标注**（`source_id` / `element_name` / `bbox` /
 `region_kind` / `visibility` / 审核状态），与 `raw/` 并存，不迁移旧数据。

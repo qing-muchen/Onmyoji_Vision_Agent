@@ -630,15 +630,23 @@ def test_repository_dataset_matches_phase_110_baseline() -> None:
     assert report["expected_count"] == report["actual_count"] == 178
 
 
-def test_historical_annotations_directory_is_empty_and_valid() -> None:
-    """仓库标注目录：当前为空 ⇒ 校验必须给出 insufficient_data（不许假装已验证）。"""
+def test_historical_annotations_have_no_verified_ground_truth() -> None:
+    """仓库标注：即便存在候选草稿，**verified 真值仍为 0** ⇒ 必须给出 insufficient_data。
+
+    Phase 11.2 起 `elements.jsonl` 里有试点候选草稿（pending_review），
+    因此这里断言的是**持久不变量**：没有经独立审核的真值就不许报告"已验证"。
+    """
     annotations = ROOT / "dataset" / "annotations" / "elements.jsonl"
     if not annotations.is_file():
         pytest.skip("标注文件不存在")
     report = checker.check_annotations(annotations_path=annotations)
     assert report["ok"] is True
-    assert report["stats"]["annotations"] == 0
-    assert report["insufficient_data"] is True
+    assert report["stats"]["verified"] == 0
+    if report["stats"]["annotations"] == 0:
+        assert report["insufficient_data"] is True
+    else:
+        # 有草稿时，"无真值"由定位评估工具给出 insufficient_data（见 Phase 11.2 测试）
+        assert set(report["stats"]["by_status"]) <= {"pending_review", "labeled"}
 
 
 # ---------------------------------------------------------------------------

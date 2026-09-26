@@ -2053,7 +2053,17 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   测试 **1484 passed / 1 skipped**（+29）；`raw/` 178 张 **SHA256 未变**；
   当前元素级标注数为 **0** ⇒ 定位精度**仍未验证**（工具主动输出 `insufficient_data`）。
   详见 `docs/PHASE11_1_ELEMENT_DATASET_REPORT.md`（含补采清单与缺口）。
-- Phase 11.2：实机采集（截屏 + 元数据落盘，**零输入**）+ 元素级标注（≥100 独立原图、
-  跨分辨率 / 跨皮肤 / 会话分组）→ 在真值足够后建立可验证的定位基准；
-  近似重复检测（图像指纹）；编排可靠性（看门狗 + 公平性）、触发映射配置化、
-  `exit_actions` 与转移钩子、`drag` 语义、长期记忆。
+- Phase 11.2（**已完成：元素级标注试点与真值验证**，`feat(dataset): add element annotation
+  pilot workflow`）：新增 `tools/annotate.py`（最小标注 CLI：`add` / `list` / `pending` /
+  `promote` / `render` / `verify-sources`；写入先备份再原子替换，只写 `annotations/`，
+  **从不修改 raw**；`promote` 是唯一能产生 `verified` 的入口且**强制独立审核**）与
+  `tools/evaluate_localization.py`（IoU / 中心点误差 / 命中率；**状态分类与元素定位分开统计**；
+  预测为"模板命中框"而真值为"元素外框"时**拒绝跨语义计算**）。
+  用真实截图完成试点：**8 条候选草稿 / 4 张独立原图**，全部 `pending_review`，
+  渲染自检发现并修订了 3 条底部区域 bbox 偏差（偏高约 70px）；
+  **经独立审核的真值 = 0** ⇒ 定位评估如实输出 `insufficient_data`。
+  测试 **1505 passed / 1 skipped**（+21）；`raw/` 178 张 SHA256 未变；
+  仍**零真实输入**。详见 `docs/PHASE11_2_ANNOTATION_PILOT_REPORT.md`。
+- Phase 11.3：人工复核这 8 条草稿（独立审核 → 真值）；补登记探索界面元素并补模板；
+  补 `clickable_verified` 热区；补采（≥100 独立原图 / 跨分辨率 / 跨皮肤 / 会话登记）；
+  近似重复检测（图像指纹）；编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。

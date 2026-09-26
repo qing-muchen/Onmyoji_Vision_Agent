@@ -52,3 +52,7 @@ pytest-cache-files-*/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# 标注工具的临时/备份产物（Phase 11.2）
+dataset/annotations/*.bak
+dataset/annotations/*.tmp
