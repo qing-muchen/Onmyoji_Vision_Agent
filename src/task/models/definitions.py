@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from src.task.state_machine import TaskError, TaskState
+from src.task.state_machine.lifecycle import TaskError, TaskState
 
 __all__ = [
     "ACTION_KINDS",

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.task.models.definitions import TaskStatus
-from src.task.state_machine import TaskState
+from src.task.state_machine.lifecycle import TaskState
 
 __all__ = ["TaskResult"]
 

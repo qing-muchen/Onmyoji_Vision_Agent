@@ -36,7 +36,7 @@ from src.task.models import (
     WorkflowState,
     WorkflowTransition,
 )
-from src.task.state_machine import local_now_iso
+from src.task.state_machine.lifecycle import local_now_iso
 from src.utils.logger import get_logger
 
 __all__ = [
@@ -291,7 +291,7 @@ class StepExecutor:
                 if item.predicate(context, snapshot):
                     return item
             except Exception as exc:  # noqa: BLE001 - 谓词是用户代码
-                from src.task.state_machine import TaskError
+                from src.task.state_machine.lifecycle import TaskError
 
                 raise TaskError(f"条件执行失败（state={self.name}）: {exc}") from exc
         return None

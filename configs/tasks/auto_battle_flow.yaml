@@ -1,0 +1,83 @@
+# 状态机式流程示例（Phase 8）：State → StateMachine → Decision → Action
+#
+# schema（与 Phase 6.2 的步骤式任务不同：状态与转移表分离、支持事件驱动转移）
+#   task_id / name    流程名（必填其一）
+#   description       说明（可选）
+#   initial           初始状态名（必填）
+#   states            状态数组（必填，非空）
+#     - name              状态名（必填；不得用保留字 COMPLETE）
+#       description       说明（可选）
+#       entry_actions     进入时执行的动作（在 actions 之前）
+#       actions           进入后执行的动作（主体）
+#       exit_actions      离开前执行的动作
+#       timeout           该状态的等待窗口（秒，默认 10）→ 超时触发 timeout 事件
+#       allowed_next_states  允许转移到的状态（声明即契约：必须与转移表一致）
+#   transitions       转移数组（必填）
+#     - from / to         来源 / 目标状态（to 可用保留字 COMPLETE 表示成功结束）
+#       when / condition  条件驱动（字符串表达式或 {state: ..., value: ...} 结构化写法）
+#       event             事件驱动：timeout（等待超时）/ action_failed（动作被拒）
+#       name              转移标识（可选）
+#   budget            max_steps / timeout_s（任务时长上限）
+#   policies          on_unknown / on_runtime_failure / on_mismatch / on_step_timeout
+#
+# 硬规则：动作只用**语义目标**（element），禁止坐标字段（x / y / x_ratio / bbox / reference …）；
+#        定位由 Action 侧的 TargetResolver 决定。
+
+task_id: auto_battle_flow
+description: "示例流程：准备 → 战斗中 → 完成；点击『自动』按钮由语义目标表达"
+initial: prepare
+states:
+  - name: prepare
+    description: "点击自动战斗按钮，然后等待战斗界面"
+    actions:
+      - kind: click
+        target:
+          element: battle_auto_button
+        timeout: 2
+    timeout: 8
+    allowed_next_states: [running, recovery]
+
+  - name: running
+    description: "战斗中：只等待，不产生输入"
+    actions:
+      - kind: wait
+        timeout: 30
+    timeout: 120
+    allowed_next_states: [COMPLETE, recovery]
+
+  - name: recovery
+    description: "恢复：等待回到庭院后结束（示例中的兜底状态）"
+    timeout: 60
+    allowed_next_states: [COMPLETE]
+
+transitions:
+  - from: prepare
+    to: running
+    when: state == battle
+  - from: prepare
+    to: recovery
+    event: timeout
+  - from: prepare
+    to: recovery
+    event: action_failed
+  - from: running
+    to: COMPLETE
+    when: state == yard
+  - from: running
+    to: recovery
+    event: timeout
+  - from: running
+    to: recovery
+    event: action_failed
+  - from: recovery
+    to: COMPLETE
+    when: state == yard
+
+budget:
+  max_steps: 50
+  timeout_s: 600
+
+policies:
+  on_unknown: wait
+  on_runtime_failure: block
+  on_step_timeout: retry

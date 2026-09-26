@@ -23,7 +23,7 @@ from src.task.models.definitions import (
     TaskLike,
     TaskStatus,
 )
-from src.task.state_machine import TaskState, TaskStateMachine, local_now_iso
+from src.task.state_machine.lifecycle import TaskState, TaskStateMachine, local_now_iso
 
 __all__ = ["RuntimeSnapshot", "StateSnapshot", "TaskContext"]
 

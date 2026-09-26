@@ -228,6 +228,9 @@ class TaskRuntimeBridge:
     def on_state_stable(self, state_result: Any) -> TaskRunRecord | None:
         """处理一次"稳定状态"事件（由 ``StateMonitor`` 每帧调用）。
 
+        入口统一为 :meth:`~src.task.engine.TaskEngine.handle_state`（Phase 8）：
+        启用流程状态机时由状态机决策，否则等价于既有的 ``on_stable``。
+
         行为：运行中 → 把结果喂给引擎（决策）；空闲 → 查触发映射并启动对应任务
         （启动后**立即**喂入本帧状态，让任务当轮即可决策）。
 
@@ -243,7 +246,7 @@ class TaskRuntimeBridge:
         try:
             running = self._running_record()
             if running is not None:
-                self._engine.on_stable(state_result)
+                self._engine.handle_state(state_result)
                 self._sync(running)
                 return running
             if not state_name or state_name == "unknown":
@@ -257,7 +260,7 @@ class TaskRuntimeBridge:
             record = self._start(task_id, reason=f"state={state_name}")
             if record is None:
                 return None
-            self._engine.on_stable(state_result)
+            self._engine.handle_state(state_result)
             self._sync(record)
             return record
         except Exception as exc:  # noqa: BLE001 - 绝不影响 Runtime 主循环

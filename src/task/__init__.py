@@ -64,6 +64,9 @@ from src.task.loader import (
     TaskLoader,
     load_task,
     validate_task_document,
+    load_flow_plan,
+    load_flow_plans,
+    validate_flow_document,
 )
 from src.task.registry import (
     TaskRegistry,
@@ -97,6 +100,19 @@ from src.task.triggers import (
     trigger_registry_from_mapping,
 )
 from src.task.state_machine import (
+    EVENT_ACTION_FAILED,
+    EVENT_NONE,
+    EVENT_TIMEOUT,
+    FlowDecision,
+    FlowDecisionKind,
+    StateAction,
+    StateTransition,
+    TaskFlowPlan,
+    TaskFlowStateMachine,
+    TaskStateDefinition,
+    states_from_mapping,
+)
+from src.task.state_machine.lifecycle import (
     ALLOWED_TRANSITIONS,
     TERMINAL_TASK_STATES,
     InvalidTaskTransition,
@@ -194,4 +210,18 @@ __all__ = [
     "registry_from_mapping",
     "TaskTriggerRegistry",
     "trigger_registry_from_mapping",
+    "EVENT_ACTION_FAILED",
+    "EVENT_NONE",
+    "EVENT_TIMEOUT",
+    "FlowDecision",
+    "FlowDecisionKind",
+    "StateAction",
+    "StateTransition",
+    "TaskFlowPlan",
+    "TaskFlowStateMachine",
+    "TaskStateDefinition",
+    "load_flow_plan",
+    "load_flow_plans",
+    "states_from_mapping",
+    "validate_flow_document",
 ]

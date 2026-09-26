@@ -41,6 +41,7 @@ from src.task.hooks import (
     Predicate,
     build_predicate,
 )
+from src.task.action_adapter import TaskActionAdapter
 from src.task.models import (
     TERMINAL_STATE_NAME,
     RuntimeSnapshot,
@@ -54,7 +55,13 @@ from src.task.models import (
     TaskStatus,
     WorkflowState,
 )
-from src.task.state_machine import (
+from src.task.state_machine.models import StateAction, TaskFlowPlan
+from src.task.state_machine.state_machine import (
+    FlowDecision,
+    FlowDecisionKind,
+    TaskFlowStateMachine,
+)
+from src.task.state_machine.lifecycle import (
     InvalidTaskTransition,
     TaskError,
     TaskState,
@@ -143,6 +150,8 @@ class TaskEngine:
         self._result: TaskResult | None = None
         self._definition: TaskDefinition | None = None
         self._runner: WorkflowRunner | None = None
+        self._flow_plan: TaskFlowPlan | None = None
+        self._flow_machine: TaskFlowStateMachine | None = None
         self._phase = StepPhase.IDLE
         self._support_frames = 0
         self._attempts = 0
@@ -183,6 +192,15 @@ class TaskEngine:
         """当前步骤 / 状态的执行阶段。"""
         if self._runner is not None:
             return self._runner.phase
+        if self._flow_machine is not None:
+            status = self._flow_machine.status
+            if status == "running":
+                return StepPhase.AWAITING
+            if status == "completed":
+                return StepPhase.DONE
+            if status == "failed":
+                return StepPhase.DONE
+            return StepPhase.IDLE
         return self._phase
 
     @property
@@ -199,6 +217,23 @@ class TaskEngine:
     def estop(self) -> EStop | None:
         """紧急停止开关（未注入时为 ``None``）。"""
         return self._estop
+
+    @property
+    def flow_plan(self) -> TaskFlowPlan | None:
+        """当前流程计划（``start(TaskFlowPlan)`` 模式下存在；Phase 8）。"""
+        return self._flow_plan
+
+    @property
+    def flow_machine(self) -> TaskFlowStateMachine | None:
+        """当前流程状态机（Phase 8）。"""
+        return self._flow_machine
+
+    @property
+    def current_flow_state(self) -> str | None:
+        """流程状态机的当前状态名（非流程模式为 ``None``）。"""
+        if self._flow_machine is None:
+            return None
+        return self._flow_machine.current_state_name
 
     @property
     def current_state_name(self) -> str | None:
@@ -289,6 +324,8 @@ class TaskEngine:
             )
         if isinstance(task, TaskDefinition):
             return self._start_definition(task)
+        if isinstance(task, TaskFlowPlan):
+            return self._start_flow_plan(task)
         return self._start_task(task)
 
     def _start_task(self, task: Task) -> TaskContext:
@@ -415,6 +452,8 @@ class TaskEngine:
             return context
         if self._runner is not None:
             self._tick_workflow_timeout(context)
+        elif self._flow_machine is not None:
+            self._tick_flow_timeout(context)
         else:
             self._check_step_timeout(context)
         return context
@@ -497,10 +536,205 @@ class TaskEngine:
         self._result = None
         self._definition = None
         self._runner = None
+        self._flow_plan = None
+        self._flow_machine = None
         self._predicates.clear()
         self._reset_step_runtime(phase=StepPhase.IDLE)
 
     # ---- 决策核心 -----------------------------------------------------------
+
+    # ---- 流程状态机模式（Phase 8） -----------------------------------------
+
+    def handle_state(self, result: Any) -> TaskContext | None:
+        """状态驱动入口（Phase 8）：**流程状态机优先**，否则退化为 ``on_stable``。
+
+        行为：
+
+        1. 未启用流程状态机（``start(TaskFlowPlan)`` 之外的模式）→ 等价于 :meth:`on_stable`
+           （既有线性 / 工作流模式行为完全不变）；
+        2. 流程模式：把状态结果交给 :class:`~src.task.state_machine.state_machine.TaskFlowStateMachine`
+           —— 先派发"待执行动作"（进入状态时排队的动作），再评估转移条件；
+        3. 门控顺序与其它模式一致（E-STOP → 运行时门控 → 生命周期），异常同样被隔离为任务失败。
+
+        Args:
+            result: 状态结果（``StateResult`` / ``StableStateResult`` / ``Mapping`` / 状态名）。
+
+        Returns:
+            当前任务上下文；没有活动任务时为 ``None``。
+        """
+        machine = self._flow_machine
+        if machine is None:
+            return self.on_stable(result)
+        context = self._context
+        if context is None or context.machine.is_terminal:
+            return None
+        snapshot = StateSnapshot.from_object(result, timestamp=self._now())
+        context.observe_stable(snapshot)
+        if context.state is TaskState.PAUSED:
+            return context
+        if self._check_estop(context):
+            return context
+        if self._apply_runtime_gate(context):
+            return context
+        if context.state is not TaskState.RUNNING:
+            return context
+        try:
+            self._tick_flow(context, snapshot)
+        except TaskError as exc:
+            logger.error("流程状态机执行失败: %s", exc)
+            self._fail(context, reason=str(exc))
+        return context
+
+    def _start_flow_plan(self, plan: TaskFlowPlan) -> TaskContext:
+        """启动状态机式流程（Phase 8）：建立上下文与状态机，进入初始状态。
+
+        注意：**不在此处派发动作**——首个动作由第一轮 :meth:`handle_state` 派发，
+        与 Runtime 的"先推快照、再驱动任务"顺序保持一致（避免无快照就动作）。
+        """
+        machine = TaskFlowStateMachine(
+            plan.states,
+            plan.transitions,
+            initial_state=plan.initial,
+            clock=self._clock,
+        )
+        context = TaskContext(plan, TaskStateMachine(now=self._now), clock=self._clock, started_at=self._now())
+        machine.set_context(context)
+        self._context = context
+        self._result = None
+        self._definition = None
+        self._runner = None
+        self._flow_plan = plan
+        self._flow_machine = machine
+        self._reset_step_runtime(phase=StepPhase.PENDING, reset_retries=True)
+        self._predicates.clear()
+        self._emit(HookKind.TASK_STARTED, context, reason=plan.description or "start")
+        context.machine.mark_ready(reason="start")
+        self._emit(HookKind.TASK_READY, context, reason="ready")
+        if self._apply_runtime_gate(context):
+            return context
+        if self._check_estop(context):
+            return context
+        context.machine.start(reason="start")
+        state = machine.start()
+        self._emit(
+            HookKind.STEP_DISPATCHED,
+            context,
+            step_id=state.name,
+            reason=f"flow initial state: {state.name}",
+            detail={"actions": len(machine.next_actions())},
+        )
+        return context
+
+    def _tick_flow(self, context: TaskContext, snapshot: StateSnapshot) -> None:
+        """推进流程状态机：先派发待执行动作，再评估转移条件。"""
+        machine = self._flow_machine
+        if machine is None:
+            return
+        pending = machine.next_actions()
+        if pending:
+            self._dispatch_flow_actions(context, pending)
+            if context.machine.is_terminal:
+                return
+        decision = machine.handle_state(snapshot)
+        self._apply_flow_decision(context, decision)
+
+    def _tick_flow_timeout(self, context: TaskContext) -> None:
+        """每轮驱动：检测当前流程状态的等待窗口是否到期（超时 → 转移 / 失败）。"""
+        machine = self._flow_machine
+        if machine is None:
+            return
+        decision = machine.on_cycle()
+        self._apply_flow_decision(context, decision)
+
+    def _dispatch_flow_actions(
+        self, context: TaskContext, actions: tuple[StateAction, ...]
+    ) -> None:
+        """派发状态内动作（语义目标 → 任务侧 ActionRequest → ActionPort）。
+
+        动作被拒 / 失败 → 触发 ``action_failed`` 事件（命中转移则转移，否则流程失败）。
+        本方法最多执行一轮动作，**不会递归派发**（新状态的动作交给下一轮）。
+        """
+        machine = self._flow_machine
+        if machine is None:
+            return
+        adapter = TaskActionAdapter(
+            task_id=context.task.task_id,
+            step_id=machine.current_state_name or "",
+            timeout_s=1.0,
+            attempt=1,
+        )
+        machine.acknowledge_actions()
+        for action in actions:
+            try:
+                request = adapter.build(
+                    action.kind,
+                    action.target,
+                    params=action.params,
+                    timeout_s=action.timeout_s,
+                    suffix=action.name or None,
+                )
+            except TaskError as exc:
+                logger.error("状态动作无法构造: %s", exc)
+                self._apply_flow_decision(
+                    context, machine.transition("action_failed", reason=str(exc))
+                )
+                return
+            context.note_dispatch()
+            if action.kind != "wait":
+                context.note_action()
+            outcome = self._action_port.request(request)
+            self._emit(
+                HookKind.ACTION_REQUESTED,
+                context,
+                step_id=machine.current_state_name,
+                reason=getattr(outcome, "reason", "") or "",
+                detail={"kind": action.kind, "status": getattr(getattr(outcome, "status", None), "value", "n/a")},
+            )
+            if outcome.is_failure:
+                logger.warning(
+                    "状态动作被拒绝: state=%s action=%s reason=%s",
+                    machine.current_state_name,
+                    action.describe(),
+                    getattr(outcome, "reason", ""),
+                )
+                self._apply_flow_decision(
+                    context,
+                    machine.transition(
+                        "action_failed", reason=getattr(outcome, "reason", "") or "action rejected"
+                    ),
+                )
+                return
+
+    def _apply_flow_decision(self, context: TaskContext, decision: FlowDecision | None) -> None:
+        """把状态机决策应用到任务生命周期与事件。"""
+        if decision is None:
+            return
+        if decision.kind is FlowDecisionKind.NONE or decision.kind is FlowDecisionKind.IGNORED:
+            self._phase = StepPhase.AWAITING if self._flow_machine is not None and self._flow_machine.is_running else self._phase
+            return
+        if decision.kind is FlowDecisionKind.FAILED:
+            self._emit(
+                HookKind.TASK_FAILED,
+                context,
+                step_id=decision.source or None,
+                reason=decision.reason,
+            )
+            self._fail(context, reason=decision.reason)
+            return
+        self._emit(
+            HookKind.STEP_SATISFIED,
+            context,
+            step_id=decision.source or None,
+            reason=decision.reason,
+            detail={"next": decision.target},
+        )
+        self._phase = StepPhase.SATISFIED
+        if decision.kind is FlowDecisionKind.COMPLETE:
+            self._complete(context, reason=decision.reason or "flow completed")
+            return
+        self._phase = StepPhase.AWAITING
+        if decision.actions:
+            self._dispatch_flow_actions(context, decision.actions)
 
     # ---- 工作流推进（Phase 6.2） -------------------------------------------
 
@@ -990,6 +1224,11 @@ class TaskEngine:
         if self._runner is not None:
             return (
                 f"TaskEngine({self._context.describe()}, {self._runner.describe()}, "
+                f"estop={self._estop.state.describe() if self._estop is not None else 'n/a'})"
+            )
+        if self._flow_machine is not None:
+            return (
+                f"TaskEngine({self._context.describe()}, {self._flow_machine.describe()}, "
                 f"estop={self._estop.state.describe() if self._estop is not None else 'n/a'})"
             )
         return (

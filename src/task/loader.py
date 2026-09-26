@@ -55,6 +55,10 @@ __all__ = [
     "TaskLoader",
     "load_task",
     "validate_task_document",
+    "FLOW_DOCUMENT_FIELDS",
+    "load_flow_plan",
+    "validate_flow_document",
+    "load_flow_plans",
 ]
 
 logger = get_logger("task.loader")
@@ -176,7 +180,15 @@ class TaskLoader:
         paths: list[Path] = []
         for suffix in TASK_SUFFIXES:
             paths.extend(sorted(target.glob(f"*{suffix}")))
-        return tuple(self.load(path) for path in sorted(paths))
+        definitions: list[TaskDefinition] = []
+        for path in sorted(paths):
+            if _is_flow_document(path):
+                logger.debug(
+                    "跳过状态机式流程定义（由 load_flow_plan / load_flow_plans 加载）: %s", path
+                )
+                continue
+            definitions.append(self.load(path))
+        return tuple(definitions)
 
     # ---- 校验 ---------------------------------------------------------------
 
@@ -420,3 +432,242 @@ def validate_task_document(
 ) -> TaskDefinition:
     """便捷函数：校验已解析的任务定义映射（便于测试与工具链）。"""
     return TaskLoader().validate(data, source_path=source_path)
+
+
+# ---- Phase 8：状态机式流程（TaskFlowPlan） -----------------------------------
+
+#: 流程文档允许的顶层字段
+FLOW_DOCUMENT_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "task_id",
+        "description",
+        "initial",
+        "states",
+        "transitions",
+        "budget",
+        "policies",
+        "metadata",
+    }
+)
+
+
+def validate_flow_document(data: Mapping[str, Any], *, source_path: str | None = None) -> Any:
+    """校验并构造状态机式流程定义（Phase 8 的 YAML schema）。
+
+    ```yaml
+    task_id: auto_battle
+    initial: prepare
+    states:
+      - name: prepare
+        actions:
+          - kind: click
+            target: {element: battle_auto_button}
+        timeout: 5
+        allowed_next_states: [running, recovery]
+    transitions:
+      - from: prepare
+        to: running
+        when: {state: equals, value: battle_running}   # 或 condition: state == battle_running
+      - from: running
+        to: recovery
+        event: timeout
+      - from: running
+        to: COMPLETE
+        when: {state: equals, value: yard}
+    budget: {max_steps: 50, timeout_s: 600}
+    ```
+
+    校验规则（与 Phase 6.2 同风格，**加载期必须失败**）：
+
+    * 未知字段（顶层 / 状态 / 动作 / 转移）；
+    * 缺少 ``name``·``task_id`` / ``initial`` / ``states`` / 状态 ``name`` / 转移 ``from``·``to``；
+    * ``initial`` 或转移端点指向未定义状态（保留字 ``COMPLETE`` 除外）；
+    * 状态声明了 ``allowed_next_states`` 但与转移表不一致（声明即契约）；
+    * 动作携带坐标字段（``reference`` / ``x`` / ``y`` / ``x_ratio`` / ``bbox`` …）；
+    * 条件表达式非法（复用 Phase 6.2 的受限解析器，**禁止 eval**）；
+    * 转移既没有条件也没有事件。
+
+    Args:
+        data: YAML 解析后的映射。
+        source_path: 来源文件（写入定义，便于审计）。
+
+    Returns:
+        :class:`~src.task.state_machine.models.TaskFlowPlan`。
+
+    Raises:
+        TaskDefinitionError: 任一校验失败。
+    """
+    from src.task.models import Budget, TaskPolicies
+    from src.task.state_machine.models import TaskFlowPlan, states_from_mapping
+    from src.task.state_machine.transition import EVENT_NONE, StateTransition
+
+    if not isinstance(data, Mapping):
+        raise TaskDefinitionError("流程定义必须是映射（mapping）")
+    unknown = sorted(set(map(str, data)) - FLOW_DOCUMENT_FIELDS)
+    if unknown:
+        raise TaskDefinitionError(
+            f"流程定义出现未知字段: {unknown}（可选: {sorted(FLOW_DOCUMENT_FIELDS)}）"
+        )
+
+    name = str(data.get("name", data.get("task_id", "")) or "").strip()
+    if not name:
+        raise TaskDefinitionError("流程定义缺少 name / task_id")
+    initial = str(data.get("initial", "") or "").strip()
+    if not initial:
+        raise TaskDefinitionError(f"flow[{name}] 缺少 initial（初始状态名）")
+
+    raw_states = data.get("states")
+    if not isinstance(raw_states, (list, tuple)) or not raw_states:
+        raise TaskDefinitionError(f"flow[{name}] 的 states 必须是非空列表（状态定义数组）")
+    states = states_from_mapping(raw_states)
+
+    if initial not in states:
+        raise TaskDefinitionError(
+            f"flow[{name}] 的 initial 指向未定义的状态: {initial}（已定义: {sorted(states)}）"
+        )
+
+    raw_transitions = data.get("transitions") or ()
+    if not isinstance(raw_transitions, (list, tuple)):
+        raise TaskDefinitionError(f"flow[{name}] 的 transitions 必须是列表")
+    transitions: list[StateTransition] = []
+    for index, item in enumerate(raw_transitions):
+        if not isinstance(item, Mapping):
+            raise TaskDefinitionError(f"flow[{name}].transitions[{index}] 必须是映射")
+        where = f"flow[{name}].transitions[{index}]"
+        spec = item.get("condition", item.get("when"))
+        event = str(item.get("event", "") or "").strip().lower()
+        if event == EVENT_NONE and spec is None:
+            raise TaskDefinitionError(f"{where} 缺少 when/condition（或改用 event）")
+        predicate = build_condition(spec, name=f"{where}.condition") if event == EVENT_NONE else None
+        transition = StateTransition.from_mapping(item, condition=predicate, where=where)
+        if transition.source not in states:
+            raise TaskDefinitionError(
+                f"{where} 的 from 指向未定义的状态: {transition.source}"
+                f"（已定义: {sorted(states)}）"
+            )
+        if not transition.is_terminal and transition.target not in states:
+            raise TaskDefinitionError(
+                f"{where} 的 to 指向未定义的状态: {transition.target}"
+                f"（已定义: {sorted(states)}；成功结束请用 {TERMINAL_STATE_NAME}）"
+            )
+        transitions.append(transition)
+
+    if not transitions:
+        raise TaskDefinitionError(f"flow[{name}] 没有任何 transitions（流程无法推进）")
+
+    for state in states.values():
+        if not state.allowed_next_states:
+            continue
+        actual = {item.target for item in transitions if item.source == state.name}
+        declared = set(state.allowed_next_states)
+        if actual != declared:
+            raise TaskDefinitionError(
+                f"flow[{name}].states.{state.name} 的 allowed_next_states {sorted(declared)} "
+                f"与转移表 {sorted(actual)} 不一致"
+            )
+
+    budget_data = data.get("budget") or {}
+    policies_data = data.get("policies") or {}
+    if not isinstance(budget_data, Mapping):
+        raise TaskDefinitionError(f"flow[{name}].budget 必须是映射")
+    if not isinstance(policies_data, Mapping):
+        raise TaskDefinitionError(f"flow[{name}].policies 必须是映射")
+
+    return TaskFlowPlan(
+        name=name,
+        initial=initial,
+        states=states,
+        transitions=tuple(transitions),
+        budget=Budget.from_mapping(dict(budget_data)),
+        policies=TaskPolicies(**dict(policies_data)),
+        description=str(data.get("description", "") or ""),
+        metadata=dict(data.get("metadata") or {}),
+        source_path=source_path,
+    )
+
+
+def load_flow_plan(path: str | Path) -> Any:
+    """加载并校验一个状态机式流程定义文件（Phase 8）。
+
+    Args:
+        path: YAML 文件路径（相对路径以项目根为基准）。
+
+    Returns:
+        :class:`~src.task.state_machine.models.TaskFlowPlan`。
+
+    Raises:
+        TaskDefinitionError: 文件不存在、YAML 解析失败或校验不通过。
+    """
+    target = resolve_from_project_root(path)
+    if not target.is_file():
+        raise TaskDefinitionError(f"流程定义文件不存在: {target}")
+    try:
+        raw_text = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise TaskDefinitionError(f"流程定义读取失败: {target}: {exc}") from exc
+    try:
+        data = yaml.safe_load(raw_text)
+    except yaml.YAMLError as exc:
+        raise TaskDefinitionError(f"流程定义 YAML 解析失败: {target}: {exc}") from exc
+    if data is None:
+        raise TaskDefinitionError(f"流程定义文件为空: {target}")
+    if not isinstance(data, Mapping):
+        raise TaskDefinitionError(f"流程定义必须是映射（mapping）: {target}")
+    plan = validate_flow_document(data, source_path=str(target))
+    logger.info("已加载流程定义: %s", plan.describe())
+    return plan
+
+
+def _is_flow_document(path: str | Path) -> bool:
+    """判断 YAML 文件是否为**状态机式流程定义**（含 ``transitions`` / ``task_id``）。
+
+    ``configs/tasks/`` 目录允许同时存放两类定义：步骤式任务（``states`` 映射 + ``on``）
+    与流程式任务（``states`` 列表 + ``transitions``）。本函数用于让
+    :meth:`TaskLoader.load_all` 只加载前者，避免互相误判。
+
+    Args:
+        path: YAML 文件路径。
+
+    Returns:
+        ``True`` 表示是流程定义（无法解析时返回 ``False``，由调用方按步骤式路径报错）。
+    """
+    target = resolve_from_project_root(path)
+    try:
+        data = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(data, Mapping):
+        return False
+    return "transitions" in data or "task_id" in data
+
+
+def load_flow_plans(directory: str | Path | None = None) -> tuple[Any, ...]:
+    """批量加载目录下的**状态机式流程定义**（Phase 8；按文件名排序）。
+
+    Args:
+        directory: 目录（默认 ``configs/tasks``）。
+
+    Returns:
+        流程定义元组（目录不存在时返回空元组）。
+
+    Raises:
+        TaskDefinitionError: 任一流程定义非法。
+    """
+    target = (
+        resolve_from_project_root(directory)
+        if directory is not None
+        else resolve_from_project_root(DEFAULT_TASK_DIR)
+    )
+    if not target.is_dir():
+        logger.warning("流程定义目录不存在: %s", target)
+        return ()
+    paths: list[Path] = []
+    for suffix in TASK_SUFFIXES:
+        paths.extend(sorted(target.glob(f"*{suffix}")))
+    plans: list[Any] = []
+    for path in sorted(paths):
+        if not _is_flow_document(path):
+            continue
+        plans.append(load_flow_plan(path))
+    return tuple(plans)

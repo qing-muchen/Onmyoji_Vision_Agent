@@ -19,6 +19,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.task.models import TaskDefinition, TaskDefinitionError
+from src.task.state_machine.models import TaskFlowPlan
 from src.utils.logger import get_logger
 
 __all__ = ["TaskRegistry", "TaskRunRecord", "TaskRunStatus", "registry_from_mapping"]
@@ -126,27 +127,29 @@ class TaskRegistry:
     """
 
     def __init__(self, definitions: Iterable[TaskDefinition] = ()) -> None:
-        self._definitions: dict[str, TaskDefinition] = {}
+        self._definitions: dict[str, Any] = {}
         for definition in definitions:
             self.register(definition)
 
     # ---- 注册 / 注销 --------------------------------------------------------
 
-    def register(self, definition: TaskDefinition) -> TaskDefinition:
-        """注册（或覆盖）一个任务定义。
+    def register(self, definition: TaskDefinition | TaskFlowPlan) -> Any:
+        """注册（或覆盖）一个任务定义（步骤式或**状态机式**，Phase 8）。
 
         Args:
-            definition: 任务定义（Phase 6.2 的 :class:`TaskDefinition`）。
+            definition: :class:`~src.task.models.TaskDefinition`（YAML 工作流）
+                或 :class:`~src.task.state_machine.models.TaskFlowPlan`（流程状态机）。
 
         Returns:
             写入的定义（便于链式调用）。
 
         Raises:
-            TaskDefinitionError: 传入对象不是 :class:`TaskDefinition`。
+            TaskDefinitionError: 传入对象不是受支持的任务定义。
         """
-        if not isinstance(definition, TaskDefinition):
+        if not isinstance(definition, (TaskDefinition, TaskFlowPlan)):
             raise TaskDefinitionError(
-                f"TaskRegistry 只接受 TaskDefinition（当前: {type(definition).__name__}）"
+                "TaskRegistry 只接受 TaskDefinition / TaskFlowPlan"
+                f"（当前: {type(definition).__name__}）"
             )
         self._definitions[definition.task_id] = definition
         logger.debug("已注册任务: %s", definition.describe())
@@ -166,11 +169,11 @@ class TaskRegistry:
 
     # ---- 查询 ---------------------------------------------------------------
 
-    def get(self, task_id: str) -> TaskDefinition | None:
-        """按标识取任务定义（不存在时返回 ``None``）。"""
+    def get(self, task_id: str) -> Any | None:
+        """按标识取任务定义（``TaskDefinition`` / ``TaskFlowPlan``；不存在时 ``None``）。"""
         return self._definitions.get(str(task_id))
 
-    def require(self, task_id: str) -> TaskDefinition:
+    def require(self, task_id: str) -> Any:
         """按标识取任务定义（不存在时报错）。
 
         Raises:
@@ -193,6 +196,7 @@ class TaskRegistry:
             task_id: {
                 "initial": definition.initial,
                 "states": list(definition.state_names),
+                "kind": type(definition).__name__,
                 "budget": {
                     "max_steps": definition.budget.max_steps,
                     "deadline_s": definition.budget.deadline_s,
@@ -234,7 +238,7 @@ class TaskRegistry:
     def __len__(self) -> int:
         return len(self._definitions)
 
-    def __iter__(self) -> Iterator[TaskDefinition]:
+    def __iter__(self) -> Iterator[Any]:
         return iter(self._definitions.values())
 
     def __repr__(self) -> str:

@@ -1968,5 +1968,18 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   （默认关闭）。**完整闭环**：`Runtime → Vision → Resolver → TaskEngine → ActionDispatcher →
   DryRunBackend`，失败策略 fail-safe（未知任务 warning、重复触发忽略、Action 拒绝 → 任务 FAILED
   且零输入）。多任务调度 / `DetectionResult` 接入 / `drag` 语义仍留待后续。
-- Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
-  （`src/state`）。
+- Phase 8（**已完成：状态机驱动任务系统**）：`src/task/state_machine/`（把 Phase 6.1 的
+  `state_machine.py` **逐字迁入** `lifecycle.py` 并完整 re-export，旧导入路径不变）+
+  **流程状态机**：`TaskFlowStateMachine`（纯决策：`start` / `handle_state` / `transition` /
+  `on_cycle` / `next_actions` / `reset`）、`TaskStateDefinition`（`entry_actions` / `actions` /
+  `exit_actions` / `timeout_s` / `allowed_next_states`）、`StateTransition`（**条件驱动** +
+  **事件驱动** `timeout` / `action_failed`）、`StateAction`（仍是**语义目标**，坐标字段在构造期拒绝）、
+  `TaskFlowPlan`（`configs/tasks/*.yaml` 流程定义 + 严格校验）。引擎侧**组合式**接入
+  （`TaskEngine.handle_state()`，未启用流程时等价于 `on_stable`，既有模式行为不变）；
+  Runtime 侧统一入口 `StateMonitor → TaskRuntimeBridge → TaskEngine.handle_state()`
+  （**没有** Runtime → StateMachine 的直连）。闭环升级为
+  `State → StateMachine → Decision → Action`，测试 **1315 passed / 1 skipped**，
+  仍**零真实输入**（`dry_run`）。多任务调度 / `exit_actions` 派发 / 冷却与看门狗仍留待后续
+  （见 `docs/PHASE8_STATE_MACHINE_REPORT.md` §9）。
+- Phase 9：多任务调度与任务库（优先级 / 抢占 / 看门狗）、状态机 `exit_actions` 与转移钩子、
+  `DetectionResult` 接入快照桥、`drag` 语义落地。

@@ -53,6 +53,29 @@
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
+状态机层（Phase 8，**与推理链并列**）：
+
+```text
+┌─ 任务层状态机（src/task/state_machine）Phase 8 ─────────────────────────────┐
+│ TaskFlowStateMachine.handle_state(StateResult 视图)                          │
+│   · 条件驱动转移：state == battle → 目标状态（谓词加载期编译，禁止 eval）      │
+│   · 事件驱动转移：timeout / action_failed → recovery（事件优先）             │
+│   · 状态动作：StateAction（**语义目标**，禁止坐标）→ TaskActionAdapter        │
+│   · 决策：FlowDecision（TRANSITION / COMPLETE / FAILED / NONE / IGNORED）     │
+│ TaskEngine.handle_state()（组合式接入；无状态机时等价于 on_stable）            │
+│   · 门控顺序不变：E-STOP → 运行时门控 → 生命周期 → 动作派发                   │
+└────────────────────────────────────────────────────────────────────────────┘
+                                   ↑ 由 src/runtime/task_bridge.py 单向驱动
+                                   │ （StateMonitor → TaskRuntimeBridge → handle_state）
+```
+
+完整闭环（Phase 8）：
+
+```text
+State → StateMachine → Decision → Action
+Runtime → Vision → Snapshot → Resolver → TaskEngine → ActionDispatcher → DryRunBackend
+```
+
 帧路径（Phase 3.0，**兼容保留**）：`StateClassifier.classify_frame(frame)` 只判**转场**
 （`TransitionClassifier` 需要整帧像素），其余情况返回 `unknown`；
 `yard` 自 Phase 4.6.5 起由证据路径判定（`bottom_menu_yard`）。
@@ -77,7 +100,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`）+ 视觉目标转换（`VisionTargetAdapter`：证据 / 检测 → `VisionTargetCandidate` / `TargetSnapshot`，Phase 7.2） | 不做循环 / 采集 / 时间滤波 / 点击；**不 import** `src.action` / `src.task` / `src.runtime`，不调用 `ActionDispatcher`、不产生输入 |
 | **运行时** | `src/runtime` | 真实窗口帧来源（`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source`）、deadline 节拍（`CycleScheduler`）、稳定化、事件与落盘（`StateMonitor` / `StateStabilizer` / `RuntimeMetricsRecorder`）、运行时诊断（`RuntimeHealth`）、生命周期与恢复（`RuntimeLifecycle` / `RecoveryManager`）、**视觉快照桥（`VisionSnapshotBridge`，Phase 7.3）**、**任务编排桥（`TaskRuntimeBridge`，Phase 7.5：稳定状态 + 节拍 → 触发/驱动 `TaskEngine`）** | 不做视觉判定、不抢焦点、**不调用 `ActionDispatcher`、不产生任何输入**、不执行任务动作（只编排） |
-| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`TaskRegistry` / `TaskTriggerRegistry`（任务清单与状态触发映射，Phase 7.5）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`TaskActionAdapter`（动作意图 → 任务侧 `ActionRequest`，Phase 7.4）、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**、不知道坐标（只给语义名）、不知道 Vision、不知道 Runtime |
+| **任务层** | `src/task` | 任务目标与工作流：`TaskLoader`（`configs/tasks/*.yaml` 加载 + 严格校验）、`TaskRegistry` / `TaskTriggerRegistry`（任务清单与状态触发映射，Phase 7.5）、`WorkflowRunner` / `StepExecutor`（状态机式工作流）、`TaskEngine`（`on_stable` 决策 / `on_cycle` 计时，**不拥有循环**）、`ActionPort`（语义动作端口契约）、`TaskActionAdapter`（动作意图 → 任务侧 `ActionRequest`，Phase 7.4）、**流程状态机（`src/task/state_machine/`，Phase 8：`TaskFlowStateMachine` 纯决策 + `TaskStateDefinition` / `StateTransition` / `StateAction` / `TaskFlowPlan`，`handle_state` 为统一状态入口）**、`EStop`（API + 文件哨兵） | 不读像素、不做视觉判定、不 import vision / evidence / cv2 / runtime、**不执行任何输入**、不知道坐标（只给语义名）、不知道 Vision、不知道 Runtime |
 | **输入层** | `src/action` | 语义动作落地：`ActionRequest` / `ActionOutcome`（**无像素坐标**）、`ActionDispatcher`（门控 → 解析 → 坐标换算 → 后端）、`TargetResolver` 两种实现（`RegistryTargetResolver` 静态注册表 / `VisionAwareTargetResolver` 视觉快照 + TTL + 置信度）、`InputBackend`（默认 `DryRunBackend`；Win32 `SendInput` 后端）、`SafetyGuard`（5 道门）+ `EmergencyStop`（API + `logs/ESTOP`） | 不识别界面元素（模板 / OCR / YOLO）、不 import `vision` / `evidence` / `task` / `cv2`、**禁止 fallback click 与猜坐标**、不抢焦点、无全局热键、不主动读取视觉（只接受外部注入的 `VisionTargetCandidate` 快照） |
 
 **硬规则**：
@@ -153,6 +176,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | I-5 | 证据得分与状态可信度分离；门槛不因单个状态被降低 | `tests/test_confidence_contract.py` |
 | I-6 | `StateResult` 字段与 `from_dict` 旧格式兼容 | `tests/test_state_models.py`、`tests/test_phase47_architecture.py` |
 | I-7 | `evidence` 不依赖 `state`（避免循环导入） | 导入即可验证（`import src.vision.evidence` 不拉起 `state`） |
+| I-8 | `src/task/state_machine/**` 不依赖 vision / action / runtime（纯决策，只消费状态字段视图） | `tests/test_state_machine.py::test_state_machine_package_dependencies`、`::test_state_machine_has_no_vision_types` |
+| I-9 | 任务侧动作只用语义目标（禁止坐标）；`src/action` 仍不依赖 task | `tests/test_state_machine.py::test_action_model_rejects_coordinates`、`::test_engine_still_has_no_vision_imports` |
 
 ---
 
@@ -183,6 +208,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 7.3 | Runtime 视觉快照接入（`VisionSnapshotBridge` / `StateMonitor` 可选接线 / `frame_id = cycles` / fail-safe 失败策略） | `PHASE7_3_RUNTIME_VISION_INTEGRATION_REPORT.md` |
 | Phase 7.4 | Task → Action 集成（`TaskActionAdapter` / `SemanticTargetSpec` / 语义目标两层防线 / Task 与 Vision 边界固化 / 端到端 dry-run 闭环） | `PHASE7_4_TASK_ACTION_INTEGRATION_REPORT.md` |
 | Phase 7.5 | Runtime ↔ Task 自动接线（`TaskRuntimeBridge` / `TaskRegistry` / `TaskTriggerRegistry` / 运行状态生命周期 / fail-safe / 完整闭环 dry-run） | `PHASE7_5_RUNTIME_TASK_INTEGRATION_REPORT.md` |
+| Phase 8 | 状态机驱动任务系统（`src/task/state_machine/` 包：`lifecycle` 迁入 + `TaskFlowStateMachine` 纯决策 / `TaskStateDefinition`（entry·actions·exit·timeout·allowed_next_states）/ `StateTransition`（条件 + 事件驱动）/ `StateAction`（语义目标，禁坐标）/ `TaskFlowPlan` + 严格校验；`TaskEngine.handle_state` 组合式接入；`StateMonitor → TaskRuntimeBridge → handle_state` 统一入口） | `PHASE8_STATE_MACHINE_REPORT.md` |
 
 ---
 
@@ -199,5 +225,5 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | `config.py` | 单文件承载全部配置模型（含 evidence / state / runtime 段），拆分方案见 Phase 4.7 报告 | Phase 5+（可选） |
 | 计算性能 | 单帧 ≈ 170 次 `matchTemplate`（10 detector）；未做性能优化与预算验证 | Phase 5（接线前先测） |
 | 样本量 | `victory_icon` / `reward_panel` 各 1 张正样本（靠状态可信度校准补偿） | 数据侧 |
-| Action / State Machine / Task | Action 层已实现（语义动作 + 视觉目标解析 + 5 道安全门，默认 dry-run）；State Machine / 多任务调度未实现 | Phase 8 |
+| Action / State Machine / Task | Action 层已实现（语义动作 + 视觉目标解析 + 5 道安全门，默认 dry-run）；**流程状态机已实现**（Phase 8：`TaskFlowStateMachine` + `handle_state` + `configs/tasks/*.yaml` 流程 schema）；**多任务调度 / 优先级 / 抢占 / 看门狗未实现**（见 Phase 8 报告 §9） | Phase 9 |
 | `README` 与本文之外的历史章节 | 部分章节仍描述 Phase 3.x 的帧路径细节（已加注说明） | 文档迭代 |
