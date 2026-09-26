@@ -31,6 +31,14 @@
 **本阶段不做**：不点击、不输入、不执行游戏任务、不接 Runtime（接线属 Phase 6.2）。
 """
 
+from src.task.action_adapter import (
+    FORBIDDEN_TARGET_KEYS,
+    SEMANTIC_TARGET_KEYS,
+    TARGETLESS_KINDS,
+    SemanticTargetSpec,
+    TaskActionAdapter,
+    normalize_semantic_target,
+)
 from src.task.engine import (
     StepPhase,
     TaskEngine,
@@ -164,4 +172,10 @@ __all__ = [
     "local_now_iso",
     "parse_condition_expression",
     "validate_task_document",
+    "FORBIDDEN_TARGET_KEYS",
+    "SEMANTIC_TARGET_KEYS",
+    "TARGETLESS_KINDS",
+    "SemanticTargetSpec",
+    "TaskActionAdapter",
+    "normalize_semantic_target",
 ]

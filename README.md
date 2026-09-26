@@ -424,7 +424,38 @@ Resolver.update_snapshot() → ActionDispatcher`**。**Runtime 成为唯一编�
      端到端 dry-run）与 `docs/PHASE7_3_RUNTIME_VISION_INTEGRATION_REPORT.md`。
      **全部测试与冒烟零真实输入**（`DryRunBackend`，配置默认值未改）。
 
-### 架构总览（Phase 7.3 完成后的主链路）
+**Phase 7.4 — Task → Action 集成（已完成）**：把 TaskEngine 接入 Vision-aware Action 链路，
+完成 **`TaskDefinition → TaskEngine → ActionRequest → ActionDispatcher → Resolver → DryRunBackend`**
+的闭环。**不新增**任务类型 / 游戏逻辑 / 状态机 / 视觉算法，**不接入**真实鼠标键盘：
+
+121. **新增 `src/task/action_adapter.py`**（任务侧的**可选**便利层）：`TaskActionAdapter`
+     （`click` / `double_click` / `long_press` / `drag` / `key` / `wait` / `build` / `with_step`）
+     + `SemanticTargetSpec` + `normalize_semantic_target`；
+     **只构造 `ActionRequest`**：不调用 backend / resolver、不读 Frame 与 Evidence
+     （AST 用例断言代码中不出现输入原语与 `update_snapshot`）；
+122. **评估结论：无需重构引擎**。`TaskEngine` 早已只依赖 `ActionPort` 协议与字段视图
+     （Phase 6.1 的 D-4），因此本阶段只**补齐契约与便利构造**，未改动引擎；
+     适配器新增的价值：编程式构造动作、在**任务侧**就把语义目标限定为语义名
+     （`FORBIDDEN_TARGET_KEYS` 拒绝 `reference` / `x` / `y` / `x_ratio` / `bbox` …）、
+     显式幂等键与字段契约；
+123. **Task 侧不知道坐标**：`SemanticTargetSpec` 只接受语义名（`{"element": "battle_auto_button"}`），
+     与 Action 侧 `SemanticTarget.from_mapping` 形成**两层防线**；
+124. **Task 不知道 Vision**（边界固化新增用例）：`src/task` 禁止 import `src.vision` / `src.capture` /
+     `src.runtime` / `src.action` / `cv2` / `numpy`；`src/vision` 禁止 import `src.task`；
+     `engine.py` / `workflow.py` / `action_adapter.py` 中不出现 `update_snapshot` / `TargetSnapshot` /
+     `Frame` / `EvidenceResult`；快照推送仍只发生在 `src/runtime/vision_bridge.py`（Phase 7.3）；
+125. **安全门未被绕过**：Task 的动作与其它来源走完全相同的门控链
+     （E-STOP → 窗口 → 前台 → 目标解析 → 目标校验 → 限流 → 后端），
+     失败 stage 进入 `ActionOutcome.detail.stage` 与 `dispatcher.stats.reject_stages`；
+126. **失败策略**：目标不存在 → `target_not_found`；快照过期 → `target_expired`；
+     两者都让任务显式 `FAILED` 且 backend 零调用（**绝不猜坐标、绝不用上一帧位置**）；
+     dry-run 下链路完整执行、只记录不输入；
+127. 新增 `tests/test_task_action_integration.py`（29 用例：请求产生与字段、成功闭环（含坐标闭式解）、
+     `target_not_found` / `target_expired`、Task↔Vision↔Action 边界 AST、适配器行为、
+     安全门（E-STOP / 前台）、端到端 dry-run）与
+     `docs/PHASE7_4_TASK_ACTION_INTEGRATION_REPORT.md`。
+
+### 架构总览（Phase 7.4 完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -452,6 +483,9 @@ Pipeline（编排）                              vision：Frame → 证据 → 
         │  ① adapter 转换 ② 构造 TargetSnapshot{frame_id} ③ 单向 push（resolver.update_snapshot）
         │  capture 失败 → 不更新（等 TTL）；无证据 → 空快照；adapter 异常 → 空快照
         ▼
+TaskEngine → ActionRequest（语义目标）        task：动作意图（不读 Frame / 不读 Vision / 不知道坐标）
+  └─ TaskActionAdapter（可选）                task：click('battle_auto_button') -> ActionRequest
+             │  两条链路在 ActionDispatcher 汇合
 TargetResolver（语义名 → x_ratio,y_ratio）  action：不读 Frame、不调 detector、不猜坐标
   ├─ RegistryTargetResolver（默认）          action：静态注册表（人工标定）
   └─ VisionAwareTargetResolver（Phase 7.1）  action：消费外部注入的 TargetSnapshot（TTL + 置信度）
@@ -483,9 +517,10 @@ E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 �
 
 **尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
 Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
-**Task Engine ↔ Runtime 的自动接线**（Phase 7.3 已打通 `Runtime → Vision → Action` 的目标解析链路：
-每轮自动推送 `TargetSnapshot`；但 `StateMonitor.on_stable/on_cycle` 到 `TaskEngine` 的自动装配、
-多任务调度与任务库仍未做；`drag` 动作与 `DetectionResult` 接入快照桥亦未实现）、
+**Task Engine ↔ Runtime 的自动接线**（Phase 7.3 已打通 `Runtime → Vision → Action` 的快照链路，
+Phase 7.4 已打通 `Task → Action` 的动作链路，两者在 `ActionDispatcher` 汇合；
+但 `StateMonitor.on_stable/on_cycle` 到 `TaskEngine` 的**自动装配**、多任务调度与任务库仍未做；
+`drag` 动作与 `DetectionResult` 接入快照桥亦未实现）、
 Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，
 以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
 
@@ -636,6 +671,7 @@ Onmyoji_Vision_Agent/
 │       │   └── result.py         #     TaskResult
 │       ├── loader.py             #   TaskLoader：configs/tasks/*.yaml 加载 + schema + 图校验（无环 / 可达 COMPLETE）
 │       ├── workflow.py           #   ActionPort 契约 / StepExecutor / StepTransition / WorkflowRunner
+│       ├── action_adapter.py     #   TaskActionAdapter（动作意图 -> 任务侧 ActionRequest，Phase 7.4）
 │       ├── engine.py             #   TaskEngine：生命周期、on_stable 决策、on_cycle 计时、预算、门控
 │       ├── state_machine.py      #   TaskState 7 态 + ALLOWED_TRANSITIONS + InvalidTaskTransition
 │       ├── hooks.py              #   HookRegistry / build_condition（YAML → Predicate，**无 eval**）
@@ -1881,7 +1917,13 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `StateMonitor` 新增**可选** `vision_bridge` 接线（默认关闭，行为不变）与只读属性
   `last_evidences`（**同一次检测**的产物，不重复 `detect()`）；fail-safe 策略：
   capture 失败→不更新（等 TTL 过期）、无证据→空快照（不保留旧目标）、adapter/resolver 异常→隔离。
-- Phase 7.4：Task ↔ Runtime 接线 —— `StateMonitor.on_stable/on_cycle` → `TaskEngine`
+- Phase 7.4（**已完成：Task → Action 集成**）：`src/task/action_adapter.py`
+  （`TaskActionAdapter` + `SemanticTargetSpec`）—— 任务侧只给**语义名**（拒绝坐标字段），
+  产出与 Action 侧同形的 `ActionRequest`；闭环 **TaskDefinition → TaskEngine → ActionRequest →
+  ActionDispatcher → Resolver → DryRunBackend** 已打通并端到端验证（成功 / `target_not_found` /
+  `target_expired` / E-STOP / 前台失焦 / dry-run）。Task 仍不知道 Vision 与坐标，
+  快照推送仍只发生在 Runtime（Phase 7.3）。
+- Phase 7.5：Task ↔ Runtime 接线 —— `StateMonitor.on_stable/on_cycle` → `TaskEngine`
   自动装配、`DetectionResult` 接入快照桥、`drag` 语义与多任务调度。
 - Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
   （`src/state`）。
