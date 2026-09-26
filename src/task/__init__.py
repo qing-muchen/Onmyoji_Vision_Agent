@@ -65,6 +65,12 @@ from src.task.loader import (
     load_task,
     validate_task_document,
 )
+from src.task.registry import (
+    TaskRegistry,
+    TaskRunRecord,
+    TaskRunStatus,
+    registry_from_mapping,
+)
 from src.task.models import (
     ACTION_KINDS,
     DEFAULT_ACTION_TIMEOUT_S,
@@ -85,6 +91,10 @@ from src.task.models import (
     WorkflowAction,
     WorkflowState,
     WorkflowTransition,
+)
+from src.task.triggers import (
+    TaskTriggerRegistry,
+    trigger_registry_from_mapping,
 )
 from src.task.state_machine import (
     ALLOWED_TRANSITIONS,
@@ -178,4 +188,10 @@ __all__ = [
     "SemanticTargetSpec",
     "TaskActionAdapter",
     "normalize_semantic_target",
+    "TaskRegistry",
+    "TaskRunRecord",
+    "TaskRunStatus",
+    "registry_from_mapping",
+    "TaskTriggerRegistry",
+    "trigger_registry_from_mapping",
 ]

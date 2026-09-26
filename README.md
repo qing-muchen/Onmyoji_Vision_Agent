@@ -455,7 +455,40 @@ Resolver.update_snapshot() → ActionDispatcher`**。**Runtime 成为唯一编�
      安全门（E-STOP / 前台）、端到端 dry-run）与
      `docs/PHASE7_4_TASK_ACTION_INTEGRATION_REPORT.md`。
 
-### 架构总览（Phase 7.4 完成后的主链路）
+**Phase 7.5 — Runtime Task Orchestration Integration（已完成）**：把 `StateMonitor` / Runtime
+与 `TaskEngine` **自动接线**，形成完整闭环 **`Runtime → Vision → Resolver → TaskEngine →
+ActionDispatcher → DryRunBackend`**。仍然**不产生任何真实输入**（`backend=dry_run`），
+不改 `SafetyGuard` 门控、不改 Vision 算法、不改 resolver 核心协议：
+
+128. **新增 `src/runtime/task_bridge.py`**（编排层，447 行）：`TaskRuntimeBridge`
+     （`on_state_stable` / `on_cycle` / `start_task` / `stop_task` / `reset` + `records` / `stats`）
+     —— 接收 Runtime 事件 → 查触发映射 → 驱动 `TaskEngine` → 记录运行状态；
+     **不执行动作、不解析坐标、不读视觉、不调用 `InputBackend`**（它只依赖 `src.task` / `src.utils`）；
+129. **新增 `src/task/registry.py`**：`TaskRegistry`（`task_id → TaskDefinition`，可由
+     `TaskLoader.load_all()` 装载 `configs/tasks/*.yaml`）+ `TaskRunStatus`
+     （`IDLE` / `RUNNING` / `COMPLETED` / `FAILED` / `STOPPED`）+ `TaskRunRecord`
+     （状态 / 起止时间 / 错误 / 启动次数 / 节拍数，可序列化）；
+130. **新增 `src/task/triggers.py`**：`TaskTriggerRegistry`（状态 → 任务映射，**纯声明**、
+     不含游戏逻辑；状态名大小写不敏感、接受枚举；未注册 → 不触发；重复注册默认报错）；
+131. **`StateMonitor` 接线（最小改动，默认零影响）**：新增可选参数 `task_bridge=None`
+     （默认 `None` ⇒ 行为与 Phase 7.4 完全一致，既有 1247 用例零改动通过）；`run()` 每轮末尾
+     **在快照推送之后**调用 `_notify_task_bridge(stable, schedule)` —— 因此任务首次派发动作时
+     本轮快照已就绪；跳过轮只上报节拍（不重复上报稳定状态）；两个通知各自独立异常隔离；
+132. **生命周期规则**：同一任务不重复启动（运行中忽略触发 / 手动启动）；`FAILED` / `STOPPED` 可重跑；
+     `COMPLETED` 默认不重复执行（`allow_rerun_completed` 可放开）；单任务引擎（并发启动被忽略）；
+133. **失败策略（fail-safe，Runtime 永不中断）**：无触发映射 → `unknown_state`；
+     映射指向不存在的任务 → `logger.warning` + `unknown_task`（不抛异常）；任务失败 → 记录
+     `task_id` / `error` / `timestamp` 并允许重跑；Action 拒绝（`target_not_found`）→ 任务 `FAILED`
+     且 **backend 零调用**；引擎 / 桥异常 → 隔离计数；
+134. **安全边界（新增 AST 用例）**：`src/task` 禁 import `src.runtime` / `src.action` / `src.vision`
+     / `cv2` / `numpy`；`task_bridge.py` 项目内依赖仅 `src.task.*` + `src.utils.logger`
+     （AST 名称不含 `InputBackend` / `ActionDispatcher` / `ActionRequest` / `DryRunBackend`）；
+     `state_monitor` 禁 import `src.action`（`src.task` 只允许出现在 `task_bridge.py`）；
+     任务层不出现 `Frame` / `EvidenceResult` / `TargetSnapshot` / `update_snapshot`；
+135. 新增 `tests/test_runtime_task_bridge.py`（35 用例）与
+     `docs/PHASE7_5_RUNTIME_TASK_INTEGRATION_REPORT.md`。
+
+### 架构总览（Phase 7.5 完成后的主链路）
 
 ```text
 WindowFrameSource.get_frame()          采集：窗口绑定 → 前台门控 → dxcam/mss（窗口移动即重建）
@@ -477,6 +510,9 @@ StateSnapshot → 转移条件 → 下一步目标      task：on_stable 决策 
 ActionRequest（语义目标）→ ActionPort      task：动作端口（Phase 6.2 = NullActionPort，只记录）
   ↓  ActionDispatcher                     action：门控 → 解析 → 坐标换算 → 后端（Phase 7）
 SafetyGuard（E-STOP / 窗口 / 前台 / 已解析 / 限流）  action：任一失败 → REJECTED（禁止 fallback）
+Runtime（StateMonitor）                       runtime：采集 → 判定 → 稳定化 → 每轮回调
+  ├─ VisionSnapshotBridge                     runtime：帧 + 证据 → TargetSnapshot → resolver（Phase 7.3）
+  └─ TaskRuntimeBridge                        runtime：稳定状态 + 节拍 → 触发 / 驱动 TaskEngine（Phase 7.5）
 Pipeline（编排）                              vision：Frame → 证据 → 状态（Phase 4.7）
   └─ VisionTargetAdapter                     vision：证据 / 检测 → VisionTargetCandidate（Phase 7.2）
         ▲  Runtime 每轮把"帧 + 证据"交给桥              runtime：VisionSnapshotBridge（Phase 7.3）
@@ -517,9 +553,9 @@ E-STOP（API / logs/ESTOP 哨兵）            task + action：任一侧触发 �
 
 **尚未实现**：Phase 5.5 的运行时优化（检测优化 / 多线程 / 异步 pipeline / 更高频率循环；
 Phase 5.3 / 5.4 只做工程化收敛与可靠性，未做提前优化）、
-**Task Engine ↔ Runtime 的自动接线**（Phase 7.3 已打通 `Runtime → Vision → Action` 的快照链路，
-Phase 7.4 已打通 `Task → Action` 的动作链路，两者在 `ActionDispatcher` 汇合；
-但 `StateMonitor.on_stable/on_cycle` 到 `TaskEngine` 的**自动装配**、多任务调度与任务库仍未做；
+**多任务调度与看门狗**（Phase 7.5 已打通完整闭环 `Runtime → Vision → Resolver → TaskEngine →
+ActionDispatcher`：单任务引擎由编排桥驱动；但多任务并发 / 优先级 / 抢占、触发去抖冷却、
+编排层看门狗、任务库（`configs/tasks/` → 注册表的自动装载与触发映射配置化）仍未做；
 `drag` 动作与 `DetectionResult` 接入快照桥亦未实现）、
 Phase 8 的 State Machine / Task System、YOLO 与深度学习模型，
 以及任何**基于文字或界面的决策逻辑**（OCR 只负责"读出文字"，Phase 2.1.1 只把它当作元素定位的语义锚点）。
@@ -649,6 +685,7 @@ Onmyoji_Vision_Agent/
 │   │       ├── timing.py         #     CycleTiming（可选耗时画像）
 │   │       └── source.py         #     FrameSource / CaptureFrameSource / 轻量前台门控
 │   │   ├── vision_bridge.py     #   VisionSnapshotBridge（帧 + 证据 -> TargetSnapshot -> resolver，Phase 7.3）
+│   │   ├── task_bridge.py       #   TaskRuntimeBridge（稳定状态 + 节拍 -> 触发/驱动 TaskEngine，Phase 7.5）
 │   ├── action/                   # 输入控制层（Phase 7：语义动作 → 受控键鼠输入）
 │   │   ├── models.py             #   ActionRequest / ActionOutcome / ActionStatus / ActionType / ActionTarget
 │   │   │                         #   + SemanticTarget / ResolvedTarget（**禁止像素坐标**）
@@ -672,6 +709,8 @@ Onmyoji_Vision_Agent/
 │       ├── loader.py             #   TaskLoader：configs/tasks/*.yaml 加载 + schema + 图校验（无环 / 可达 COMPLETE）
 │       ├── workflow.py           #   ActionPort 契约 / StepExecutor / StepTransition / WorkflowRunner
 │       ├── action_adapter.py     #   TaskActionAdapter（动作意图 -> 任务侧 ActionRequest，Phase 7.4）
+│       ├── registry.py           #   TaskRegistry / TaskRunStatus / TaskRunRecord（任务清单与运行状态，Phase 7.5）
+│       ├── triggers.py           #   TaskTriggerRegistry（状态 -> 任务映射，Phase 7.5）
 │       ├── engine.py             #   TaskEngine：生命周期、on_stable 决策、on_cycle 计时、预算、门控
 │       ├── state_machine.py      #   TaskState 7 态 + ALLOWED_TRANSITIONS + InvalidTaskTransition
 │       ├── hooks.py              #   HookRegistry / build_condition（YAML → Predicate，**无 eval**）
@@ -1923,7 +1962,11 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   ActionDispatcher → Resolver → DryRunBackend** 已打通并端到端验证（成功 / `target_not_found` /
   `target_expired` / E-STOP / 前台失焦 / dry-run）。Task 仍不知道 Vision 与坐标，
   快照推送仍只发生在 Runtime（Phase 7.3）。
-- Phase 7.5：Task ↔ Runtime 接线 —— `StateMonitor.on_stable/on_cycle` → `TaskEngine`
-  自动装配、`DetectionResult` 接入快照桥、`drag` 语义与多任务调度。
+- Phase 7.5（**已完成：Runtime ↔ Task 自动接线**）：`src/runtime/task_bridge.py`
+  （`TaskRuntimeBridge`）+ `src/task/registry.py`（任务清单 / 运行状态）+
+  `src/task/triggers.py`（状态 → 任务映射）；`StateMonitor` 新增可选 `task_bridge` 接线
+  （默认关闭）。**完整闭环**：`Runtime → Vision → Resolver → TaskEngine → ActionDispatcher →
+  DryRunBackend`，失败策略 fail-safe（未知任务 warning、重复触发忽略、Action 拒绝 → 任务 FAILED
+  且零输入）。多任务调度 / `DetectionResult` 接入 / `drag` 语义仍留待后续。
 - Phase 8：State Machine / Task System —— 状态转移建模、多任务调度与任务库、中断处理
   （`src/state`）。

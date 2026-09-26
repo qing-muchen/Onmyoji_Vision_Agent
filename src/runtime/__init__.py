@@ -6,6 +6,9 @@
   dxcam+mss 后端 / 采集编排）、deadline based 节拍、状态识别与稳定化、状态变化事件、
   历史与运行指标落盘、运行时诊断（`RuntimeHealth`：区分 runtime failure 与 vision unknown）
   以及生命周期与失败恢复（`RuntimeLifecycle` / `RecoveryManager`，Phase 5.4）；
+* :mod:`src.runtime.task_bridge` —— **任务编排桥**（Phase 7.5）：把「稳定状态 + 每轮节拍」
+  交给任务编排（`TaskEngine` + 任务清单 + 状态触发映射），使链路贯通为
+  ``Runtime → Vision → Resolver → TaskEngine → ActionDispatcher``（仍不产生真实输入）；
 * :mod:`src.runtime.vision_bridge` —— **视觉快照桥**（Phase 7.3）：每轮把"帧 + 证据"
   转换成 `TargetSnapshot` 并**单向推送**给 Action 侧的目标解析器，
   使链路贯通为 ``Runtime → Vision → Action``。

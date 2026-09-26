@@ -32,6 +32,10 @@
   （Phase 7.3 起可**可选**接线 :class:`~src.runtime.vision_bridge.VisionSnapshotBridge`：
   它只把"本轮的视觉结果"转换成数据快照推送给 Action 侧的 resolver，仍然**不调用**
   ``ActionDispatcher``、不产生任何输入；未接线时行为与此前完全一致。）
+  （Phase 7.5 起可**可选**接线 :class:`~src.runtime.task_bridge.TaskRuntimeBridge`：
+  它把「稳定状态 + 每轮节拍」交给任务编排（内部持有 ``TaskEngine`` 与任务清单），
+  同样不调用 ``ActionDispatcher``、不产生任何输入；本模块自身**不 import** ``src.task`` /
+  ``src.action``。）
 * **不吞其余异常**：只捕获 ``KeyboardInterrupt`` 以正常收尾（中断时也会落盘），
   历史写入失败等真实错误向上传播（见 :class:`~src.core.exceptions.MonitorError`）。
 
@@ -131,8 +135,9 @@ class StateMonitor:
         on_stable: Callable[[StableStateResult], None] | None = None,
         on_cycle: Callable[[CycleSchedule], None] | None = None,
         vision_bridge: Any | None = None,
+        task_bridge: Any | None = None,
     ) -> None:
-        """（Phase 7.3 新增参数见末尾说明。）
+        """（Phase 7.3 / 7.5 新增参数见末尾说明。）
 
         Args:
             classifier: 分类器或证据流水线（见类文档）。
@@ -160,6 +165,16 @@ class StateMonitor:
                 接入原因：Runtime 是唯一能同时看到"帧 / 视觉结果 / 动作端口"的编排层
                 （Action 不 import vision、Vision 不 import action），因此由本层完成编排。
                 该桥**只推送快照数据**，既不调用 ``ActionDispatcher``、也不产生任何输入。
+            task_bridge: **可选**的任务编排桥（Phase 7.5，例如
+                :class:`~src.runtime.task_bridge.TaskRuntimeBridge`）。传入后：
+
+                * 每帧稳定状态 → ``task_bridge.on_state_stable(stable)``（触发 / 驱动任务）；
+                * 每轮结束 → ``task_bridge.on_cycle(schedule)``（任务计时；在快照推送**之后**，
+                  因此任务决策能看到本轮最新快照）。
+
+                **默认 ``None`` = 完全不接线**（行为与此前一致）。编排桥内部持有
+                ``TaskEngine`` 与任务清单，本层**不**直接依赖 ``src.task`` / ``src.action``；
+                它同样不调用 ``ActionDispatcher``、不产生任何输入。
         """
         # 渐进迁移（Phase 5）：第一个位置参数既可以是证据流水线（推荐），也可以是状态分类器
         # （Phase 3.0 旧行为）；显式传入的 ``processor`` 优先级最高。
@@ -202,6 +217,7 @@ class StateMonitor:
         self._on_stable = on_stable
         self._on_cycle = on_cycle
         self._vision_bridge = vision_bridge
+        self._task_bridge = task_bridge
         self._events: list[StateEvent] = []
         self._current_state: StateName | None = None
         self._last_result: StateResult | None = None
@@ -374,6 +390,11 @@ class StateMonitor:
         return self._vision_bridge
 
     @property
+    def task_bridge(self) -> Any | None:
+        """当前接线的任务编排桥（Phase 7.5；未接线时为 ``None``）。"""
+        return self._task_bridge
+
+    @property
     def lifecycle(self) -> RuntimeLifecycle:
         """生命周期状态机（Phase 5.4：``INITIALIZING`` / ``READY`` / ``RUNNING`` / …）。"""
         return self._lifecycle
@@ -495,6 +516,8 @@ class StateMonitor:
 
         if self._on_stable is not None:
             self._on_stable(stable)
+        # 注：Phase 7.5 的任务编排在 run() 每轮末尾驱动（在快照推送之后），
+        # 因此这里不通知任务桥——避免"本轮快照尚未就绪就触发任务"。
         if self._on_result is not None:
             self._on_result(result)
         if self._timing_enabled:
@@ -810,6 +833,33 @@ class StateMonitor:
         except Exception as exc:  # noqa: BLE001 - 桥的异常绝不影响主循环
             logger.error("推送视觉快照失败（已隔离，不影响监控循环）: %s", exc)
 
+    def _notify_task_bridge(
+        self, *, stable: StableStateResult | None, schedule: CycleSchedule
+    ) -> None:
+        """每轮末尾驱动任务编排桥（Phase 7.5）。
+
+        顺序与语义：
+
+        1. **在快照推送之后调用**（``run()`` 内），因此任务决策总能使用**本轮**的视觉快照；
+        2. 仅当本轮**确实处理了一帧**（``frame is not None``）时才上报稳定状态——
+           跳过轮没有新的状态结论，不应重复触发任务（但节拍照常上报，用于计时 / 超时）；
+        3. **未接线即空操作**（``task_bridge=None``）；
+        4. **异常隔离**：桥或任务侧的异常都在此捕获，绝不影响监控主循环。
+        """
+        bridge = self._task_bridge
+        if bridge is None:
+            return
+        # 两个通知各自独立隔离：一个失败不影响另一个，也绝不影响监控主循环
+        if stable is not None:
+            try:
+                bridge.on_state_stable(stable)
+            except Exception as exc:  # noqa: BLE001 - 任务编排异常绝不影响主循环
+                logger.error("任务编排处理稳定状态失败（已隔离）: %s", exc)
+        try:
+            bridge.on_cycle(schedule)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("任务编排处理节拍失败（已隔离）: %s", exc)
+
     def _start_source(self) -> None:
         """启动帧来源（若其提供 ``start()``；幂等，异常不致命）。"""
         starter = getattr(self._source, "start", None)
@@ -981,6 +1031,11 @@ class StateMonitor:
                 # Phase 7.3：把本轮的视觉结果推送给 Action 侧（未接线时是空操作）
                 self._publish_vision_snapshot(
                     frame=frame, schedule=schedule, timestamp=timestamp
+                )
+                # Phase 7.5：驱动任务编排（在快照推送**之后**，任务能看到本轮最新快照）
+                self._notify_task_bridge(
+                    stable=self._last_stable if frame is not None else None,
+                    schedule=schedule,
                 )
                 if exhausted:
                     stop_reason = StopReason.RECOVERY_EXHAUSTED
