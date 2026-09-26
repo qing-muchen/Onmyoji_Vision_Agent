@@ -138,6 +138,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | 基础设施 | `src/core` | 配置（`config.py`）、几何、路径、异常 | 不解读画面 |
 | 视觉输入 | `src/vision/{window,calibration,capture}` | 窗口定位 / 前台控制 / 坐标映射 / 帧采集与缓冲 | 不解读内容 |
 | 视觉判定 | `src/vision/{detector,scene,ocr}` | 元素定位 / 整图场景识别 / 文字识别（可独立使用的视觉能力） | 不产出状态 |
+| **数据集基础设施** | `src/vision/dataset` | 元素级标注契约（`ElementAnnotation`：区域性质 / 可见性 / 审核）、采集来源模型（`CaptureSource` / `SourceRegistry`）、来源分组与泄漏防护（`plan_splits`） | 不 import task / action / runtime；不修改 `raw/`；**不产生**任何标注（只校验） |
 | **证据层** | `src/vision/evidence` | 把一帧翻译为**可解释证据**（可靠度、分组、解释信息、状态可信度校准） | 不产出状态、不做时间滤波、不读文件 |
 | **状态层** | `src/vision/state` | 证据 → `StateResult`（配置规则映射 + 解释）；帧路径只判转场 | 证据路径不读像素、不做时间滤波 |
 | **编排** | `src/vision/pipeline` | `Frame → 证据 → 状态` 的组合单元（`EvidenceFrameProcessor`）+ 视觉目标转换（`VisionTargetAdapter`：证据 / 检测 → `VisionTargetCandidate` / `TargetSnapshot`，Phase 7.2；**Phase 11.0：只有显式登记为可执行目标（`ACTIONABLE_EVIDENCE`）且为元素级定位（`ELEMENT_LEVEL_EVIDENCE`）的证据才产生可执行候选，状态证据 / 搜索 ROI 不冒充可点击目标**） | 不做循环 / 采集 / 时间滤波 / 点击；**不 import** `src.action` / `src.task` / `src.runtime`，不调用 `ActionDispatcher`、不产生输入 |
@@ -228,6 +229,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | I-15 | 一个有效视觉判定帧最多一条观察：跳过轮 / capture 失败 / 未确认帧不产生观察；重复与乱序观察被去重 / 拒绝 | `::test_invalid_state_results_do_not_produce_observations`、`::test_same_observation_is_deduplicated`、`::test_out_of_order_observation_is_rejected` |
 | I-16 | 状态证据 ≠ 可执行目标：只有登记在 `ACTIONABLE_EVIDENCE`（且元素级登记）的证据才产生可执行候选；未确认候选的 `calibrated=False`（真实后端下被安全门拒绝） | `tests/test_phase110_visual_reliability.py::test_search_roi_evidence_never_becomes_clickable_target`、`::test_candidate_without_element_level_is_not_calibrated` |
 | I-17 | 快照失效必须显式：没有新帧 / 窗口不可操作 ⇒ 立即发布空快照（`target_not_found`），TTL 只作兜底；失效原因可区分（`no_frame` / `window_unavailable`） | `::test_capture_failure_invalidates_snapshot_immediately`、`::test_window_unavailable_invalidation_reason` |
+| I-18 | 元素级真值必须来自**人工标注 + 独立审核**（`verified` + `approved` + `annotator != reviewer`）；视觉匹配框不得当作已验证点击区域（`region_kind`）；"未标注"≠"真实负样本"（`visibility: absent`） | `tests/test_dataset_annotations.py::test_unreviewed_annotations_are_not_ground_truth`、`::test_annotation_schema_is_strict` |
+| I-19 | `raw/` 是唯一真源：默认拒绝被构建脚本清空（需显式 `--allow-raw-reset` + 清单校验）；历史素材缺 `session_id` 时**不得补造**，划分数据不足时输出 `insufficient_data` | `::test_legacy_sources_keep_unknown_fields_empty`、`::test_missing_session_is_handled_conservatively`、`::test_repository_dataset_matches_phase_110_baseline` |
 
 ---
 
@@ -268,6 +271,7 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 
 | Phase 11.0 | 视觉目标可靠性与安全基线（State Evidence vs Actionable Target 登记表 / `calibrated` 依据元素级定位 / 快照主动失效 `invalidate()` + 失效原因 / 空快照 `now` 缺陷修复 / 数据集独立性审查：178 独立原图 vs 1602 ROI） | `PHASE11_0_VISUAL_TARGET_RELIABILITY_REPORT.md` |## 8. 已知限制与后续
 
+| Phase 11.1 | 元素级数据集与真值基础设施（`src/vision/dataset/`：标注契约 / 来源模型 / 同源分组与泄漏防护；`tools/check_annotations.py` + `tools/raw_manifest.py`；`build_dataset.py` raw 保护） | `PHASE11_1_ELEMENT_DATASET_REPORT.md` |
 | 项 | 现状 | 归属 |
 | --- | --- | --- |
 | 实时循环（真实采集） | **已接线**（Phase 5.2）：`WindowFrameSource`（dxcam 优先 / mss 回退）+ `ForegroundGuard`（只检查不抢占）+ `CycleScheduler`（deadline based，late cycle 有记录）；真实窗口长跑见报告 | 已完成 |

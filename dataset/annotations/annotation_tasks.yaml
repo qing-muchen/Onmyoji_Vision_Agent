@@ -1,0 +1,101 @@
+# 元素级标注任务清单（Phase 11.1）
+#
+# 用途：把"需要标注什么"与"标注它能证明什么"写清楚，避免把状态证据当成可点击目标。
+#
+# role 语义：
+#   actionable   ==> 实际可交互的 UI 元素：**需要** `clickable_verified` 区域标注
+#   ui_element   ==> 有明确视觉外接框的元素：需要 `ui_element` 标注（可点击性未验证）
+#   state_only   ==> 仅作**状态证据**的区域（例如整条底部功能栏）：**不做**可点击标注
+#
+# coordinate_space 固定 frame_client_pixels（原始帧客户区像素）。
+# 只有 `clickable_verified` + 独立审核通过，才构成"可点击区域真值"。
+
+phase: "11.1"
+coordinate_space: frame_client_pixels
+
+targets:
+  # ---------------- P0：优先建立真值 ----------------
+  - element_name: battle_auto_button
+    priority: P0
+    role: actionable
+    reason: 战斗左下角「自动/手动」按钮；Phase 11.0 已登记为唯一可执行目标
+    needed_annotations: [ui_element, clickable_verified]
+    source_hint: features/battle/auto_button/**、raw/battle/**
+
+  - element_name: battle_skill_area
+    priority: P0
+    role: ui_element
+    reason: 技能区整体区域；可定位但不代表某个技能按钮可点击
+    needed_annotations: [ui_element]
+    source_hint: features/battle/skill_area/**、raw/battle/**
+
+  - element_name: bottom_menu_yard
+    priority: P0
+    role: state_only
+    reason: 庭院底部功能栏（**状态证据**）；整体区域不是可点击目标
+    needed_annotations: [state_evidence]
+    source_hint: features/bottom_menu/yard/**、raw/yard/**
+
+  - element_name: bottom_menu_exploration
+    priority: P0
+    role: state_only
+    reason: 探索界面底部功能栏（**状态证据**）
+    needed_annotations: [state_evidence]
+    source_hint: features/bottom_menu/exploration/**、raw/exploration/**
+
+  # ---------------- P1：量足够后再建立 ----------------
+  - element_name: battle_action_bar
+    priority: P1
+    role: state_only
+    reason: 战斗操作栏区域（状态证据）；具体按钮需单独登记后才能标注点击区域
+    needed_annotations: [state_evidence]
+    source_hint: features/battle/action_bar/**
+
+  - element_name: battle_shikigami_icons
+    priority: P1
+    role: ui_element
+    reason: 式神头像区；逐个头像的可点击性需按按钮级别单独登记
+    needed_annotations: [ui_element]
+    source_hint: features/battle/shikigami_icons/**
+
+  - element_name: chapter_panel
+    priority: P1
+    role: ui_element
+    reason: 章节面板；面板内每个按钮需单独登记
+    needed_annotations: [ui_element]
+    source_hint: features/chapter_panel/**
+
+  - element_name: victory_icon
+    priority: P1
+    role: state_only
+    reason: **结算状态证据**；victory_icon 本身不是按钮 ⇒ **不做**可点击标注
+    needed_annotations: [state_evidence]
+    source_hint: features/victory_icon/**
+
+  - element_name: reward_panel
+    priority: P1
+    role: ui_element
+    reason: 奖励面板；面板内"确认"按钮需单独登记
+    needed_annotations: [ui_element]
+    source_hint: features/reward_panel/**
+
+# 采集目标（**目标**，不是自动生成素材的要求）
+collection_targets:
+  element_level_independent_sources: 100   # 元素级独立原图（逐步补充，禁止伪造）
+  resolutions:
+    - "1280x720"
+    - "1600x900"
+    - "1920x1080"
+    - "2560x1600"
+  window_scales: ["1.0", "1.25", "1.5"]
+  required_variations:
+    - 不同庭院皮肤
+    - 不同章节 / 副本
+    - 战斗动画中间帧
+    - UI 遮挡 / 按钮隐藏
+    - 相似但不可交互的界面（困难负样本）
+
+notes:
+  - 本阶段若没有实际采集环境，只交付规范、工具与清单，**不声称已完成补采**。
+  - 采集工具不得发送任何游戏输入（只截屏 + 只写元数据）。
+  - 历史 178 张缺 session_id：不得凭空补造，一律 null + origin=legacy-import。

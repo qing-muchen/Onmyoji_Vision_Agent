@@ -1,0 +1,1255 @@
+{
+  "kind": "raw-sha256",
+  "phase": "11.1",
+  "dataset_root": "dataset",
+  "count": 178,
+  "entries": [
+    {
+      "path": "raw/battle/battle_auto_001.png",
+      "sha256": "86aa1519be791901326b61492fb07b76a9e1f55aa7035f4d6ce9d9f30f083cfb",
+      "bytes": 3122500,
+      "width": 1706,
+      "height": 955
+    },
+    {
+      "path": "raw/battle/battle_auto_002.png",
+      "sha256": "cd8d0fa44a681eabd6f03a0ce481167afb585a6cb032145b5a0c58cf2ba4ebe3",
+      "bytes": 3240156,
+      "width": 1705,
+      "height": 958
+    },
+    {
+      "path": "raw/battle/battle_auto_003.png",
+      "sha256": "6d8910b9464a5e0188e641884be5e8b9bd20af54af4e4e3e5f6c81e235cfe527",
+      "bytes": 3784308,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/battle_result/battle_result_win_001.png",
+      "sha256": "8308482dcfb1b6edea8453744af9c3143b6d10158700c0b6dacbc9d768f22c25",
+      "bytes": 2086890,
+      "width": 1706,
+      "height": 957
+    },
+    {
+      "path": "raw/battle_reward/battle_reward_item_001.png",
+      "sha256": "af1988637cf5980f4e638f080dd88c043e2caee508aa5942066b48660da8f54a",
+      "bytes": 1600537,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_001.png",
+      "sha256": "37fcc2b847707a858f71d02445de8a1a1c8a7c9ba8f5bf66ccd7f59f9819437c",
+      "bytes": 4156611,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_002.png",
+      "sha256": "01d649746973d38133c3fc0eda4c0dc0eba776ed7d56f5f1ea454c8e666c8947",
+      "bytes": 3562930,
+      "width": 1707,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_003.png",
+      "sha256": "cd436273f7f8f147dfbf0d08200bc8964f18dd9816dbbd63e682c4f423496e46",
+      "bytes": 3941998,
+      "width": 1710,
+      "height": 959
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_004.png",
+      "sha256": "b1fcd12e52682afa78cfbe9d41c50c9ab87a3bd3df11dba1890be202dcea7b8f",
+      "bytes": 4034892,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_005.png",
+      "sha256": "e8d2d6572c45eb3826971ba3de820ce74ea76fb66d904df298ca5cc7ba030866",
+      "bytes": 3377351,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_006.png",
+      "sha256": "2883b1f418f471b22fe054654c1a9e8ae67fef2d2fb4db3a5d1ace68a74468f1",
+      "bytes": 3870443,
+      "width": 1703,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_007.png",
+      "sha256": "953cc967fc52fbaecf38aa1638dadb333ef4ad20e7e9cb9d4a28836a9af063cc",
+      "bytes": 3956290,
+      "width": 1704,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_008.png",
+      "sha256": "a479018d5df4b6a04909159237e525084515a61c9154032ad0bca0b608c2c062",
+      "bytes": 4012959,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_009.png",
+      "sha256": "6f7dbf314333e0f302c6e4dcd373f10281dcbc397dee3ce0de1ff5cbca1968ec",
+      "bytes": 3940387,
+      "width": 1704,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_010.png",
+      "sha256": "2f881bfd1989cb90177162ca6e511cb5c7dfc9fe21e235a86a7e0dba93d1cb4d",
+      "bytes": 4110118,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_011.png",
+      "sha256": "1433b79215a34ca29b02a3b2e692ad722cc02b7edc12d233aad97281480cb879",
+      "bytes": 3836062,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_012.png",
+      "sha256": "aba0d44ab9bc99621624111114d78e77da238c7ed10d7c45f5d28a41b16f953c",
+      "bytes": 4053587,
+      "width": 1705,
+      "height": 958
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_013.png",
+      "sha256": "b06524022a0bc400d6f12865019d1516ffb355f9e0cafd5158df814c6e2f1fea",
+      "bytes": 3952160,
+      "width": 1707,
+      "height": 957
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_014.png",
+      "sha256": "675d5fe4984c3f8561e189b64e3d703b13011ddb7f3de4da2e21873301a50ff8",
+      "bytes": 3870060,
+      "width": 1705,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_015.png",
+      "sha256": "a17b9c2f8827449cc1b53317f3603e3d5d96775bf8a7172c90b53d574ed6f580",
+      "bytes": 3801008,
+      "width": 1704,
+      "height": 963
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_016.png",
+      "sha256": "27b039becc4a790823573e4a46c89a5efacc71fa3d0e26552c7161218e5d0a88",
+      "bytes": 3727397,
+      "width": 1709,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_017.png",
+      "sha256": "340c8d2f89aa0ac831cecac980384f931328bb405c3a2d88b267e51bc6a0352d",
+      "bytes": 3911888,
+      "width": 1704,
+      "height": 958
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_018.png",
+      "sha256": "caadc0692b56b094dc2a04b01252ce143ad7d68491bf1afb2208c5e75a36d281",
+      "bytes": 3621108,
+      "width": 1704,
+      "height": 959
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_019.png",
+      "sha256": "e94c55164bdc9b5b95cd7c0d9bc817e88826680c72fb675fab94c332c714ed4c",
+      "bytes": 3872200,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_020.png",
+      "sha256": "6214becff83c374b475908a107045b171836e1f0c5925a2fd4f956fb4543ccdf",
+      "bytes": 3791022,
+      "width": 1704,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_021.png",
+      "sha256": "119f0ec3630200254fb48e5eb0e4554190df740f612c188633510ac760f8a252",
+      "bytes": 4018229,
+      "width": 1707,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_022.png",
+      "sha256": "b78e957eb2a31739f74cd41d149bd2e8625e75bbd50f3da577e9924e164862ba",
+      "bytes": 3553394,
+      "width": 1707,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_023.png",
+      "sha256": "971bd22b95cc2a61ff190c8e9735432cf25ad8bba19d11c4f31d7113295fb036",
+      "bytes": 3828485,
+      "width": 1704,
+      "height": 958
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_024.png",
+      "sha256": "5b21d9af0d541326800d98d08b4453b9c2da2aaf60fe50d63609de51d1e0009e",
+      "bytes": 4176558,
+      "width": 1707,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_025.png",
+      "sha256": "0c6ad7998b486039a9b9317155e1308f4151ccf090f22e4551e5a7e524a0fef3",
+      "bytes": 3986770,
+      "width": 1706,
+      "height": 963
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_026.png",
+      "sha256": "12277b8bb2ce30fa5323c1776a7e83cec8578b6cae9f9643d6d3396bd86e4fea",
+      "bytes": 4030505,
+      "width": 1704,
+      "height": 957
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_027.png",
+      "sha256": "8651e68641a6858239cf0b3c975ead6abb5199ef4ff92a45aae61d67ad3751fa",
+      "bytes": 4029539,
+      "width": 1704,
+      "height": 958
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_028.png",
+      "sha256": "d21a7be4ee3330766ee69ccbfe30ff9ed4be70032c4352603ecb39bb4c0c3d74",
+      "bytes": 4128965,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_029.png",
+      "sha256": "5b9600f1ea1e0241609705345fa7867c9061d07d82891eb1564b5e853b1b2c54",
+      "bytes": 3884915,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_030.png",
+      "sha256": "1fff7d90ab06baf9f4b76207bae9c7cafa00777ee629b4721498fc141874c484",
+      "bytes": 3960638,
+      "width": 1706,
+      "height": 958
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_031.png",
+      "sha256": "c0a974ddccf3d1b7bbcd1f693375c5253ce4d6f662c7e5e391a6be1aacf54665",
+      "bytes": 4174931,
+      "width": 1704,
+      "height": 961
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_032.png",
+      "sha256": "b278e7303d27a579d7c7e8ec2686e12edc876419ea259b1b7d50da6caed13f53",
+      "bytes": 3876245,
+      "width": 1707,
+      "height": 959
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_033.png",
+      "sha256": "5faf539cf6ba563f8e951e4753ac3e334e8afb285080ebdc4b9b1131da557a50",
+      "bytes": 4025714,
+      "width": 1705,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_034.png",
+      "sha256": "ecae88b1c0bc38fea3a686d6e9de2f9530514547f949bd5ba75079dc08c778ab",
+      "bytes": 3008345,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_035.png",
+      "sha256": "f75da01e6fef3d355fe2eb6debfb769aa1425e94fcf7fd1d96ebe897d45075d0",
+      "bytes": 3275556,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/exploration/exploration_ch26_036.png",
+      "sha256": "c53bc4cca076e449ecc85c9520aa5d16ddfc995413a6e145a28e67bb05e728be",
+      "bytes": 3939218,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/collection/unknown_collection_001.png",
+      "sha256": "bcc5be9096414065df12a663e02a695c6cdf64a3786324156e0c32183832a502",
+      "bytes": 2962667,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/collection/unknown_collection_002.png",
+      "sha256": "819d35d73df2e8942e59c3cb1ef58560b10dc3cc8e376e3b98302002228c4a24",
+      "bytes": 3150323,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/collection/unknown_collection_003.png",
+      "sha256": "629b0de781c68975c36c3ce90017b2fe0467a49114f3b71857e175a20f1b5c87",
+      "bytes": 2818770,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/collection/unknown_collection_004.png",
+      "sha256": "d71e77f466415649a5b1f72523df924f97f8a00c479d55b9095b3074262d0fd6",
+      "bytes": 2533323,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/equipment/unknown_equipment_001.png",
+      "sha256": "8fd0e222d0d3338796f3cf1f0b4bbdd043f96e65bc8777d869ef83f1387be99d",
+      "bytes": 1779126,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/equipment/unknown_equipment_002.png",
+      "sha256": "1cbaf8ea7f8686fb238c45d0d6f8ede1d8a8848c3a33d26a7532e754ab7f3b79",
+      "bytes": 2029414,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/unknown/equipment/unknown_equipment_003.png",
+      "sha256": "d3b3f835207a2622d7a11be03ee6af0bc0d841e74096e15112ccaf8f32ce8656",
+      "bytes": 3133893,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/friends/unknown_friends_001.png",
+      "sha256": "57c7c1e005e75d927eeeaa80f9e383be04f016f0693c52851aaf4f4bd96c23f1",
+      "bytes": 1593740,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/friends/unknown_friends_002.png",
+      "sha256": "57c7c1e005e75d927eeeaa80f9e383be04f016f0693c52851aaf4f4bd96c23f1",
+      "bytes": 1593740,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_001.png",
+      "sha256": "04120a3d5a1acd455e91370bb8e14a2883aa85cc8670fd29c3072e8ed54fddc5",
+      "bytes": 2520110,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_002.png",
+      "sha256": "b879141ed9c8f7a1fdf276b56c9d84a7e099e42cfab864b716faf842801bfa32",
+      "bytes": 3039818,
+      "width": 1706,
+      "height": 963
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_003.png",
+      "sha256": "065a2169040ffb82605d3d731f700697f4afb88ab3eff813df7365098f2e3eeb",
+      "bytes": 2940953,
+      "width": 1706,
+      "height": 963
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_004.png",
+      "sha256": "d9073c080eeeeef0d90cb8fc4c3402d4338deb67d6f3db3cb62b71cbc219e339",
+      "bytes": 1914335,
+      "width": 1706,
+      "height": 964
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_005.png",
+      "sha256": "9173e90358c6486bf0c5347586f2917f492f9bc71277c8a7a720df59a4dff7c5",
+      "bytes": 3052517,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_006.png",
+      "sha256": "1b5d8f888d1d82b202e804cda1e792826859603f23648c8e38196cb300fa4041",
+      "bytes": 3012175,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_007.png",
+      "sha256": "3778ca4ffbbe6ba90e8d3be315f1ee9bf39ca56507311a4d8f1af341415d4121",
+      "bytes": 3102015,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_008.png",
+      "sha256": "1939339d3f5b17aff9f8c680a04a26f74ce654299add21edda753cd8b48f21a7",
+      "bytes": 2183042,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_009.png",
+      "sha256": "f133baa1f1f1811fa5409cd4be753367ab9ca397104c17f80d4b601eff4f755f",
+      "bytes": 2411894,
+      "width": 1706,
+      "height": 963
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_010.png",
+      "sha256": "1d6b9e290a842e10077ce552cca53c89df351e27308fe674134b24c661e65e5d",
+      "bytes": 1450139,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_011.png",
+      "sha256": "033321534e9b8faa265f8ee51a1b0c694b31f1a62708def0b8fe34ba686dce4d",
+      "bytes": 3175789,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_012.png",
+      "sha256": "c413db3aecc00ef59ddf74618123b3dd371497b45e28792547c12d6804e37c59",
+      "bytes": 3075812,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_013.png",
+      "sha256": "2dc6df7d71455da872f40b326c0e207f7959ef1050bf84ca7c314bfc0d72b5f1",
+      "bytes": 3176028,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_014.png",
+      "sha256": "216b3c680fb6ee8863b65dfab3bf697f01a716f2e5326d34e87ebf61081c2b3c",
+      "bytes": 3371785,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_015.png",
+      "sha256": "0f02abee60d7ccec587b2aeb7033d549acd6d423baabc1779a190dcc9260eca6",
+      "bytes": 2929966,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_016.png",
+      "sha256": "ac7b61d179b6a625f51eac14eab55fd23e9469fa31d92571b0ebd447199b670f",
+      "bytes": 2551727,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_017.png",
+      "sha256": "939c294bdc29e67f5a6d3d6e700a2054582af6074173c80d96368d1d46663296",
+      "bytes": 2398652,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_018.png",
+      "sha256": "935b617dfa285a1853f44b935f81a92b95854724e504983979310c8f0d5d6b88",
+      "bytes": 3020651,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_019.png",
+      "sha256": "e602287afa921c9839ce9e7b1a568805b2a0bb2a83a08cddae02a9c35f55c3a5",
+      "bytes": 1544490,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_020.png",
+      "sha256": "f579c9ef87762a6e26d0710da9345356be866292a6a074f482ba93ce995537f3",
+      "bytes": 2985333,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_021.png",
+      "sha256": "60bf51b39e85e77465d982701b8d3f278007e779f5df51178564049a7e4662eb",
+      "bytes": 2738300,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/other/unknown_other_022.png",
+      "sha256": "55f7c8b3dbb1ac17ec2302536c6628ddebda5349068a68f85e7020a44bff1d1b",
+      "bytes": 3031446,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/shikigami/unknown_shikigami_001.png",
+      "sha256": "375fd021b92feb96456299c90cce23dec2b26a59dfc1683a0748748a9fe4b176",
+      "bytes": 3049770,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/unknown/shikigami/unknown_shikigami_002.png",
+      "sha256": "604af044092a64512756d3556dd7886ab73ca17233c27c33f144d797ca05cd9f",
+      "bytes": 3526348,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/unknown/shikigami/unknown_shikigami_003.png",
+      "sha256": "6c2ed521236d065e3a16a9b8894709493a8888478fe128eb3d8e9fdd30f83dd7",
+      "bytes": 2598211,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/shikigami/unknown_shikigami_004.png",
+      "sha256": "34fc1d1fc98bed13570f6a3c14f21e41c62495a05c20a24b28c72d57c50d32b5",
+      "bytes": 2336296,
+      "width": 1706,
+      "height": 963
+    },
+    {
+      "path": "raw/unknown/shop/unknown_shop_001.png",
+      "sha256": "c2c6e446ce9fefebdb896e776cdb8cf453c923cff12d67d72c22bb3b9d0834d8",
+      "bytes": 2214609,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/shop/unknown_shop_002.png",
+      "sha256": "26f0fbd2e7479741400006a1e2c90e9b8504d21837741ea941f43c5ff6fe4fcc",
+      "bytes": 2681323,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/unknown/shop/unknown_shop_003.png",
+      "sha256": "93b7ddee36ab41ac00c0e1bb642ce44ccefd47339508649300dd1feb8d1762d5",
+      "bytes": 3003205,
+      "width": 1706,
+      "height": 959
+    },
+    {
+      "path": "raw/unknown/shop/unknown_shop_004.png",
+      "sha256": "3832e3079f35185d50859b86044d9a7ae27b2b6fab07d4b619fe07044a361d58",
+      "bytes": 2276290,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/yard/yard_cap_001.png",
+      "sha256": "56bff4370f3a20935278dc2504c5067571c54072ed88e74ad18b577539681525",
+      "bytes": 3548190,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/yard/yard_cap_002.png",
+      "sha256": "95a5639adb0e95cc4d7ceb00c5a132c28f4930b5740932f715b0445672794859",
+      "bytes": 3412487,
+      "width": 1706,
+      "height": 959
+    },
+    {
+      "path": "raw/yard/yard_cap_003.png",
+      "sha256": "f738392e406aa9cef2802d9ceba88fd89bdffa5e9c93425cb4f10e15e6173a38",
+      "bytes": 3667853,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_004.png",
+      "sha256": "12ce2653a473c80427e50274a3f47955794236b78618ad73a6b80359bc4b9258",
+      "bytes": 3334094,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_005.png",
+      "sha256": "54f9e4750a291c0b756b39ee25c16710a4e91c0ed7f705c96d5e02b540858b53",
+      "bytes": 3449752,
+      "width": 1706,
+      "height": 957
+    },
+    {
+      "path": "raw/yard/yard_cap_006.png",
+      "sha256": "809bc978eb2186a301beafb470e2d9e929413a91f421438007d2e41abbbb3182",
+      "bytes": 3564174,
+      "width": 1706,
+      "height": 957
+    },
+    {
+      "path": "raw/yard/yard_cap_007.png",
+      "sha256": "267221ddea83c7f9c8027c41a41eacf473d7d48b7071181de8b19287f9ddcbf0",
+      "bytes": 3660796,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/yard/yard_cap_008.png",
+      "sha256": "e442b1ed410747fbc07e2d667c5c594762910106fbed728dfc2c7a9f57d91d9d",
+      "bytes": 3705004,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_009.png",
+      "sha256": "7c2810cfe3bd0a060438e8b21425eae8264b64654b1f596a5f881e427d2df3e2",
+      "bytes": 3423500,
+      "width": 1706,
+      "height": 956
+    },
+    {
+      "path": "raw/yard/yard_cap_010.png",
+      "sha256": "6da7fefd76f54626e54517df98c80a9e8e36413c57cb159c0752008ef93cce47",
+      "bytes": 3215424,
+      "width": 1706,
+      "height": 958
+    },
+    {
+      "path": "raw/yard/yard_cap_011.png",
+      "sha256": "427d8549073b3f0195439ad34d0040523f903ccec0a28cb17799bc22e977547d",
+      "bytes": 3587146,
+      "width": 1706,
+      "height": 959
+    },
+    {
+      "path": "raw/yard/yard_cap_012.png",
+      "sha256": "51823629baac69fd85b07e4d0a4c51fb277a04304c9fdd596f2f3979ee989f2d",
+      "bytes": 3360871,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/yard/yard_cap_013.png",
+      "sha256": "200e7b8c3728f8a9d243bcdc5f01dd2375924678653de7506329b8c5e17f3f01",
+      "bytes": 3508348,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/yard/yard_cap_014.png",
+      "sha256": "00240541bea758f43b7c1599ede7d936ea2490c67445e7c1e2baef825e1a384c",
+      "bytes": 3473611,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_015.png",
+      "sha256": "27a5c80bc96283c92c1e5baa0e3d22e7ca31dc2277fc254da219330fa0a189a9",
+      "bytes": 3686859,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_016.png",
+      "sha256": "2b9793a1a9bdf4df057dcab450b791b75e622d937a4aefe4abdf67774379ec2f",
+      "bytes": 3646433,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_017.png",
+      "sha256": "cb6ce2a10ee1b83fe823980e4f5ae8ce5d7dbe523fe4d7fa748482ef36cc08a1",
+      "bytes": 3215195,
+      "width": 1706,
+      "height": 963
+    },
+    {
+      "path": "raw/yard/yard_cap_018.png",
+      "sha256": "40131ed0e705ad764898ec6f6520f0ad6cbd23bb99c52fcd6c606d289b2d4be5",
+      "bytes": 3718560,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/yard/yard_cap_019.png",
+      "sha256": "1c03c5d6ddacac9d072eb079122c281cfe0877db7cfc4fc770a3206b71376315",
+      "bytes": 3513650,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_020.png",
+      "sha256": "f4fee5323b6833013da5c3c690675a52c3abed2013702110624394010b7f5794",
+      "bytes": 3430787,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_021.png",
+      "sha256": "3fa07fbd4746a594a0fc40ae104b9871fa38e9d15f27ed16fb4b64871d46f096",
+      "bytes": 3317770,
+      "width": 1706,
+      "height": 963
+    },
+    {
+      "path": "raw/yard/yard_cap_022.png",
+      "sha256": "5078a95a89a525536f7f54a6a03c6c1a932c5cef78acb30c9e413ad231709601",
+      "bytes": 3427068,
+      "width": 1706,
+      "height": 962
+    },
+    {
+      "path": "raw/yard/yard_cap_023.png",
+      "sha256": "612405e3aef43d9a88c350d2499e2b01dad97a530de32f4320d5fa9e81cbce08",
+      "bytes": 3269770,
+      "width": 1706,
+      "height": 957
+    },
+    {
+      "path": "raw/yard/yard_cap_024.png",
+      "sha256": "91676290b56b391d5db7b16d2ab96a49a4b676af9f7a097078e24f4d009114b4",
+      "bytes": 2878504,
+      "width": 1703,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_025.png",
+      "sha256": "01966cd0466e254e0cbfdfe4e5f98315275f62d4c7d1b67ec58c6f526d85b1ff",
+      "bytes": 3454122,
+      "width": 1706,
+      "height": 959
+    },
+    {
+      "path": "raw/yard/yard_cap_026.png",
+      "sha256": "1e4289a470dbaac2568f9a2182be0b14923f3e2a16775636f2b61c47141861c1",
+      "bytes": 3475581,
+      "width": 1704,
+      "height": 958
+    },
+    {
+      "path": "raw/yard/yard_cap_027.png",
+      "sha256": "e49c2298ed31f2300782dc239b1a307d0e61abd8a041eb8a1a1316029d7301ee",
+      "bytes": 3672882,
+      "width": 1706,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_cap_028.png",
+      "sha256": "e0bfa0f475520e903a481a9f5f14c1125014412f1ec6c1f9d6d20cea9d47891b",
+      "bytes": 3502619,
+      "width": 1706,
+      "height": 961
+    },
+    {
+      "path": "raw/yard/yard_skin001_001.png",
+      "sha256": "30c19de243049464090dd97ea6d5751fb6f8acdfc0db01a83a40fb92c002c9fe",
+      "bytes": 1983603,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin001_002.png",
+      "sha256": "33933a94e066ed06594f1aa1c69abbb5ee33f0787af438fb2a1ecc82fdadb5de",
+      "bytes": 1977708,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin001_003.png",
+      "sha256": "8f6abbf8f9b4aec8f8012778c73c4ac2e23d7625548753928e122478490a1d4a",
+      "bytes": 2006064,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin001_004.png",
+      "sha256": "a245080162061c59422bb81879a5015d1c29bcd36b68b05307539023c54f3158",
+      "bytes": 2014190,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin001_005.png",
+      "sha256": "bfd7c72f1766c2006a67b0cf3cc3febc867033edffe074dad6ab52c5bc32dcac",
+      "bytes": 2058717,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin001_006.png",
+      "sha256": "cadce80879dfb68b7293dfefb15d8699925c558234f95d04ca7229663eaf5504",
+      "bytes": 2070528,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin002_001.png",
+      "sha256": "a067ae318923bc14a58d10e2805acbdda59f104c1704f1a6826066926b39dee7",
+      "bytes": 1757378,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin002_002.png",
+      "sha256": "9ce16981b62f029873850dae9dc3cc96be5db33de554b6bb5606d533915454cb",
+      "bytes": 1757456,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin002_003.png",
+      "sha256": "2a505a150765dcc7bf1bfb359f7e59be8d328709ea33cf2c25a57bd7f50ca5b0",
+      "bytes": 1759169,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin002_004.png",
+      "sha256": "2660cbc816969fd62d6cd8c32bb581d961be6bd026d94f43c269abae76f96d1f",
+      "bytes": 1756403,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin002_005.png",
+      "sha256": "4c0e825b0dcec73715fd5a5a8008820e4a04cf26964c31090a36635e772e81bc",
+      "bytes": 1808614,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin002_006.png",
+      "sha256": "0ab2d3d71d3a59331f065ae28304e60ac26cc7ffeda03e22ff5feede4eeda694",
+      "bytes": 1785619,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin003_001.png",
+      "sha256": "ee9b81ee83b8dd9aad27757cd5ecf52e49feac799413fdc6199b5397188ca115",
+      "bytes": 2005233,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin003_002.png",
+      "sha256": "77ecf933a46382c99215a3f8700440a1a107aa0f7f637f6455469c61a170d4db",
+      "bytes": 1996749,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin003_003.png",
+      "sha256": "6887997be8dfd4a23344f4448be81f7acddf5469d3751b163971b70e3f0f3289",
+      "bytes": 2181087,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin003_004.png",
+      "sha256": "52b0284458555f548ad242ce6bf1797cbe85fa3e271cdcdd0b00438102a936f0",
+      "bytes": 2178031,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin003_005.png",
+      "sha256": "3cb44d53ecf79e76e4c9d64f04161b9dcb5b7c67d5edd3e88e9dc52e8e3e5fae",
+      "bytes": 1960293,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin003_006.png",
+      "sha256": "b64efdbe0e16aa2cd249f166219878da7a14f24063b9cc8fa5cc75b3ee6af948",
+      "bytes": 1966230,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin004_001.png",
+      "sha256": "c8d50df97d2d5c2e70fb986775b9394f9da007dc7a9201cfa44970a9ab141cd8",
+      "bytes": 1908875,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin004_002.png",
+      "sha256": "400c197c304fde8ba8877e7223a6bebb0ba56fc3eb918f0f32da6a9dc7f21bb3",
+      "bytes": 1900774,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin004_003.png",
+      "sha256": "6d9a9770f56609b2e62e7aa052b2ec3b1544df37b50f15be8dd2ec76e5f09f18",
+      "bytes": 1928650,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin004_004.png",
+      "sha256": "416bf1d712991d5ea67560d77044eb464dee2022d3423ef623f013313fe2679e",
+      "bytes": 1928454,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin004_005.png",
+      "sha256": "b6a7a6662838939ce15f39177739fb17226b1b0076dfac520522755763006554",
+      "bytes": 1999256,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin004_006.png",
+      "sha256": "1f752b3a2c48437b376e4ca6fed9ba961e319cb36ceada9225fa3f43ab8fc99d",
+      "bytes": 1999587,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin005_001.png",
+      "sha256": "897e81d520c21cba9b3bb2c21ea9aef1c1e4dae7461257e18b99bd5579d31b74",
+      "bytes": 2015725,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin005_002.png",
+      "sha256": "44b7e40410c21d3797bef0e16cfe325b8999a4c3afcddf23a06e46c28f635bc8",
+      "bytes": 2023565,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin005_003.png",
+      "sha256": "b8af51282713a43f23d42f3fd253bad5a2d9611cfa50813c70bca07b09ae786e",
+      "bytes": 2113976,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin005_004.png",
+      "sha256": "6fd47f6af011a01b82ca05d2557ebd36740628ac3f121254dae2ddd2cbdcffb7",
+      "bytes": 2091763,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin005_005.png",
+      "sha256": "fbc6b0d4f1bd4317288c825f243d718d09cf3e9304e897a8e7e61d033ca83c31",
+      "bytes": 1888109,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin005_006.png",
+      "sha256": "d0819e3342924295ca8379cfa59ea17a1653d9750b5f24e2229f6819f5942fe0",
+      "bytes": 1885812,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin006_001.png",
+      "sha256": "c98e153c0efd84e455f0c2379f53af2fe6c9517beb45e6f97f13a00a71c3dd19",
+      "bytes": 1993971,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin006_002.png",
+      "sha256": "4fd92075ed5fd16bfda7435a815a6c6cb66bdf9dfcfc3662270e6a4141b3f47c",
+      "bytes": 1993908,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin006_003.png",
+      "sha256": "29319c627574e3240448935712a7a2a23d543751348b9f5d9cbd530eda085869",
+      "bytes": 1956085,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin006_004.png",
+      "sha256": "807b4bb8fddf076722660f180763b3b2466a8853e83d248c6ebc0c8dbb8a178c",
+      "bytes": 1956312,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin006_005.png",
+      "sha256": "46b0706b0db124f24f734c129b92285bd8e833cd4b92665535c1ac7e0b2b48a8",
+      "bytes": 2022270,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin006_006.png",
+      "sha256": "7231a1350634ca9274e4f850d0e267457cd78c7788ce4f993f06095ba6b60d42",
+      "bytes": 2017141,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_001.png",
+      "sha256": "6d138f7ff6f936a9f02403abed1f2dfb192937ea79ab59f5184b82ac16ea9fc5",
+      "bytes": 1955421,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_002.png",
+      "sha256": "158da00e6e5e499e33b271db56f1eecae9a83f5e6e96b46f5bfb7e41234d20f9",
+      "bytes": 1945926,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_003.png",
+      "sha256": "fb05d8881a20df69052f738207e9bf74ce8262b29e07996c3af040d1a8de752a",
+      "bytes": 1861389,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_004.png",
+      "sha256": "9a3d6492c2e3f81155b18c6c2802b41423065b3717d5e34b2ec3958ba6937c3b",
+      "bytes": 1861009,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_005.png",
+      "sha256": "81f2cc48263f3ee01d7a87b2362999b6ddf0449e21f1b39cfbaaa00d9a21e6fa",
+      "bytes": 1952932,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_006.png",
+      "sha256": "d82f1a40d10abf9e2c618f1ccef13ee67000d09e49552d164859cc9e451802fc",
+      "bytes": 1956042,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_007.png",
+      "sha256": "67d3a237a5b265734134fb70f4c88b0f3206fea8aeda564cce43fbc1ba1806a7",
+      "bytes": 1853011,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin007_008.png",
+      "sha256": "5e9195fd9f0aac42f6d37acf8bd34bc2b9a45e70df6df99cbf2acc3ccbfaa56b",
+      "bytes": 1854524,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin008_001.png",
+      "sha256": "c02d3ff680f342535e2b1f4291ef69ddb9d6f4ddf878934171de2aa880bc95f3",
+      "bytes": 1797558,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin008_002.png",
+      "sha256": "607cac492d7d691e1ec6fe1f0d12f4459e76a318e0f7b7778b758b81e48cbb7b",
+      "bytes": 1802357,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin008_003.png",
+      "sha256": "b760c4994e0351a449edf6c572285b2f2cbb128c1d59f7b43e672bd0aee1d3ff",
+      "bytes": 1793890,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin008_004.png",
+      "sha256": "a0bfa2eedd2af382d192a5816f745a47aab9bfcfc7d1dc1955dfa7b493672bce",
+      "bytes": 1790281,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin008_005.png",
+      "sha256": "9dd8b6760956202e9d4de44222f744c73c4dd69762c087d5d64c50bf50429cf5",
+      "bytes": 1782144,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin008_006.png",
+      "sha256": "9acfde749942509585594724e16aeb9fc6f53e87d803320864f3d9881630ff87",
+      "bytes": 1781040,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin009_001.png",
+      "sha256": "fc33f404603c1872d79892b0378ae2e8926ab4b31b412f343b8014b849f50be0",
+      "bytes": 1913522,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin009_002.png",
+      "sha256": "18cdbd0bfadfbe6c66845c00480b88280b0a574771f8d3a250c365ccf7b7a07e",
+      "bytes": 1913180,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin010_001.png",
+      "sha256": "1bdb879a150f59169a3c96357d5dedf3f6299eea68594d0265d50b8cedea430d",
+      "bytes": 1985120,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin010_002.png",
+      "sha256": "125c2123a3a134fe0a031746aca6f3465d7da7aa8f37e4a4b23d28040b560b52",
+      "bytes": 1991862,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin011_001.png",
+      "sha256": "0cf0563e18f83e2736c5ff0ffc52097d96e1b5b79f760b5ed455b26d2a8094d4",
+      "bytes": 1534561,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin011_002.png",
+      "sha256": "57728ae13a786151343e459de55bac684618d6d4f68f9e6cc236ab67cba6b2cc",
+      "bytes": 1533653,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin012_001.png",
+      "sha256": "9cb6b85aab584c1dbdf032a2e2ba9ca9bdaa55b3db9e8517d82940a679106f87",
+      "bytes": 1807393,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin012_002.png",
+      "sha256": "02065ac73045a1f3f958714a572ad24d6ef8bdde75185740c1970278f17f308b",
+      "bytes": 1807442,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin013_001.png",
+      "sha256": "41ce5bdfa708edb9c9df2a8a5bfbfc7e55f813debb291a849007792f9456db6e",
+      "bytes": 1739843,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin013_002.png",
+      "sha256": "979db524bc6ac0a35bf0f4f9f05d44116633353f29d12794328df440b5701daa",
+      "bytes": 1736011,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin014_001.png",
+      "sha256": "be4c05746b4ba8e0f494fdaeb0901fb7864ed5c83c94c619892e6bac892d478b",
+      "bytes": 1793504,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin014_002.png",
+      "sha256": "6fdcf00b8c89a829fe1891966b6e2f1e65b2f4720fc5a2c5cde37e19d412cf7b",
+      "bytes": 1817790,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin015_001.png",
+      "sha256": "c6fb7bd3dab955d9e9fa66bf8516785ee096e38e13b0d8cbaf24f589c7c04560",
+      "bytes": 1963449,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin015_002.png",
+      "sha256": "9f18f962c9c4b5ea0de4ddcd1e545d0e97984be718f930d12fab75a3b9edc916",
+      "bytes": 1971050,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin016_001.png",
+      "sha256": "491e8627c3803afaa4beb5c9421e1f4973c73d9c5bff5caf0f48d7c5035c7eac",
+      "bytes": 1995980,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin016_002.png",
+      "sha256": "340c74506b56d27c1092cc8df36728b522bec9b048c0f5597dad7fdbc3e3de22",
+      "bytes": 1993067,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin017_001.png",
+      "sha256": "317ca460781823fde92339bd47e74010ad34f4363a5634ac29c3a629dea495a3",
+      "bytes": 2110488,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin017_002.png",
+      "sha256": "4cbe1fdbeaa1b030ac9ddb763d9fcb04f3ceedde724d864f7655f344dd2c7cfe",
+      "bytes": 2112770,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin018_001.png",
+      "sha256": "d441d3daf96f792451988c771931fee63e5c326e26b1f4cf154587dcec3cb90f",
+      "bytes": 1799195,
+      "width": 1704,
+      "height": 960
+    },
+    {
+      "path": "raw/yard/yard_skin018_002.png",
+      "sha256": "b7ab0bbe79616300558446a03beaea4e4eeff37bf87bbeba20e49f515ff2aab7",
+      "bytes": 1807594,
+      "width": 1704,
+      "height": 960
+    }
+  ],
+  "note": "原始图片为唯一真源；任何条目变化都说明 raw/ 被改动或补齐"
+}

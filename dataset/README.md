@@ -28,6 +28,8 @@
 ```text
 dataset/
 ├── metadata.json                     # 全部源截图的标注（178 条）
+├── annotations/                      # Phase 11.1：元素级人工标注（JSONL）+ 任务清单
+├── manifests/                        # Phase 11.1：raw 真源 SHA256 清单（完整性校验）
 ├── raw/                              # 唯一真源：原始截图归档（不修改像素）
 │   ├── yard/                         #   yard_cap_NNN.png / yard_skinNNN_NNN.png
 │   ├── exploration/                  #   exploration_ch26_NNN.png
@@ -188,6 +190,23 @@ ROI 用**相对完整截图的百分比**表示（`x0, y0, x1, y1`），裁剪�
   }
 }
 ```
+
+## Element-level Annotations（Phase 11.1）
+
+`annotations/` 保存**元素级人工标注**（`source_id` / `element_name` / `bbox` /
+`region_kind` / `visibility` / 审核状态），与 `raw/` 并存，不迁移旧数据。
+详见 `annotations/README.md`；当前 `elements.jsonl` **为空**（尚无人工标注，
+因此元素级定位精度**尚未验证**）。
+
+```bash
+python tools/check_annotations.py     # 只读校验（10 项契约）
+python tools/raw_manifest.py          # 校验 raw 与真源清单一致
+python tools/raw_manifest.py --write  # 显式刷新清单
+```
+
+> ⚠️ `tools/build_dataset.py` 自 Phase 11.1 起对 `raw/`（唯一真源）**默认拒绝清空**：
+> 需要从旧素材整体重建时必须显式 `--allow-raw-reset`，且会先校验真源清单。
+> `--dry-run` 仍可用于预览（只警告、不阻断）。
 
 ## Build & Validation
 

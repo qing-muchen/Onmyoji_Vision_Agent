@@ -2040,6 +2040,20 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   （统一标记 `insufficient_data`）。测试 **1442 passed / 1 skipped**（+21），
   仍**零真实输入**、`backend=dry_run`、`action.enabled=false`。详见
   `docs/PHASE11_0_VISUAL_TARGET_RELIABILITY_REPORT.md`（含数据补采清单）。
-- Phase 11.1：按补采清单扩充数据（元素级 bbox 真值 / 跨分辨率 / 会话分组）、
-  在数据允许后建立可验证的定位基准；编排可靠性（看门狗 + 公平性）、观察驱动的决策输入、
-  触发映射配置化、`exit_actions` 与转移钩子、`drag` 语义、长期记忆。
+- Phase 11.1（**已完成：元素级数据集与真值基础设施**，`feat(dataset): add element level
+  annotation infrastructure`）：`src/vision/dataset/` —— 元素级标注契约
+  （`ElementAnnotation`：`region_kind` 区分**状态证据 / UI 元素 / 已验证可点击区域**，
+  `visibility` 区分"没标注"与 `absent` 真实负样本，真值要求 `verified` + `approved` +
+  **独立审核**）、采集来源模型（`CaptureSource` / `SourceRegistry`：`source_id` 由内容派生、
+  历史素材的 `session_id` **显式留空不补造**、SHA256 完整性、完全重复检测）、
+  同源分组与泄漏防护（`plan_splits`：`session → capture → source` 分组、同源绝不跨集合、
+  数据不足输出 `insufficient_data`）；工具 `tools/check_annotations.py`（10 项只读校验）
+  与 `tools/raw_manifest.py`（raw 真源 SHA256 清单）；**加固** `tools/build_dataset.py`
+  （`raw/` 默认拒绝清空，需 `--allow-raw-reset` 且先校验清单）。
+  测试 **1484 passed / 1 skipped**（+29）；`raw/` 178 张 **SHA256 未变**；
+  当前元素级标注数为 **0** ⇒ 定位精度**仍未验证**（工具主动输出 `insufficient_data`）。
+  详见 `docs/PHASE11_1_ELEMENT_DATASET_REPORT.md`（含补采清单与缺口）。
+- Phase 11.2：实机采集（截屏 + 元数据落盘，**零输入**）+ 元素级标注（≥100 独立原图、
+  跨分辨率 / 跨皮肤 / 会话分组）→ 在真值足够后建立可验证的定位基准；
+  近似重复检测（图像指纹）；编排可靠性（看门狗 + 公平性）、触发映射配置化、
+  `exit_actions` 与转移钩子、`drag` 语义、长期记忆。

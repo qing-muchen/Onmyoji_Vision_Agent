@@ -22,12 +22,16 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import json
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+logger = logging.getLogger("build_dataset")
+
+
 DATASET = REPO_ROOT / "dataset"
 
 TARGET_STATES: tuple[str, ...] = (
@@ -313,15 +317,71 @@ PROTECTED_DIRS: tuple[str, ...] = (
 )
 
 
-def _reset(path: Path, dry_run: bool) -> None:
+#: Phase 11.1：**默认禁止**清空的目录（唯一真源）。
+#:
+#: ``raw/`` 是"未修改的原始截图归档"，其内容只能**追加**（新采集），
+#: 不应当被重建清空：历史素材的采集会话信息已经丢失，一旦清空就无法恢复身份。
+RAW_PROTECTED_DIRS: tuple[str, ...] = ("raw",)
+
+
+def _verify_raw_manifest() -> tuple[bool, str]:
+    """构建前校验 ``raw/`` 与真源清单一致（Phase 11.1）。
+
+    Returns:
+        ``(ok, message)``；清单不存在时返回 ``(True, "清单缺失，跳过校验")``。
+    """
+    manifest = DATASET / "manifests" / "raw_sha256.json"
+    if not manifest.is_file():
+        return True, "真源清单不存在（跳过校验；建议先运行 tools/raw_manifest.py --write）"
+    try:
+        import json as _json
+
+        payload = _json.loads(manifest.read_text(encoding="utf-8"))
+        expected = {str(item["path"]): str(item["sha256"]) for item in payload.get("entries", [])}
+    except Exception as exc:  # noqa: BLE001
+        return False, f"真源清单解析失败: {exc}"
+    from src.vision.dataset.sources import compute_sha256
+
+    changed: list[str] = []
+    missing: list[str] = []
+    for relative, digest in expected.items():
+        target = DATASET / relative
+        if not target.is_file():
+            missing.append(relative)
+            continue
+        if compute_sha256(target) != digest:
+            changed.append(relative)
+    if changed or missing:
+        return False, f"raw 内容与清单不一致（changed={changed[:3]}, missing={missing[:3]}）"
+    return True, f"raw 与清单一致（{len(expected)} 张）"
+
+
+def _reset(path: Path, dry_run: bool, *, allow_raw_reset: bool = False) -> None:
     """清空一个**生成目录**（保留 .gitkeep）。
 
     只允许作用于 ``GENERATED_DIRS`` 登记的路径，且其下不得存在历史素材文件，
     以避免误删旧数据。
+
+    Phase 11.1 加固：``raw/``（唯一真源）**默认拒绝**清空；
+    确需从旧素材重建时必须显式传入 ``allow_raw_reset=True``
+    （CLI 对应 ``--allow-raw-reset``），并在运行前通过真源清单校验。
     """
     relative = path.relative_to(DATASET).as_posix()
     if relative not in GENERATED_DIRS:
         raise RuntimeError(f"拒绝清空未登记的目录（防误删）: {relative}")
+    if relative in RAW_PROTECTED_DIRS and not allow_raw_reset:
+        if dry_run:
+            # dry-run 不写文件：只提示风险，便于预览构建影响
+            logger.warning(
+                "dry-run：跳过清空唯一真源目录 %s（正式运行会拒绝；如确需重建请用 --allow-raw-reset）",
+                relative,
+            )
+            return
+        raise RuntimeError(
+            f"拒绝清空唯一真源目录: {relative}（Phase 11.1 保护）。"
+            "raw/ 只能追加新采集的截图；如确需从历史素材重建，"
+            "请先运行 tools/raw_manifest.py 校验，再显式使用 --allow-raw-reset。"
+        )
     for protected in PROTECTED_DIRS:
         if relative == protected:
             raise RuntimeError(f"拒绝清空历史素材目录: {relative}")
@@ -357,7 +417,7 @@ def _ensure_gitkeep(dry_run: bool) -> int:
     return created
 
 
-def build(dry_run: bool = False) -> dict:
+def build(dry_run: bool = False, *, allow_raw_reset: bool = False) -> dict:
     samples = collect_samples()
     by_state: dict[str, list[Sample]] = {s: [] for s in ALL_STATES}
     for s in samples:
@@ -369,9 +429,9 @@ def build(dry_run: bool = False) -> dict:
     }
     full_shots = [x for s in ALL_STATES for x in by_state[s]]
 
-    # ---- 1) raw/ ：唯一真源 ---------------------------------------------
+    # ---- 1) raw/ ：唯一真源（Phase 11.1：默认不清空，只补齐） -----------
     raw_root = DATASET / "raw"
-    _reset(raw_root, dry_run)
+    _reset(raw_root, dry_run, allow_raw_reset=allow_raw_reset)
     for s in samples:
         _copy(s.src, raw_root / s.raw_rel, dry_run)
 
@@ -471,9 +531,26 @@ def _build_metadata(samples: list[Sample]) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="构建 dataset/ 新结构（raw / states / features）")
     parser.add_argument("--dry-run", action="store_true", help="只统计，不写文件")
+    parser.add_argument(
+        "--allow-raw-reset",
+        action="store_true",
+        help="显式允许清空 raw/（唯一真源）：默认禁止；使用前会先校验真源清单",
+    )
+    parser.add_argument(
+        "--skip-verify-raw",
+        action="store_true",
+        help="跳过构建前的 raw 真源清单校验（不推荐）",
+    )
     args = parser.parse_args(argv)
 
-    report = build(dry_run=args.dry_run)
+    if args.allow_raw_reset and not args.skip_verify_raw:
+        ok, message = _verify_raw_manifest()
+        print(f"[raw 真源校验] {message}")
+        if not ok:
+            print("[中止] raw 与清单不一致：请先人工确认，再决定是否 --allow-raw-reset")
+            return 2
+
+    report = build(dry_run=args.dry_run, allow_raw_reset=args.allow_raw_reset)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
