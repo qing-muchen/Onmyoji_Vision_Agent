@@ -1,0 +1,39 @@
+# 多任务调度配置（Phase 9）
+#
+# schema：
+#   max_concurrent    同时运行的任务数上限（默认 1；1 表示"单运行 + 抢占/排队"）
+#   default_priority  未声明任务的默认优先级（默认 50）
+#   preemption        是否允许高优先级抢占低优先级（默认 true）
+#   resources         默认独占资源列表（默认 [GAME_WINDOW]）
+#   history_limit     历史实例保留条数（0 = 不限制）
+#   tasks             task_id → {priority, resources, enabled}
+#
+# 优先级规则：**数字越大优先级越高**
+#   100  紧急恢复（异常弹窗等）；50  普通任务；10  后台任务（采集 / 巡检）
+# 排序：priority 降序 → 创建顺序升序（同优先级先到先执行）。
+# 抢占：仅当 incoming.priority > running.priority（严格大于）→ 暂停低优（保留进度）
+#       → 高优结束后自动恢复。
+#
+# 注意：本文件是**调度配置**，不是任务定义；`TaskLoader.load_all()` 只加载含
+#      `states` 的任务定义，因此不会被误读。
+
+max_concurrent: 1
+default_priority: 50
+preemption: true
+resources:
+  - GAME_WINDOW
+history_limit: 50
+
+tasks:
+  # 后台任务：优先级最低，随时可被让位
+  farming:
+    priority: 10
+  open_exploration:
+    priority: 10
+  # 普通流程任务
+  auto_battle_flow:
+    priority: 50
+  # 紧急恢复（示例：异常弹窗处理；当前尚无对应任务定义，仅演示优先级档位）
+  recover:
+    priority: 100
+    enabled: true

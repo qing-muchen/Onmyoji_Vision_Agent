@@ -48,6 +48,16 @@ __all__ = ["TaskBridgeStats", "TaskRuntimeBridge"]
 
 logger = get_logger("runtime.task_bridge")
 
+#: 调度器实例状态 → 兼容运行记录状态（Phase 9；``TaskRunRecord`` 契约保持不变）
+_SCHEDULER_STATUS_MAP = {
+    "queued": TaskRunStatus.IDLE,
+    "running": TaskRunStatus.RUNNING,
+    "paused": TaskRunStatus.IDLE,
+    "completed": TaskRunStatus.COMPLETED,
+    "failed": TaskRunStatus.FAILED,
+    "cancelled": TaskRunStatus.STOPPED,
+}
+
 
 def _now_iso() -> str:
     """返回本地时间的 ISO 8601 字符串。"""
@@ -159,6 +169,10 @@ class TaskRuntimeBridge:
         now: 时间戳函数（运行记录用）。
         allow_rerun_completed: 已完成的任务是否允许再次触发（默认 ``False``：
             一次运行成功后不再重复执行；失败 / 手动停止仍可重跑）。
+        scheduler: 可选的多任务调度器（Phase 9）。注入后 :meth:`on_state_stable`
+            不再直接驱动单个引擎，而是把它交给 :class:`~src.task.scheduler.TaskScheduler`
+            （由调度器决定"哪个任务获得执行机会"：排队 / 优先级 / 抢占 / 资源锁）；
+            运行记录 :class:`TaskRunRecord` 退化为**兼容视图**，细节请读 ``scheduler``。
     """
 
     def __init__(
@@ -170,7 +184,15 @@ class TaskRuntimeBridge:
         clock: Callable[[], float] = monotonic,
         now: Callable[[], str] = _now_iso,
         allow_rerun_completed: bool = False,
+        scheduler: Any = None,
     ) -> None:
+        if scheduler is not None:
+            from src.task.scheduler import TaskScheduler
+
+            if not isinstance(scheduler, TaskScheduler):
+                raise TypeError(
+                    f"task_bridge.scheduler 需要 TaskScheduler（当前: {type(scheduler).__name__}）"
+                )
         if not isinstance(task_engine, TaskEngine):
             raise TypeError(
                 f"task_bridge 需要 TaskEngine（当前: {type(task_engine).__name__}）"
@@ -181,7 +203,9 @@ class TaskRuntimeBridge:
         self._clock = clock
         self._now = now
         self._allow_rerun_completed = bool(allow_rerun_completed)
+        self._scheduler = scheduler
         self._records: dict[str, TaskRunRecord] = {}
+        self._started_instances: set[str] = set()
         self._stats = TaskBridgeStats()
 
     # ---- 只读 ---------------------------------------------------------------
@@ -205,6 +229,11 @@ class TaskRuntimeBridge:
     def stats(self) -> TaskBridgeStats:
         """编排统计。"""
         return self._stats
+
+    @property
+    def scheduler(self) -> Any:
+        """多任务调度器（Phase 9；未注入时为 ``None``）。"""
+        return self._scheduler
 
     @property
     def records(self) -> dict[str, TaskRunRecord]:
@@ -243,6 +272,8 @@ class TaskRuntimeBridge:
         self._stats.events += 1
         state_name = _text(_read(state_result, "state_name", "state", default=""))
         self._stats.last_state = state_name
+        if self._scheduler is not None:
+            return self._tick_scheduler(state_result, state_name)
         try:
             running = self._running_record()
             if running is not None:
@@ -279,6 +310,15 @@ class TaskRuntimeBridge:
             当前任务的运行记录（无运行时为 ``None``）。
         """
         self._stats.cycles += 1
+        if self._scheduler is not None:
+            try:
+                self._scheduler.on_cycle(cycle_schedule)
+                self._sync_scheduler_records(state_name="")
+            except Exception as exc:  # noqa: BLE001 - 绝不影响 Runtime 主循环
+                self._stats.errors += 1
+                self._stats.last_error = str(exc)
+                logger.error("调度节拍失败（已隔离）: %s", exc)
+            return self._active_scheduler_record()
         try:
             running = self._running_record()
             if running is None:
@@ -343,11 +383,106 @@ class TaskRuntimeBridge:
     def reset(self) -> None:
         """清空运行记录与统计（**不**清空任务清单与触发表）。"""
         self._records.clear()
+        self._started_instances.clear()
         self._stats.reset()
+        if self._scheduler is not None:
+            try:
+                self._scheduler.reset()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("调度器复位失败（已忽略）: %s", exc)
         try:
             self._engine.reset()
         except Exception as exc:  # noqa: BLE001
             logger.warning("引擎重置失败（已忽略）: %s", exc)
+
+    # ---- 调度器模式（Phase 9） ---------------------------------------------
+
+    def _tick_scheduler(self, state_result: Any, state_name: str) -> TaskRunRecord | None:
+        """调度器模式：触发 → 交给调度器 tick → 同步兼容记录。
+
+        流程：
+
+        1. 若调度器**没有活跃实例**且触发映射命中 → ``scheduler.submit(task_id)``
+           （等价于 Phase 7.5 的"空闲时启动"；重复提交由调度器返回已有实例）；
+        2. ``scheduler.tick(state_result)`` —— 排队 / 优先级 / 抢占 / 资源锁 / 推进全在调度器内；
+        3. 把实例状态同步到 :class:`TaskRunRecord`（**兼容视图**，Phase 7.5 的 API 不变）。
+
+        Args:
+            state_result: 稳定状态结果。
+            state_name: 已解析的状态名。
+
+        Returns:
+            当前主记录（调度器为空时为 ``None``）。
+        """
+        try:
+            scheduler = self._scheduler
+            if not scheduler.instances and state_name and state_name != "unknown":
+                task_id = self._triggers.resolve(state_name)
+                if task_id is None:
+                    self._stats.unknown_state += 1
+                    self._stats.last_reason = f"no trigger for state={state_name}"
+                    return None
+                if self._registry.get(task_id) is None:
+                    self._stats.unknown_task += 1
+                    self._stats.last_reason = f"unknown task={task_id}"
+                    logger.warning(
+                        "触发映射指向不存在的任务: %s（已注册: %s）", task_id, self._registry.ids()
+                    )
+                    return None
+                instance = scheduler.submit(task_id, reason=f"state={state_name}")
+                self._stats.starts += 1
+            scheduler.tick(state_result)
+            self._sync_scheduler_records(state_name=state_name)
+            return self._active_scheduler_record()
+        except Exception as exc:  # noqa: BLE001 - 绝不影响 Runtime 主循环
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.error("调度器驱动失败（已隔离）: %s", exc)
+            return None
+
+    def _sync_scheduler_records(self, *, state_name: str = "") -> None:
+        """把调度器实例状态同步到兼容运行记录。"""
+        scheduler = self._scheduler
+        if scheduler is None:
+            return
+        for instance in list(scheduler.instances) + list(scheduler.history):
+            record = self._records.get(instance.task_id)
+            if record is None:
+                record = TaskRunRecord(task_id=instance.task_id)
+                self._records[instance.task_id] = record
+            record.status = _SCHEDULER_STATUS_MAP[instance.status]
+            record.cycles = instance.cycles
+            if instance.started_at:
+                record.started_at = instance.started_at
+            record.finished_at = instance.finished_at
+            record.reason = instance.reason or record.reason
+            record.last_error = instance.last_error
+            if instance.status.is_running and instance.instance_id not in self._started_instances:
+                self._started_instances.add(instance.instance_id)
+                record.runs += 1
+            if record.status is TaskRunStatus.COMPLETED and record.finished_at:
+                self._stats.completions = max(self._stats.completions, 1)
+        if state_name:
+            self._stats.last_state = state_name
+
+    def _active_scheduler_record(self) -> TaskRunRecord | None:
+        """当前"主记录"：运行中的最高优先级实例，其次队首，最后最近历史。"""
+        scheduler = self._scheduler
+        if scheduler is None:
+            return None
+        for instance in list(scheduler.active_tasks) + list(scheduler.queue) + list(
+            scheduler.paused
+        ):
+            record = self._records.get(instance.task_id)
+            if record is not None:
+                self._stats.last_task_id = instance.task_id
+                self._stats.last_reason = instance.reason or self._stats.last_reason
+                return record
+        history = scheduler.history
+        if history:
+            newest = max(history, key=lambda item: item.ordinal)
+            return self._records.get(newest.task_id)
+        return None
 
     # ---- 内部 ---------------------------------------------------------------
 
@@ -440,9 +575,10 @@ class TaskRuntimeBridge:
 
     def describe(self) -> str:
         """返回可读描述。"""
+        mode = f", scheduler={self._scheduler.describe()}" if self._scheduler is not None else ""
         return (
             f"TaskRuntimeBridge(active={self.active_task_id or 'none'}, "
-            f"tasks={len(self._registry)}, triggers={len(self._triggers)}, "
+            f"tasks={len(self._registry)}, triggers={len(self._triggers)}{mode}, "
             f"{self._stats.describe()})"
         )
 

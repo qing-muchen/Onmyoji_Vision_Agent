@@ -711,7 +711,10 @@ def test_task_layer_allowed_imports_only() -> None:
 
 
 def test_runtime_task_bridge_dependencies() -> None:
-    """``task_bridge.py`` 只依赖 ``src.task`` / ``src.utils``；禁 cv2 / numpy / action。"""
+    """``task_bridge.py`` 只依赖 ``src.task`` / ``src.utils``；禁 cv2 / numpy / action。
+
+    Phase 9 起允许 ``src.task.scheduler``（Bridge → Scheduler 的委托是设计的一部分）。
+    """
     path = get_project_root() / "src" / "runtime" / "task_bridge.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     project_imports: set[str] = set()
@@ -727,6 +730,7 @@ def test_runtime_task_bridge_dependencies() -> None:
     assert {module for module in project_imports if module.startswith("src.")} <= {
         "src.task.engine",
         "src.task.registry",
+        "src.task.scheduler",  # Phase 9：编排桥把驱动权交给多任务调度器
         "src.task.triggers",
         "src.utils.logger",
     }

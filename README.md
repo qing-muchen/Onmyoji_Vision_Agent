@@ -1981,5 +1981,19 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `State → StateMachine → Decision → Action`，测试 **1315 passed / 1 skipped**，
   仍**零真实输入**（`dry_run`）。多任务调度 / `exit_actions` 派发 / 冷却与看门狗仍留待后续
   （见 `docs/PHASE8_STATE_MACHINE_REPORT.md` §9）。
-- Phase 9：多任务调度与任务库（优先级 / 抢占 / 看门狗）、状态机 `exit_actions` 与转移钩子、
-  `DetectionResult` 接入快照桥、`drag` 语义落地。
+- Phase 9（**已完成：多任务调度与优先级编排**）：新增 `src/task/scheduler/`
+  —— `TaskScheduler`（`submit` / `cancel` / `pause` / `resume` / `tick` / `on_cycle`；
+  **一个实例 = 一个 `TaskEngine`**，引擎未重构）、`TaskInstance`
+  （`instance_id` / `priority` / `status` / `created_at` / `started_at` / `finished_at` /
+  `engine`（→ `state_machine` / `context`） / `resources`）、`TaskInstanceStatus`
+  （`QUEUED` / `RUNNING` / `PAUSED` / `COMPLETED` / `FAILED` / `CANCELLED`）、
+  `PriorityPolicy`（数字越大越优先；排序 = 优先级降序 → 创建顺序）、`ResourceLock`
+  （默认独占 `GAME_WINDOW`，`acquire_all` 原子）、`configs/tasks/scheduler.yaml`。
+  **抢占** = 暂停低优（保留状态与进度）+ 让位 + 高优完成后自动恢复；
+  顺序固定为"抢占 → 启动 → 恢复"（否则会抖动）。`TaskRuntimeBridge` 新增可选 `scheduler`：
+  注入后 `on_state_stable` / `on_cycle` 委托给调度器（记录退化为兼容视图）。
+  闭环升级为 `State → Scheduler → TaskInstance → StateMachine → Action`，
+  测试 **1354 passed / 1 skipped**，仍**零真实输入**（dry-run）。
+  看门狗 / 配额公平性 / 触发映射配置化仍留待后续（见 `docs/PHASE9_TASK_SCHEDULER_REPORT.md` §9）。
+- Phase 10：编排可靠性（看门狗 + 公平性 / 饥饿保护）、触发映射配置化、
+  状态机 `exit_actions` 与转移钩子、`DetectionResult` 接入快照桥、`drag` 语义落地。

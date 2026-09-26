@@ -187,6 +187,10 @@ class TaskLoader:
                     "跳过状态机式流程定义（由 load_flow_plan / load_flow_plans 加载）: %s", path
                 )
                 continue
+            if not _is_task_document(path):
+                # 同目录还允许存在其它 YAML（例如 scheduler.yaml 调度配置）
+                logger.debug("跳过非任务定义文件: %s", path)
+                continue
             definitions.append(self.load(path))
         return tuple(definitions)
 
@@ -640,6 +644,29 @@ def _is_flow_document(path: str | Path) -> bool:
     if not isinstance(data, Mapping):
         return False
     return "transitions" in data or "task_id" in data
+
+
+def _is_task_document(path: str | Path) -> bool:
+    """判断 YAML 文件是否为**步骤式任务定义**（含 ``states`` 或 ``steps``）。
+
+    ``configs/tasks/`` 允许混放三类 YAML：步骤式任务定义、状态机式流程定义
+    （Phase 8）、调度配置（Phase 9，``scheduler.yaml``）。只有第一类由
+    :meth:`TaskLoader.load_all` 加载。
+
+    Args:
+        path: YAML 文件路径。
+
+    Returns:
+        ``True`` 表示是步骤式任务定义（解析失败返回 ``False``，交给调用方处理）。
+    """
+    target = resolve_from_project_root(path)
+    try:
+        data = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(data, Mapping):
+        return False
+    return "states" in data or "steps" in data
 
 
 def load_flow_plans(directory: str | Path | None = None) -> tuple[Any, ...]:
