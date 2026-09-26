@@ -203,6 +203,15 @@ python tools/annotate.py render --out <dir>        # 渲染 bbox 预览（不修
 python tools/annotate.py promote --id <id> \
     --annotator <a> --reviewer <b> --approve       # 独立审核（自审被拒绝）
 python tools/evaluate_localization.py --generate   # 离线定位评估（无真值时输出 insufficient_data）
+
+# Phase 11.3：审核交接包（只读 raw，不自动 promote）
+python tools/build_annotation_review_pack.py --out <dir>
+python tools/build_annotation_review_pack.py --near-duplicate-only   # 近重复诊断（只读）
+
+# 审核（自审会被拒绝；promote 是唯一产生真值的入口）
+python tools/annotate.py review --id <id> --reviewer <R> --decision needs_revision --comment "..."
+python tools/annotate.py revise --id <id> --bbox x,y,w,h --comment "按审核意见修订"
+python tools/annotate.py promote --id <id> --annotator <A> --reviewer <R> --approve --comment "..."
 ```
 
 

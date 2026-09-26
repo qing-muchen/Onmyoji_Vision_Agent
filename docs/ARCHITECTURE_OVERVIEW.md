@@ -232,7 +232,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | I-18 | 元素级真值必须来自**人工标注 + 独立审核**（`verified` + `approved` + `annotator != reviewer`）；视觉匹配框不得当作已验证点击区域（`region_kind`）；"未标注"≠"真实负样本"（`visibility: absent`） | `tests/test_dataset_annotations.py::test_unreviewed_annotations_are_not_ground_truth`、`::test_annotation_schema_is_strict` |
 | I-19 | `raw/` 是唯一真源：默认拒绝被构建脚本清空（需显式 `--allow-raw-reset` + 清单校验）；历史素材缺 `session_id` 时**不得补造**，划分数据不足时输出 `insufficient_data` | `::test_legacy_sources_keep_unknown_fields_empty`、`::test_missing_session_is_handled_conservatively`、`::test_repository_dataset_matches_phase_110_baseline` |
 | I-20 | 标注草稿永不自动成为真值：`promote` 是唯一晋级入口且强制 `annotator != reviewer`；预测框（模板命中）与真值框（元素外框）**语义不同时不做跨语义比较**，无真值时输出 `insufficient_data` | `tests/test_element_annotation_pilot.py::test_promote_refuses_self_review`、`::test_evaluation_refuses_cross_semantics_comparison`、`::test_repository_pilot_drafts_are_honest` |
----
+| I-21 | 真实输入资格只来自**代码登记表**（`src/core/elements.py`）：`calibrated` 不读 `metadata`，伪造字段无效；新增元素名（含 `annotation_only`）不会自动成为可执行目标 | `tests/test_annotation_review_handoff.py::test_resolver_calibrated_requires_code_registry`、`::test_new_elements_are_annotation_only_not_actionable` |
+| I-22 | 审核留痕：审核意见/结论/时间持久化；`revise` **追加**新条目并保留旧条（`supersedes_annotation_id`），旧审核意见不被覆盖；审核包**不自动 promote** | `::test_revision_creates_new_draft_without_overwriting`、`::test_review_pack_does_not_approve` |---
 
 ## 7. 阶段索引
 
@@ -274,7 +275,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 | Phase 11.1 | 元素级数据集与真值基础设施（`src/vision/dataset/`：标注契约 / 来源模型 / 同源分组与泄漏防护；`tools/check_annotations.py` + `tools/raw_manifest.py`；`build_dataset.py` raw 保护） | `PHASE11_1_ELEMENT_DATASET_REPORT.md` |
 
 | Phase 11.2 | 元素级标注试点与真值验证（`tools/annotate.py` 标注 CLI（原子写入 + 强制独立审核）/ `tools/evaluate_localization.py`（IoU + 中心误差，状态与定位分开统计，跨语义拒绝比较）；8 条候选草稿 / 4 张独立原图 / 真值 0） | `PHASE11_2_ANNOTATION_PILOT_REPORT.md` || 项 | 现状 | 归属 |
-| --- | --- | --- |
+
+| Phase 11.3 | 审核交接与定位语义对齐（`tools/build_annotation_review_pack.py` 审核包 + 近重复诊断；审核审计字段与 `review`/`revise`；`src/vision/dataset/elements.py` 唯一元素注册表；登记表下沉 `src/core/elements.py` 且 `calibrated` 只认代码登记；评估 6 类不可比原因） | `PHASE11_3_REVIEW_AND_LOCALIZATION_ALIGNMENT_REPORT.md` || --- | --- | --- |
 | 实时循环（真实采集） | **已接线**（Phase 5.2）：`WindowFrameSource`（dxcam 优先 / mss 回退）+ `ForegroundGuard`（只检查不抢占）+ `CycleScheduler`（deadline based，late cycle 有记录）；真实窗口长跑见报告 | 已完成 |
 | Runtime 模块边界 | **已收敛**（Phase 5.3 / 5.4）：`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source` 单一职责，`window_source` 仅作兼容层；**Runtime 层自此冻结** | 已完成 |
 | Runtime 可靠性 | **已加固**（Phase 5.4）：生命周期状态机（7 状态 + 转换表）、`pause`/`resume`/`stop` 与资源释放、失败恢复策略（退避 + 上限，默认关闭）、指标含 `runtime_state` / `recovery_count` | 已完成 |

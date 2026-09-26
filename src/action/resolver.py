@@ -185,11 +185,19 @@ def _is_element_level(candidate: Any) -> bool:
 
     Returns:
         ``True`` 表示该候选具有元素级定位依据。
+
+    Notes:
+        Phase 11.3：判定改为**查代码登记表**（``ELEMENT_LEVEL_EVIDENCE``），
+        **不再**读取 ``metadata["element_level"]`` —— 任意注入候选都可以伪造该字段，
+        不能让它单方面获得"已标定"资格（真实后端下这会直接决定能否点击）。
+        metadata 中的标记只作为审计信息，不参与授权。
     """
-    metadata = getattr(candidate, "metadata", None)
-    if isinstance(metadata, dict) and metadata.get("element_level") is True:
-        return True
-    return False
+    from src.core.elements import ELEMENT_LEVEL_EVIDENCE
+
+    name = str(getattr(candidate, "target_name", "") or "")
+    if not name:
+        return False
+    return name in ELEMENT_LEVEL_EVIDENCE
 
 
 def _explicit_ratio_resolution(

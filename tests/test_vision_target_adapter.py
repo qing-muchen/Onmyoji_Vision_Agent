@@ -699,6 +699,7 @@ def test_adapter_only_imports_vision_and_core() -> None:
             project_imports.add(node.module)
 
     assert project_imports <= {
+        "src.core.elements",  # Phase 11.3：元素登记表的真实来源
         "src.core.geometry",
         "src.core.vision_target",
         "src.utils.logger",

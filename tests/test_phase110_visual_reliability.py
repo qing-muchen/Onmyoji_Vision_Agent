@@ -438,19 +438,32 @@ def test_target_center_must_lie_inside_client_area() -> None:
 
 
 def test_candidate_without_element_level_is_not_calibrated() -> None:
-    """无 ``element_level`` 标注的候选 → ``calibrated=False``（真实后端下会被安全门拒绝）。"""
+    """**未登记**为元素级目标的候选 → ``calibrated=False``（真实后端下会被安全门拒绝）。
+
+    Phase 11.3：判定改为查 ``src.core.elements.ELEMENT_LEVEL_EVIDENCE`` 登记表，
+    **不再**读取 ``metadata``；因此这里用一个"有 bbox 但未登记"的元素名来验证，
+    并额外确认伪造 metadata 也无效。
+    """
     clock = FakeClock(100.0)
     resolver = VisionAwareTargetResolver(ttl_s=600.0, minimum_confidence=0.5, clock=clock)
     resolver.update_candidates(
-        [VisionTargetCandidate(target_name=TARGET_NAME, x_ratio=0.5, y_ratio=0.5, confidence=0.95)],
+        [
+            VisionTargetCandidate(
+                target_name="bottom_menu_yard",
+                x_ratio=0.5,
+                y_ratio=0.5,
+                confidence=0.95,
+                metadata={"element_level": True},  # 伪造标记：不生效
+            )
+        ],
         frame_id=1,
     )
 
-    resolution = resolver.resolve_detail(SemanticTarget.from_name(TARGET_NAME))
+    resolution = resolver.resolve_detail(SemanticTarget.from_name("bottom_menu_yard"))
 
     assert resolution.ok is True
     assert resolution.resolved is not None
-    assert resolution.resolved.calibrated is False  # Phase 11.0：不再"有候选即标定"
+    assert resolution.resolved.calibrated is False  # 未登记 ⇒ 不标定（伪造 metadata 无效）
 
 
 def test_uncalibrated_target_is_rejected_by_guard_for_real_backend() -> None:
@@ -465,8 +478,13 @@ def test_uncalibrated_target_is_rejected_by_guard_for_real_backend() -> None:
 
     clock = FakeClock(100.0)
     resolver = VisionAwareTargetResolver(ttl_s=600.0, minimum_confidence=0.5, clock=clock)
+    # Phase 11.3：用**未登记**为元素级的元素名（bottom_menu_yard），验证真实后端下被拒
     resolver.update_candidates(
-        [VisionTargetCandidate(target_name=TARGET_NAME, x_ratio=0.5, y_ratio=0.5, confidence=0.95)],
+        [
+            VisionTargetCandidate(
+                target_name="bottom_menu_yard", x_ratio=0.5, y_ratio=0.5, confidence=0.95
+            )
+        ],
         frame_id=1,
     )
     dispatcher = ActionDispatcher(
@@ -484,7 +502,7 @@ def test_uncalibrated_target_is_rejected_by_guard_for_real_backend() -> None:
         ActionRequest(
             request_id="req-1",
             action_type=ActionType.CLICK,
-            target=SemanticTarget.from_name(TARGET_NAME),
+            target=SemanticTarget.from_name("bottom_menu_yard"),
         )
     )
 

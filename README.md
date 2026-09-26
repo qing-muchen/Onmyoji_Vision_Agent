@@ -2064,6 +2064,23 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **经独立审核的真值 = 0** ⇒ 定位评估如实输出 `insufficient_data`。
   测试 **1505 passed / 1 skipped**（+21）；`raw/` 178 张 SHA256 未变；
   仍**零真实输入**。详见 `docs/PHASE11_2_ANNOTATION_PILOT_REPORT.md`。
-- Phase 11.3：人工复核这 8 条草稿（独立审核 → 真值）；补登记探索界面元素并补模板；
-  补 `clickable_verified` 热区；补采（≥100 独立原图 / 跨分辨率 / 跨皮肤 / 会话登记）；
-  近似重复检测（图像指纹）；编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。
+- Phase 11.3（**已完成：审核交接与定位语义对齐**，`feat(dataset): add annotation review handoff
+  and localization alignment`）：新增 `tools/build_annotation_review_pack.py`
+  （审核包：整图叠加预览 + 带留白的局部放大 + 元数据/问题清单 + 审核表 + 近重复诊断；
+  **只生成派生预览、不执行 promote**）；标注契约增量加**审核审计**
+  （`instance_index` / `review_decision` / `review_comment` / `reviewed_at` / `revision` /
+  `supersedes_annotation_id`），`promote` 写审计、新增 `review` 与 `revise`
+  （修订**追加新条目并保留旧条**，回到 `pending_review`；自审一律拒绝）；
+  新增 `src/vision/dataset/elements.py` 作为**唯一**元素命名来源
+  （含 `annotation_only` 的 `yard_exploration_entry` / `exploration_stage_node`，
+  **不自动成为可执行目标**）；**修复授权路径**：两张登记表下沉 `src/core/elements.py`，
+  `calibrated` 改为**查代码登记表**而非读 `metadata`（伪造 metadata 失效），
+  同时消除 Action→Vision 的依赖违规；评估新增 **6 类不可比原因**与 `draft_diagnostic` 标记。
+  测试 **1530 passed / 1 skipped**（+25）；`raw/` 178 张 SHA256 未变；
+  等待独立审核 **8** 条、**经独立审核真值 0 条**、`clickable_verified` **0 条** ⇒
+  定位指标仍 `insufficient_data`。详见
+  `docs/PHASE11_3_REVIEW_AND_LOCALIZATION_ALIGNMENT_REPORT.md`。
+- Phase 11.4：**由独立审核者**复核 8 条草稿（`review_pack/` → `promote --approve`）；
+  目视核查 `battle_reward` 并把试点扩到 10–20 张；补 `battle_auto_button` 点击热区候选；
+  为 `yard_exploration_entry` / `exploration_stage_node` 补 detector；补采（≥100 独立原图 /
+  跨分辨率 / 跨皮肤 / 会话登记）；编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。

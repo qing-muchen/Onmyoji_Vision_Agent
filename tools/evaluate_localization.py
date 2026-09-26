@@ -49,6 +49,16 @@ DATASET = ROOT / "dataset"
 DEFAULT_ANNOTATIONS = DATASET / "annotations" / "elements.jsonl"
 DEFAULT_PREDICTIONS = DATASET / "annotations" / "predictions.jsonl"
 
+#: 不可比原因（Phase 11.3）：这些情况**不得**被算成定位正确或错误，只报告原因
+INCOMPARABLE_REASONS: tuple[str, ...] = (
+    "incomparable_region_kind",     # 预测框与真值框语义不同（如 template_hit vs element_bbox）
+    "unverified_ground_truth",      # 真值尚未经独立审核
+    "element_name_mismatch",        # 元素名不一致
+    "coordinate_space_mismatch",    # 坐标空间不一致
+    "ambiguous_instance",           # 同画面多个同名元素，无法判定归属
+    "missing_prediction",           # 没有对应预测
+)
+
 #: 预测框的语义标签（模板命中框 / OCR 文字框 —— 与"元素完整外框"不同）
 PREDICTION_SEMANTICS: dict[str, str] = {
     "template_hit": "模板命中框（ROI 内匹配区域）",
@@ -246,6 +256,7 @@ def evaluate(
             index[key] = item
 
     per_truth: list[dict[str, Any]] = []
+    reason_counts: dict[str, int] = {}
     matched = missed = semantics_mismatch = 0
     ious: list[float] = []
     offsets: list[float] = []
@@ -263,22 +274,44 @@ def evaluate(
         }
         if predicted is None:
             missed += 1
+            entry["incomparable_reason"] = "missing_prediction"
             per_truth.append(entry)
             continue
         entry["prediction_semantics"] = str(predicted.get("prediction_semantics", ""))
         entry["prediction_confidence"] = float(predicted.get("confidence", 0.0))
-        # 语义对齐检查：只有"元素完整外框"口径才与真值同义
-        semantics_match = (
-            item.region_kind is ElementRegionKind.UI_ELEMENT
-            and entry["prediction_semantics"] == "element_bbox"
-        ) or entry["prediction_semantics"] == "element_bbox"
+
+        # ---- Phase 11.3：六项可比性前置检查（缺一即不计入定位指标）----
+        reasons: list[str] = []
+        if not include_all_status and not item.is_verified_ground_truth:
+            reasons.append("unverified_ground_truth")
+        if str(predicted.get("element_name", "")) != item.element_name:
+            reasons.append("element_name_mismatch")
+        if str(predicted.get("image_path", "")) != item.image_path:
+            reasons.append("coordinate_space_mismatch")
+        prediction_space = str(predicted.get("coordinate_space", "frame_client_pixels"))
+        if prediction_space != item.coordinate_space.value:
+            reasons.append("coordinate_space_mismatch")
+        if item.instance_index and predicted.get("instance_index") in (None, ""):
+            reasons.append("ambiguous_instance")
+        # 语义可比性：只有"元素完整外框"口径才与真值同义
+        semantics_match = entry["prediction_semantics"] == "element_bbox"
         entry["semantics_match"] = bool(semantics_match)
+        if not semantics_match:
+            reasons.append("incomparable_region_kind")
         try:
             x, y, width, height = (float(value) for value in predicted["bbox"])
             predicted_rect = Rect(x=x, y=y, width=width, height=height)
-        except Exception:  # noqa: BLE001 - 预测非法 ⇒ 记为未命中
+        except Exception:  # noqa: BLE001 - 预测非法 ⇒ 记为不可比
             entry["error"] = "预测 bbox 非法"
+            entry["incomparable_reason"] = "incomparable_region_kind"
             missed += 1
+            per_truth.append(entry)
+            continue
+        if reasons:
+            entry["incomparable_reason"] = sorted(set(reasons))[0]
+            entry["incomparable_reasons"] = sorted(set(reasons))
+            for reason in set(reasons):
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
             per_truth.append(entry)
             continue
         iou = intersection_over_union(item.bbox, predicted_rect)
@@ -286,16 +319,10 @@ def evaluate(
         entry["predicted_bbox"] = [predicted_rect.x, predicted_rect.y, predicted_rect.width, predicted_rect.height]
         entry["iou"] = round(iou, 4)
         entry["center_offset_px"] = round(offset, 2)
-        if not semantics_match:
-            semantics_mismatch += 1
-            entry["note"] = (
-                "预测框语义（模板命中框）与真值（元素外框）不同 ⇒ 该样本不计入定位指标"
-            )
-        else:
-            ious.append(iou)
-            offsets.append(offset)
-            if iou >= iou_threshold:
-                matched += 1
+        ious.append(iou)
+        offsets.append(offset)
+        if iou >= iou_threshold:
+            matched += 1
         per_truth.append(entry)
 
     comparable = len(ious)
@@ -312,9 +339,16 @@ def evaluate(
         "center_offset_px_p95": round(float(np.percentile(offsets, 95)), 2) if offsets else None,
     }
     report["semantics_mismatch"] = {
-        "count": semantics_mismatch,
+        "count": reason_counts.get("incomparable_region_kind", 0),
         "comparable_threshold": '同义口径 = prediction_semantics == "element_bbox"',
     }
+    report["incomparable_reasons"] = dict(sorted(reason_counts.items()))
+    report["draft_diagnostic"] = bool(include_all_status)
+    if include_all_status:
+        report["notes"].append(
+            "本报告使用 --status all（把待审核草稿也当真值）⇒ 只能作为 "
+            "**draft_diagnostic**，严禁混入正式评估指标或对外宣称准确率"
+        )
     report["per_truth"] = per_truth
     report["notes"].append(
         "状态分类与元素定位分开统计：本报告**只**给出元素定位指标（IoU / 中心误差）；"

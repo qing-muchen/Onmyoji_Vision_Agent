@@ -44,6 +44,7 @@ from src.vision.dataset.annotations import (  # noqa: E402
     _parse_bbox,
 )
 from src.vision.dataset.sources import image_size  # noqa: E402
+from src.vision.dataset.elements import known_names as registered_names  # noqa: E402
 from src.vision.pipeline.target_adapter import ACTIONABLE_EVIDENCE  # noqa: E402
 
 DATASET = ROOT / "dataset"
@@ -51,22 +52,9 @@ DEFAULT_ANNOTATIONS = DATASET / "annotations" / "elements.jsonl"
 DEFAULT_MANIFEST = DATASET / "manifests" / "raw_sha256.json"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
-#: 允许出现在标注里的元素名（可执行目标登记表 + 状态证据名，**只读引用**）
-KNOWN_ELEMENT_NAMES: frozenset[str] = frozenset(
-    set(ACTIONABLE_EVIDENCE)
-    | {
-        # 现有 detector / evidence 名（Phase 4.x）：仅作状态证据登记，不代表可点击
-        "battle_action_bar",
-        "battle_shikigami_icons",
-        "battle_skill_area",
-        "bottom_menu_exploration",
-        "bottom_menu_yard",
-        "chapter_panel",
-        "reward_panel",
-        "victory_icon",
-        "transition_bottom",
-    }
-)
+#: 允许出现在标注里的元素名 —— **唯一来源**：``src.vision.dataset.elements.ELEMENT_REGISTRY``
+#: （Phase 11.3 收敛；此前这里另有一份硬编码副本）
+KNOWN_ELEMENT_NAMES: frozenset[str] = frozenset(registered_names()) | {"transition_bottom"}
 
 
 def _raw_index(dataset: Path) -> dict[str, Path]:

@@ -54,7 +54,16 @@ from src.vision.dataset.annotations import (  # noqa: E402
     ElementAnnotation,
     ElementRegionKind,
     ElementVisibility,
+    ReviewDecision,
     ReviewStatus,
+)
+from src.vision.dataset.elements import (  # noqa: E402
+    ElementRole,
+    clickable_allowed,
+    is_annotation_allowed,
+    is_clickable_allowed,
+    known_names,
+    role_of,
 )
 from src.vision.dataset.sources import compute_sha256, image_size  # noqa: E402
 
@@ -63,23 +72,12 @@ DEFAULT_ANNOTATIONS = DATASET / "annotations" / "elements.jsonl"
 DEFAULT_SOURCES = DATASET / "annotations" / "sources.jsonl"
 BACKUP_SUFFIX = ".bak"
 
-#: 只有这些元素名允许被标注（可执行登记表 ∪ 状态证据登记表）
-ALLOWED_ELEMENTS: frozenset[str] = frozenset(
-    {
-        "battle_auto_button",
-        "battle_skill_area",
-        "battle_action_bar",
-        "battle_shikigami_icons",
-        "bottom_menu_yard",
-        "bottom_menu_exploration",
-        "chapter_panel",
-        "victory_icon",
-        "reward_panel",
-    }
-)
+#: 允许被标注的元素名 —— **唯一来源**：``src.vision.dataset.elements``
+#: （Phase 11.3 收敛；此前与 check_annotations 各有一份副本）
+ALLOWED_ELEMENTS: frozenset[str] = frozenset(known_names())
 
-#: 允许被登记为"可点击"的元素（与 ``src.vision.pipeline.target_adapter`` 对齐）
-CLICKABLE_ALLOWED: frozenset[str] = frozenset({"battle_auto_button", "REWARD_CONFIRM"})
+#: 允许被登记为"可点击"的元素（= ACTIONABLE_EVIDENCE ∩ ELEMENT_LEVEL_EVIDENCE）
+CLICKABLE_ALLOWED: frozenset[str] = frozenset(clickable_allowed())
 
 
 def _parse_bbox(text: str) -> Rect:
@@ -117,8 +115,9 @@ def cmd_add(args: argparse.Namespace) -> int:
     store = AnnotationStore.load(Path(args.annotations))
     image_relative = str(args.image).replace("\\", "/")
     element = str(args.element)
-    if element not in ALLOWED_ELEMENTS:
+    if not is_annotation_allowed(element):
         raise AnnotationError(f"未登记的元素名: {element}（可选: {sorted(ALLOWED_ELEMENTS)}）")
+    instance_index = int(getattr(args, "instance", 0) or 0)
     bbox = _parse_bbox(args.bbox)
     width, height = image_size(DATASET / image_relative)
     if width <= 0 or height <= 0:
@@ -128,11 +127,15 @@ def cmd_add(args: argparse.Namespace) -> int:
             f"bbox {bbox.describe()} 超出原图 {width}x{height}（工具不做裁剪）"
         )
     region = ElementRegionKind(args.region)
-    if region is ElementRegionKind.CLICKABLE_VERIFIED and element not in CLICKABLE_ALLOWED:
+    if region is ElementRegionKind.CLICKABLE_VERIFIED and not is_clickable_allowed(element):
         raise AnnotationError(
             f"{element} 未登记为可点击目标，禁止标记 clickable_verified"
             f"（可点击登记表: {sorted(CLICKABLE_ALLOWED)}）"
         )
+    if region is ElementRegionKind.STATE_EVIDENCE and role_of(element) is ElementRole.ACTIONABLE:
+        logger_note = f"{element} 是可执行目标，通常不应仅标为状态证据"
+    else:
+        logger_note = ""
     annotation = ElementAnnotation(
         source_id=_source_id_for(image_relative),
         image_path=image_relative,
@@ -145,7 +148,8 @@ def cmd_add(args: argparse.Namespace) -> int:
         annotation_status=AnnotationStatus(args.status),
         annotator=str(args.annotator),
         review_status=ReviewStatus.NOT_REVIEWED,
-        note=str(args.note or ""),
+        note=(str(args.note or "") + (f"｜{logger_note}" if logger_note else "")),
+        instance_index=instance_index,
     )
     store.add(annotation)
     _atomic_write(Path(args.annotations), store.to_jsonl())
@@ -182,6 +186,92 @@ def cmd_pending(args: argparse.Namespace) -> int:
     return 0
 
 
+def _find(store: AnnotationStore, annotation_id: str) -> ElementAnnotation:
+    """按 id 取标注（找不到报错）。"""
+    target = next((item for item in store if item.annotation_id == annotation_id), None)
+    if target is None:
+        raise AnnotationError(f"未找到标注: {annotation_id}")
+    return target
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    """写入审核意见 / 结论（**不会**自动 approve；不修改原标注的 bbox）。
+
+    与 ``promote`` 的区别：``review`` 只记录审核者的决定与意见；
+    需要产生真值时仍必须使用 ``promote --approve``（两者都会写审计字段）。
+    """
+    path = Path(args.annotations)
+    store = AnnotationStore.load(path)
+    target = _find(store, args.id)
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    target.reviewer = str(args.reviewer)
+    if target.is_self_reviewed:
+        raise AnnotationError("审核者不得与标注人相同（独立审核）")
+    target.review_comment = str(args.comment or "")
+    target.reviewed_at = stamp
+    if args.decision == "approved":
+        target.review_status = ReviewStatus.APPROVED
+        target.review_decision = ReviewDecision.APPROVED.value
+        target.annotation_status = AnnotationStatus.VERIFIED
+    elif args.decision == "rejected":
+        target.review_status = ReviewStatus.REJECTED
+        target.review_decision = ReviewDecision.REJECTED.value
+        target.annotation_status = AnnotationStatus.REJECTED
+    else:
+        target.review_status = ReviewStatus.NEEDS_CHANGES
+        target.review_decision = ReviewDecision.NEEDS_REVISION.value
+        target.annotation_status = AnnotationStatus.PENDING_REVIEW
+    target.updated_at = stamp
+    _atomic_write(path, store.to_jsonl())
+    print(json.dumps(target.to_dict(), ensure_ascii=False))
+    return 0
+
+
+def cmd_revise(args: argparse.Namespace) -> int:
+    """提交修订：**追加**一条新标注（``supersedes_annotation_id`` 指向旧条），
+
+    * **不覆盖**旧标注（保留原始草稿与审核意见）；
+    * 新标注回到 ``pending_review``（必须重新送审，绝不沿用旧的 approved）；
+    * ``revision`` = 旧条 revision + 1；``instance_index`` 沿用；
+    * ``annotator`` 默认为修订者，与旧条的 annotator 无关。
+    """
+    path = Path(args.annotations)
+    store = AnnotationStore.load(path)
+    previous = _find(store, args.id)
+    bbox = _parse_bbox(args.bbox) if args.bbox else previous.bbox
+    region = ElementRegionKind(args.region) if args.region else previous.region_kind
+    visibility = (
+        ElementVisibility(args.visibility) if args.visibility else previous.visibility
+    )
+    image_width, image_height = image_size(DATASET / previous.image_path)
+    if not (0 <= bbox.x and 0 <= bbox.y and bbox.right <= image_width and bbox.bottom <= image_height):
+        raise AnnotationError(
+            f"修订 bbox {bbox.describe()} 超出原图 {image_width}x{image_height}（工具不裁剪）"
+        )
+    revised = ElementAnnotation(
+        source_id=previous.source_id,
+        image_path=previous.image_path,
+        element_name=previous.element_name,
+        bbox=bbox,
+        region_kind=region,
+        visibility=visibility,
+        image_width=image_width,
+        image_height=image_height,
+        annotation_status=AnnotationStatus.PENDING_REVIEW,
+        annotator=str(args.annotator or previous.annotator),
+        review_status=ReviewStatus.NOT_REVIEWED,
+        instance_index=previous.instance_index,
+        revision=int(previous.revision) + 1,
+        supersedes_annotation_id=previous.annotation_id,
+        note=f"修订自 {previous.annotation_id}：{args.comment or '（未填写修订说明）'}",
+    )
+    # 修订不覆盖旧条：旧条保持原状态（其审核意见留在历史里）
+    store.add(revised)
+    _atomic_write(path, store.to_jsonl())
+    print(json.dumps(revised.to_dict(), ensure_ascii=False))
+    return 0
+
+
 def cmd_promote(args: argparse.Namespace) -> int:
     """审核入口（唯一能产生 verified 的路径；强制独立审核）。"""
     path = Path(args.annotations)
@@ -195,16 +285,24 @@ def cmd_promote(args: argparse.Namespace) -> int:
     target.reviewer = str(args.reviewer)
     if target.is_self_reviewed:
         raise AnnotationError("标注人与审核人不得相同（独立审核）")
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    target.review_comment = str(getattr(args, "comment", "") or target.review_comment)
+    target.reviewed_at = stamp
     if args.approve:
+        # 显式 --approve + 独立审核者 ⇒ 唯一能产生真值的路径
         target.review_status = ReviewStatus.APPROVED
+        target.review_decision = ReviewDecision.APPROVED.value
         target.annotation_status = AnnotationStatus.VERIFIED
     elif args.reject:
         target.review_status = ReviewStatus.REJECTED
+        target.review_decision = ReviewDecision.REJECTED.value
         target.annotation_status = AnnotationStatus.REJECTED
     else:
+        # needs_revision：保持待审核，等待**修订后的新标注**再次送审
         target.review_status = ReviewStatus.NEEDS_CHANGES
+        target.review_decision = ReviewDecision.NEEDS_REVISION.value
         target.annotation_status = AnnotationStatus.PENDING_REVIEW
-    target.updated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    target.updated_at = stamp
     _atomic_write(path, store.to_jsonl())
     print(json.dumps(target.to_dict(), ensure_ascii=False))
     return 0
@@ -310,7 +408,33 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--status", default=AnnotationStatus.PENDING_REVIEW.value)
     add.add_argument("--annotator", default="agent-draft")
     add.add_argument("--note", default="")
+    add.add_argument(
+        "--instance",
+        type=int,
+        default=0,
+        help="同元素多实例序号（0 = 唯一实例；同画面多个同名元素必须用 1/2/… 区分）",
+    )
     add.set_defaults(func=cmd_add)
+
+    revise = sub.add_parser("revise", help="提交修订（新标注 + supersedes 链 + 回退待审核）")
+    revise.add_argument("--id", required=True, help="被修订的标注 id")
+    revise.add_argument("--bbox", default="", help="修订后的 x,y,w,h（省略则沿用原值）")
+    revise.add_argument("--region", default="")
+    revise.add_argument("--visibility", default="")
+    revise.add_argument("--annotator", default="")
+    revise.add_argument("--comment", default="", help="修订说明 / 审核意见回应")
+    revise.set_defaults(func=cmd_revise)
+
+    review = sub.add_parser("review", help="写入审核意见（不自动 approve）")
+    review.add_argument("--id", required=True)
+    review.add_argument("--reviewer", required=True)
+    review.add_argument(
+        "--decision",
+        choices=("approved", "rejected", "needs_revision"),
+        required=True,
+    )
+    review.add_argument("--comment", default="")
+    review.set_defaults(func=cmd_review)
 
     listing = sub.add_parser("list", help="列出标注与统计")
     listing.set_defaults(func=cmd_list)
@@ -324,6 +448,12 @@ def main(argv: list[str] | None = None) -> int:
     promote.add_argument("--reviewer", default="")
     promote.add_argument("--approve", action="store_true")
     promote.add_argument("--reject", action="store_true")
+    promote.add_argument("--comment", default="", help="审核意见（会被持久化）")
+    promote.add_argument(
+        "--review-needs-revision",
+        action="store_true",
+        help="要求修订（可与 --approve/--reject 互斥）",
+    )
     promote.set_defaults(func=cmd_promote)
 
     render = sub.add_parser("render", help="渲染 bbox 预览图（不修改原图）")

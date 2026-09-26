@@ -29,6 +29,10 @@ from enum import StrEnum
 from time import monotonic
 from typing import Any
 
+from src.core.elements import (
+    ACTIONABLE_EVIDENCE as _core_actionable,
+    ELEMENT_LEVEL_EVIDENCE as _core_element_level,
+)
 from src.core.geometry import CoordinateTransform, Rect, Size
 from src.core.vision_target import (
     TargetSnapshot,
@@ -52,6 +56,17 @@ logger = get_logger("vision.pipeline.target_adapter")
 
 #: ``DetectionResult`` 转换后的默认来源标记
 DEFAULT_DETECTOR_SOURCE: str = "detector"
+
+# ---- 元素登记表（Phase 11.3：真实来源已下沉到 src/core/elements）------------
+#:
+#: 这里只做 **re-export**，保持 Phase 11.0/11.1/11.2 的既有导入路径
+#: （``from src.vision.pipeline.target_adapter import ACTIONABLE_EVIDENCE``）不变。
+#: 之所以下沉到 ``src/core``：Action 侧（``VisionAwareTargetResolver``）也要读这两张表，
+#: 而 "Action 不依赖 Vision" 是硬约束；``src/core`` 是两侧共同允许依赖的层。
+ACTIONABLE_EVIDENCE = _core_actionable
+ELEMENT_LEVEL_EVIDENCE = _core_element_level
+
+
 
 #: **可执行目标**登记表（Phase 11.0）；未登记的**证据**不会被转换为可执行候选。
 #

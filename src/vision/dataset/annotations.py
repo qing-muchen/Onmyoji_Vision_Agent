@@ -53,6 +53,7 @@ __all__ = [
     "ElementAnnotation",
     "ElementRegionKind",
     "ElementVisibility",
+    "ReviewDecision",
     "ReviewStatus",
     "annotation_stats",
     "local_now_iso",
@@ -77,6 +78,12 @@ ANNOTATION_FIELDS: frozenset[str] = frozenset(
         "annotator",
         "review_status",
         "reviewer",
+        "review_decision",
+        "review_comment",
+        "reviewed_at",
+        "revision",
+        "supersedes_annotation_id",
+        "instance_index",
         "note",
         "created_at",
         "updated_at",
@@ -137,12 +144,26 @@ class AnnotationStatus(StrEnum):
 
 
 class ReviewStatus(StrEnum):
-    """独立审核结果。"""
+    """独立审核结果（审核者的**决定**在此表达，具体说明见 ``review_comment``）。"""
 
     NOT_REVIEWED = "not_reviewed"
     APPROVED = "approved"
     REJECTED = "rejected"
     NEEDS_CHANGES = "needs_changes"
+
+
+class ReviewDecision(StrEnum):
+    """审核结论（Phase 11.3）：与 :class:`ReviewStatus` 一一对应，语义更直白。
+
+    * ``APPROVED``：通过 ⇒ 若同时 ``annotation_status == verified`` 则构成真值；
+    * ``REJECTED``：不通过（标注本身有错，放弃这条）；
+    * ``NEEDS_REVISION``：需要修订（审核者给出 ``review_comment``，
+      修订应作为**新标注**提交并回退到 ``pending_review``）。
+    """
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    NEEDS_REVISION = "needs_revision"
 
 
 def _parse_bbox(value: Any) -> Rect:
@@ -218,6 +239,19 @@ class ElementAnnotation:
     note: str = ""
     created_at: str = ""
     updated_at: str = ""
+    # ---- Phase 11.3 审核审计（增量；全部有默认值，旧数据可直接读取）----
+    #: 同元素同区域的**实例序号**（0 = 唯一实例；>0 用于区分同画面多个同名元素）
+    instance_index: int = 0
+    #: 审核结论（``ReviewDecision`` 取值；空串 = 尚未审核）
+    review_decision: str = ""
+    #: 审核意见（审核者给出的具体问题 / 修订要求）
+    review_comment: str = ""
+    #: 审核时间（ISO 8601）
+    reviewed_at: str = ""
+    #: 修订版本号（从 1 开始；每次修订 +1）
+    revision: int = 1
+    #: 本标注取代哪一条（修订链；空串 = 原始标注）
+    supersedes_annotation_id: str = ""
 
     def __post_init__(self) -> None:
         self.source_id = str(self.source_id or "").strip()
@@ -239,10 +273,19 @@ class ElementAnnotation:
             raise AnnotationError(f"标注枚举取值非法: {exc}") from exc
         self.image_width = int(self.image_width or 0)
         self.image_height = int(self.image_height or 0)
+        self.instance_index = int(self.instance_index or 0)
+        if self.instance_index < 0:
+            raise AnnotationError("instance_index 不能为负")
+        self.revision = max(1, int(self.revision or 1))
+        if self.review_decision:
+            try:
+                self.review_decision = ReviewDecision(self.review_decision).value
+            except ValueError as exc:
+                raise AnnotationError(f"review_decision 取值非法: {exc}") from exc
         if not self.annotation_id:
-            self.annotation_id = (
-                f"{self.source_id}:{self.element_name}:{self.region_kind.value}"
-            )
+            base = f"{self.source_id}:{self.element_name}:{self.region_kind.value}"
+            # 同元素多实例：0 时不加后缀（保持 Phase 11.2 的既有 id 不变）
+            self.annotation_id = base if self.instance_index == 0 else f"{base}#{self.instance_index}"
         now = local_now_iso()
         self.created_at = str(self.created_at or now)
         self.updated_at = str(self.updated_at or self.created_at)
@@ -278,11 +321,37 @@ class ElementAnnotation:
         return (
             self.annotation_status is AnnotationStatus.VERIFIED
             and self.review_status is ReviewStatus.APPROVED
+            # Phase 11.3：审核结论必须是**显式** approved（不再是"状态恰好对上"）
+            and (
+                not self.review_decision
+                or self.review_decision == ReviewDecision.APPROVED.value
+            )
             and bool(self.annotator)
             and bool(self.reviewer)
             and not self.is_self_reviewed
             and not self.is_absent
         )
+
+    @property
+    def awaits_review(self) -> bool:
+        """是否仍在等待独立审核（Phase 11.3：报告用口径）。"""
+        return self.annotation_status in (
+            AnnotationStatus.LABELED,
+            AnnotationStatus.PENDING_REVIEW,
+        ) and not self.is_verified_ground_truth
+
+    @property
+    def needs_revision(self) -> bool:
+        """是否被要求修订（审核者给出意见，需作为新标注重提）。"""
+        return self.review_decision == ReviewDecision.NEEDS_REVISION.value
+
+    @property
+    def rejection_reason(self) -> str:
+        """被拒 / 待修订的原因（取审核意见）。"""
+        return self.review_comment if self.review_status in (
+            ReviewStatus.REJECTED,
+            ReviewStatus.NEEDS_CHANGES,
+        ) else ""
 
     def within_image(self) -> bool:
         """bbox 是否完整落在原图范围内（尺寸未知时返回 ``True`` 并交由校验工具报告）。"""
@@ -318,6 +387,12 @@ class ElementAnnotation:
             "note": self.note,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "instance_index": self.instance_index,
+            "review_decision": self.review_decision,
+            "review_comment": self.review_comment,
+            "reviewed_at": self.reviewed_at,
+            "revision": self.revision,
+            "supersedes_annotation_id": self.supersedes_annotation_id,
         }
 
     @classmethod
@@ -350,6 +425,12 @@ class ElementAnnotation:
             note=str(data.get("note", "") or ""),
             created_at=str(data.get("created_at", "") or ""),
             updated_at=str(data.get("updated_at", "") or ""),
+            instance_index=int(data.get("instance_index", 0) or 0),
+            review_decision=str(data.get("review_decision", "") or ""),
+            review_comment=str(data.get("review_comment", "") or ""),
+            reviewed_at=str(data.get("reviewed_at", "") or ""),
+            revision=int(data.get("revision", 1) or 1),
+            supersedes_annotation_id=str(data.get("supersedes_annotation_id", "") or ""),
         )
 
     def describe(self) -> str:
@@ -413,6 +494,18 @@ class AnnotationStore:
 
     def __iter__(self) -> Iterator[ElementAnnotation]:
         return iter(self._items)
+
+    def get(self, annotation_id: str) -> ElementAnnotation | None:
+        """按 ``annotation_id`` 取标注（不存在时 ``None``；Phase 11.3 增量接口）。
+
+        Args:
+            annotation_id: 标注标识。
+
+        Returns:
+            对应标注。
+        """
+        key = str(annotation_id)
+        return next((item for item in self._items if item.annotation_id == key), None)
 
     def by_source(self, source_id: str) -> tuple[ElementAnnotation, ...]:
         """取某原图的全部标注。"""
@@ -564,6 +657,8 @@ def annotation_stats(annotations: Iterable[ElementAnnotation]) -> dict[str, Any]
     return {
         "annotations": len(items),
         "verified": sum(1 for item in items if item.is_verified_ground_truth),
+        "awaiting_review": sum(1 for item in items if item.awaits_review),
+        "needs_revision": sum(1 for item in items if item.needs_revision),
         "clickable_verified": sum(1 for item in items if item.is_clickable_verified),
         "absent": sum(1 for item in items if item.is_absent),
         "sources": len({item.source_id for item in items}),
