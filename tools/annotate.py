@@ -19,6 +19,10 @@ python tools/annotate.py promote --id <annotation_id> \
 
 # 5) 导出待审核清单（供独立审核者使用）
 python tools/annotate.py pending
+
+# 6) 单人开发：记录**个人复核**（Phase 11.4；不构成独立审核、不产生真值）
+python tools/annotate.py self-review --id <annotation_id> \
+    --decision approved --comment "本人对照原图复核：上边界贴合" --developer 我
 ```
 
 **安全与边界**（用户要求）：
@@ -29,7 +33,10 @@ python tools/annotate.py pending
 * **不向游戏窗口发送任何输入**（工具只做文件与图像渲染）；
 * bbox 是"原始帧客户区像素"，工具只做**坐标校验**（有限 / 正宽高 / 在原图内），不做裁剪；
 * ``promote`` 是**唯一**能把状态推进到 ``verified`` 的入口，且强制
-  ``annotator != reviewer``（独立审核）与显式 ``--approve``。
+  ``annotator != reviewer``（独立审核）与显式 ``--approve``；
+* ``self-review`` 只服务于单人开发：它写独立的 ``self_review_*`` 字段（复核人 / 结论 /
+  意见 / 时间），**永不**写 ``reviewer`` / ``review_status``，因此**不可能**伪造出
+  "独立审核"；已通过独立审核的标注拒绝再写个人复核。
 """
 
 from __future__ import annotations
@@ -56,6 +63,7 @@ from src.vision.dataset.annotations import (  # noqa: E402
     ElementVisibility,
     ReviewDecision,
     ReviewStatus,
+    SelfReviewDecision,
 )
 from src.vision.dataset.elements import (  # noqa: E402
     ElementRole,
@@ -173,14 +181,9 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_pending(args: argparse.Namespace) -> int:
-    """导出待审核清单（供独立审核者）。"""
+    """导出待审核清单（供独立审核者；含**已个人复核**但未独立审核的条目）。"""
     store = AnnotationStore.load(Path(args.annotations))
-    pending = [
-        item
-        for item in store
-        if item.annotation_status
-        in (AnnotationStatus.LABELED, AnnotationStatus.PENDING_REVIEW)
-    ]
+    pending = [item for item in store if item.awaits_review]
     payload = [item.to_dict() for item in pending]
     print(json.dumps({"pending": len(payload), "items": payload}, ensure_ascii=False, indent=2))
     return 0
@@ -305,6 +308,56 @@ def cmd_promote(args: argparse.Namespace) -> int:
     target.updated_at = stamp
     _atomic_write(path, store.to_jsonl())
     print(json.dumps(target.to_dict(), ensure_ascii=False))
+    return 0
+
+
+def cmd_self_review(args: argparse.Namespace) -> int:
+    """记录**个人复核**（单人开发的自我复核；**不是**独立审核）。
+
+    语义边界（用户要求）：
+
+    * 由**同一名开发者**对自己的标注复核，因此**不要求**任何人不同；
+    * 只写 ``self_review_*`` 字段：**不写** ``reviewer`` / ``review_status``，
+      因此**永远**不会产生 ``is_verified_ground_truth``，也不会授予
+      ``clickable_verified`` 或真实输入资格；
+    * **不改** bbox / element_name / region_kind / visibility / annotator / note，
+      因此原始标注与既有修订链（``supersedes_annotation_id``）完整保留；
+    * ``annotation_status`` **只在**个人结论为 ``approved`` 时推进到
+      ``self_reviewed``；``rejected`` / ``needs_revision`` **不改写**状态
+      （``verified`` / ``rejected`` 属于**独立审核**语义域，个人复核不得覆盖）；
+    * 已通过独立审核（``verified``）的标注拒绝再写个人复核，避免把
+      "独立真值"与"自我复核"混在同一条记录里。
+    """
+    path = Path(args.annotations)
+    store = AnnotationStore.load(path)
+    target = _find(store, args.id)
+    if target.is_independently_verified:
+        raise AnnotationError(
+            f"{target.annotation_id} 已是**独立审核**真值，不需要（也不允许）再写个人复核"
+        )
+    developer = str(
+        getattr(args, "developer", "") or os.environ.get("OVA_SELF_REVIEWER", "") or "developer-self"
+    )
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    target.self_reviewer = developer
+    target.self_review_comment = str(getattr(args, "comment", "") or "")
+    target.self_reviewed_at = stamp
+    target.self_review_decision = SelfReviewDecision(args.decision).value
+    status_effect = "unchanged"
+    if args.decision == SelfReviewDecision.APPROVED.value:
+        # 仅表示"个人复核通过" ⇒ 推到 self_reviewed（仍等待独立审核，绝不是 verified）
+        target.annotation_status = AnnotationStatus.SELF_REVIEWED
+        status_effect = AnnotationStatus.SELF_REVIEWED.value
+    target.updated_at = stamp
+    _atomic_write(path, store.to_jsonl())
+    payload = target.to_dict()
+    # 明确回报本命令的边界：独立审核字段未被触碰、也未产生真值
+    payload["independent_review_untouched"] = not target.reviewer and (
+        target.review_status is ReviewStatus.NOT_REVIEWED
+    )
+    payload["counts_as_ground_truth"] = target.is_verified_ground_truth
+    payload["status_effect"] = status_effect
+    print(json.dumps(payload, ensure_ascii=False))
     return 0
 
 
@@ -455,6 +508,25 @@ def main(argv: list[str] | None = None) -> int:
         help="要求修订（可与 --approve/--reject 互斥）",
     )
     promote.set_defaults(func=cmd_promote)
+
+    self_review = sub.add_parser(
+        "self-review",
+        help="记录个人复核（单人开发；不构成独立审核、不产生真值、不授予可点击资格）",
+    )
+    self_review.add_argument("--id", required=True, help="被复核的标注 id")
+    self_review.add_argument(
+        "--decision",
+        choices=("approved", "rejected", "needs_revision"),
+        required=True,
+        help="个人复核结论（仅用于开发期离线对照）",
+    )
+    self_review.add_argument("--comment", default="", help="个人复核意见（会被持久化）")
+    self_review.add_argument(
+        "--developer",
+        default="",
+        help="复核人（默认取环境变量 OVA_SELF_REVIEWER，再退回 developer-self）",
+    )
+    self_review.set_defaults(func=cmd_self_review)
 
     render = sub.add_parser("render", help="渲染 bbox 预览图（不修改原图）")
     render.add_argument("--out", required=True)

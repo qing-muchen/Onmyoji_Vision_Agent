@@ -32,6 +32,7 @@ from src.vision.dataset.annotations import (
     ElementRegionKind,
     ElementVisibility,
     ReviewStatus,
+    SelfReviewDecision,
     annotation_stats,
     local_now_iso,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "ElementRegionKind",
     "ElementVisibility",
     "ReviewStatus",
+    "SelfReviewDecision",
     "SourceError",
     "SourceRegistry",
     "SplitError",

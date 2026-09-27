@@ -9,6 +9,9 @@ python tools/evaluate_localization.py
 
 # ③ 指定预测文件与真值口径
 python tools/evaluate_localization.py --predictions preds.jsonl --status all --json
+
+# ④ 单人开发的**探索口径**：只用"个人复核过"的标注做开发期诊断
+python tools/evaluate_localization.py --status self_reviewed
 ```
 
 **核心约束（用户要求）**：
@@ -19,6 +22,16 @@ python tools/evaluate_localization.py --predictions preds.jsonl --status all --j
 * 真值不足（``verified`` 数为 0）⇒ 输出 ``insufficient_data``，**不给任何定位指标**；
 * 绝不使用"在训练数据上自比"的结果宣称泛化性能；
 * 只读：不修改 ``dataset/raw/`` 与标注文件。
+
+**两种真值口径严格区分（Phase 11.4）**：
+
+| ``--status`` | ``truth_mode`` | 可用范围 |
+| --- | --- | --- |
+| ``verified``（默认） | ``independently_verified`` | **唯一**可用于正式指标的独立审核真值 |
+| ``self_reviewed`` | ``exploratory_self_reviewed`` | 仅"个人复核过"的标注 ⇒ **开发期诊断**，``admissible_as_official_metric=False`` |
+| ``all`` | ``all(status)`` | 把草稿也当真值 ⇒ 仅自检（``draft_diagnostic``） |
+
+两种口径**都不得**放宽 ``template_hit`` 与 ``element_bbox`` 的语义不可比约束。
 
 指标：``IoU``、中心点误差（像素）、命中率（``IoU ≥ --iou-threshold``）。
 """
@@ -42,6 +55,7 @@ from src.vision.capture.models import Frame  # noqa: E402
 from src.vision.dataset.annotations import (  # noqa: E402
     AnnotationStatus,
     AnnotationStore,
+    ElementAnnotation,
     ElementRegionKind,
 )
 
@@ -64,6 +78,31 @@ PREDICTION_SEMANTICS: dict[str, str] = {
     "template_hit": "模板命中框（ROI 内匹配区域）",
     "ocr_text_box": "OCR 文字框",
     "element_bbox": "元素完整外框（人工标注口径）",
+}
+
+#: 真值口径（Phase 11.4）：**严格区分**独立审核真值 与 个人复核探索口径
+TRUTH_MODE_INDEPENDENT = "independently_verified"
+TRUTH_MODE_SELF_REVIEWED = "exploratory_self_reviewed"
+TRUTH_MODE_ALL = "all"
+
+TRUTH_MODES: tuple[str, ...] = (
+    TRUTH_MODE_INDEPENDENT,
+    TRUTH_MODE_SELF_REVIEWED,
+    TRUTH_MODE_ALL,
+)
+
+#: CLI ``--status`` → 内部口径
+STATUS_TO_MODE: dict[str, str] = {
+    "verified": TRUTH_MODE_INDEPENDENT,
+    "self_reviewed": TRUTH_MODE_SELF_REVIEWED,
+    "all": TRUTH_MODE_ALL,
+}
+
+#: 口径 → 真值来源（写进报告，避免把探索 / 自检结果当成正式结论）
+GROUND_TRUTH_BASIS: dict[str, str] = {
+    TRUTH_MODE_INDEPENDENT: "independent_review",
+    TRUTH_MODE_SELF_REVIEWED: "self_review_exploratory",
+    TRUTH_MODE_ALL: "draft_diagnostic",
 }
 
 
@@ -189,38 +228,94 @@ def load_predictions(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def resolve_truth_mode(*, truth_mode: str = TRUTH_MODE_INDEPENDENT, include_all_status: bool | None = None) -> str:
+    """把真值口径归一为 :data:`TRUTH_MODES` 之一。
+
+    Args:
+        truth_mode: 目标口径。
+        include_all_status: **已弃用**的兼容开关（Phase 11.2/11.3 的调用方仍在用）；
+            显式给出时**覆盖** ``truth_mode``。
+
+    Returns:
+        归一后的口径字符串。
+
+    Raises:
+        ValueError: 未知口径。
+    """
+    if include_all_status is not None:
+        return TRUTH_MODE_ALL if include_all_status else TRUTH_MODE_INDEPENDENT
+    mode = str(truth_mode)
+    if mode not in TRUTH_MODES:
+        raise ValueError(f"未知真值口径: {mode}（可选: {TRUTH_MODES}）")
+    return mode
+
+
+def select_truth(store: AnnotationStore, truth_mode: str) -> list[ElementAnnotation]:
+    """按口径选出真值集合。
+
+    * ``independently_verified``：**仅**经独立审核的真值（可用于正式指标）；
+    * ``exploratory_self_reviewed``：**仅**个人复核、未经独立审核的标注
+      （开发期诊断；与上面**互斥**，绝不重叠）；
+    * ``all``：全部标注（草稿自检）。
+
+    Args:
+        store: 标注集合。
+        truth_mode: 口径（:data:`TRUTH_MODES`）。
+
+    Returns:
+        真值标注列表。
+
+    Raises:
+        ValueError: 未知口径。
+    """
+    mode = resolve_truth_mode(truth_mode=truth_mode)
+    if mode == TRUTH_MODE_ALL:
+        return list(store)
+    if mode == TRUTH_MODE_SELF_REVIEWED:
+        return list(store.self_reviewed_only())
+    return list(store.verified())
+
+
 def evaluate(
     *,
     annotations_path: Path = DEFAULT_ANNOTATIONS,
     predictions_path: Path = DEFAULT_PREDICTIONS,
-    include_all_status: bool = False,
+    truth_mode: str = TRUTH_MODE_INDEPENDENT,
     iou_threshold: float = 0.5,
+    include_all_status: bool | None = None,
 ) -> dict[str, Any]:
     """评估元素定位（真值 vs 预测），状态分类与定位**分开**。
 
     Args:
         annotations_path: 标注文件。
         predictions_path: 预测文件。
-        include_all_status: ``True`` 时把草稿也当作真值（**仅用于自检，不可用于结论**）。
+        truth_mode: 真值口径（见 :data:`TRUTH_MODES`）——``independently_verified``
+            （默认，可作正式指标）/ ``exploratory_self_reviewed``（个人复核，仅开发期诊断）/
+            ``all``（草稿自检）。
         iou_threshold: 视为命中的 IoU 阈值。
+        include_all_status: **已弃用**的兼容开关；显式给出时覆盖 ``truth_mode``。
 
     Returns:
-        报告字典（``status`` / ``insufficient_reason`` / ``localization`` /
+        报告字典（``status`` / ``truth_mode`` / ``ground_truth_basis`` /
+        ``admissible_as_official_metric`` / ``insufficient_reason`` / ``localization`` /
         ``semantics_mismatch`` / ``annotation_stats``）。
     """
+    mode = resolve_truth_mode(truth_mode=truth_mode, include_all_status=include_all_status)
     store = AnnotationStore.load(annotations_path)
-    truth = [
-        item
-        for item in store
-        if (include_all_status or item.is_verified_ground_truth)
-    ]
+    truth = select_truth(store, mode)
     predictions = load_predictions(predictions_path)
     stats = store.stats()
+    official = mode == TRUTH_MODE_INDEPENDENT
 
     report: dict[str, Any] = {
         "annotations_path": str(annotations_path),
         "predictions_path": str(predictions_path),
-        "truth_mode": "all(status)" if include_all_status else "verified_ground_truth",
+        "truth_mode": mode,
+        "ground_truth_basis": GROUND_TRUTH_BASIS[mode],
+        #: 只有独立审核口径才可作为**正式**指标对外使用
+        "admissible_as_official_metric": official,
+        "exploratory_diagnostic": mode == TRUTH_MODE_SELF_REVIEWED,
+        "draft_diagnostic": mode == TRUTH_MODE_ALL,
         "annotation_stats": stats,
         "truth_count": len(truth),
         "prediction_count": len(predictions),
@@ -234,11 +329,24 @@ def evaluate(
 
     if not truth:
         report["status"] = "insufficient_data"
-        report["insufficient_reason"] = (
-            "没有任何**经独立审核**的元素级真值"
-            f"（annotations={stats['annotations']}, verified={stats['verified']}）"
-            " ⇒ 不输出任何定位指标"
-        )
+        if mode == TRUTH_MODE_SELF_REVIEWED:
+            report["insufficient_reason"] = (
+                "没有任何**仅经个人复核**的标注"
+                f"（annotations={stats['annotations']}, "
+                f"self_reviewed={stats['self_reviewed']}, "
+                f"self_reviewed_only={stats['self_reviewed_only']}）"
+                " ⇒ 探索口径也没有可诊断样本"
+            )
+        elif official:
+            report["insufficient_reason"] = (
+                "没有任何**经独立审核**的元素级真值"
+                f"（annotations={stats['annotations']}, verified={stats['verified']}）"
+                " ⇒ 不输出任何定位指标"
+            )
+        else:
+            report["insufficient_reason"] = (
+                "真值集合为空（--status all）⇒ 不输出任何定位指标"
+            )
         report["notes"].append(
             "当前只有待审核草稿（pending_review）：草稿可用于核对流程，"
             "不能作为定位准确率的依据"
@@ -282,7 +390,9 @@ def evaluate(
 
         # ---- Phase 11.3：六项可比性前置检查（缺一即不计入定位指标）----
         reasons: list[str] = []
-        if not include_all_status and not item.is_verified_ground_truth:
+        # 只有**正式口径**才需要逐条复核"是否独立真值"；
+        # 探索 / 自检口径已由 truth_mode 显式声明（见报告 admissible_as_official_metric）
+        if official and not item.is_independently_verified:
             reasons.append("unverified_ground_truth")
         if str(predicted.get("element_name", "")) != item.element_name:
             reasons.append("element_name_mismatch")
@@ -343,11 +453,17 @@ def evaluate(
         "comparable_threshold": '同义口径 = prediction_semantics == "element_bbox"',
     }
     report["incomparable_reasons"] = dict(sorted(reason_counts.items()))
-    report["draft_diagnostic"] = bool(include_all_status)
-    if include_all_status:
+    if mode == TRUTH_MODE_ALL:
         report["notes"].append(
             "本报告使用 --status all（把待审核草稿也当真值）⇒ 只能作为 "
             "**draft_diagnostic**，严禁混入正式评估指标或对外宣称准确率"
+        )
+    elif mode == TRUTH_MODE_SELF_REVIEWED:
+        report["notes"].append(
+            "本报告使用 --status self_reviewed（**个人复核**口径，单人开发）⇒ "
+            "`admissible_as_official_metric=False`，只能作为开发期诊断，"
+            "严禁计入正式评估指标或对外宣称准确率；个人复核**不会**放宽 "
+            "template_hit 与 element_bbox 的语义不可比约束"
         )
     report["per_truth"] = per_truth
     report["notes"].append(
@@ -371,9 +487,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--generate", action="store_true", help="先用现有 Vision 检测生成预测")
     parser.add_argument(
         "--status",
-        choices=("verified", "all"),
+        choices=("verified", "self_reviewed", "all"),
         default="verified",
-        help="真值口径：verified（默认）或 all（把草稿也当真值，仅用于自检）",
+        help=(
+            "真值口径：verified（独立审核真值，默认）/ "
+            "self_reviewed（个人复核，仅开发期诊断）/ all（把草稿也当真值，仅自检）"
+        ),
     )
     parser.add_argument("--iou-threshold", type=float, default=0.5)
     parser.add_argument("--json", action="store_true", help="输出完整 JSON")
@@ -388,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
     report = evaluate(
         annotations_path=Path(args.annotations),
         predictions_path=Path(args.predictions),
-        include_all_status=args.status == "all",
+        truth_mode=STATUS_TO_MODE[args.status],
         iou_threshold=args.iou_threshold,
     )
 
@@ -397,9 +516,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         stats = report["annotation_stats"]
         print(f"标注: {stats['annotations']} 条（verified={stats['verified']}, "
+              f"self_reviewed_only={stats['self_reviewed_only']}, "
               f"clickable={stats['clickable_verified']}, 独立原图={stats['sources']}）")
         print(f"真值口径: {report['truth_mode']} | 真值数: {report['truth_count']} | "
               f"预测数: {report['prediction_count']}")
+        if not report["admissible_as_official_metric"]:
+            print("  [scope] **不是**正式指标（admissible_as_official_metric=False）：仅开发期诊断 / 自检")
         if report["status"] != "ok":
             print(f"!! {report['status']}: {report['insufficient_reason']}")
         else:

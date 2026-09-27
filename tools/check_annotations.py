@@ -18,7 +18,9 @@ python tools/check_annotations.py --json
 7. 不允许已审核标注缺少必要审核信息（``verified`` 必须有 ``annotator`` 与 ``reviewer``）；
 8. 不允许将未审核标注计入 verified ground truth（统计口径检查）；
 9. 原图 SHA256 不得与清单登记值不一致（有清单时）；
-10. 图片读取失败必须记录明确原因（``np.fromfile`` + ``cv2.imdecode``，中文路径不误报）。
+10. 图片读取失败必须记录明确原因（``np.fromfile`` + ``cv2.imdecode``，中文路径不误报）；
+11. **个人复核（Phase 11.4）不得冒充独立审核**：``self_reviewed`` 状态必须带完整
+    复核记录（结论 + 时间），且**不得**同时写 ``reviewer`` / ``review_status``。
 
 **默认只读**：本工具**从不**修改 ``dataset/raw/`` 与标注文件。
 自动修复需要显式 ``--write-normalized``（仅重写标注 JSONL，且不动 bbox 语义）。
@@ -189,6 +191,26 @@ def check_annotations(
             errors.append(f"[8] {item.annotation_id}: 未审核却被计入 verified")
         if item.review_status is not ReviewStatus.APPROVED:
             errors.append(f"[8] {item.annotation_id}: 未独立审核却被计入 verified")
+
+    # 11) 个人复核（Phase 11.4）：记录必须完整，且**不得**冒充独立审核
+    for item in store:
+        where = f"{item.source_id}/{item.element_name}"
+        if item.annotation_status is AnnotationStatus.SELF_REVIEWED:
+            if not item.self_review_decision or not item.self_reviewed_at:
+                errors.append(
+                    f"[11] {where}: self_reviewed 状态缺少个人复核记录（结论 / 时间）"
+                )
+            if item.reviewer or item.review_status is not ReviewStatus.NOT_REVIEWED:
+                errors.append(
+                    f"[11] {where}: 个人复核不得写入独立审核字段"
+                    f"（reviewer={item.reviewer!r}, review_status={item.review_status.value}）"
+                )
+        if item.has_self_review and not item.is_verified_ground_truth:
+            if item.is_clickable_verified:
+                warnings.append(
+                    f"[11] {where}: clickable_verified 目前只有个人复核（无独立审核），"
+                    "不得作为已验证点击区域"
+                )
 
     stats = store.stats()
     insufficient = stats["annotations"] == 0

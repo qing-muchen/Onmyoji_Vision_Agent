@@ -9,12 +9,13 @@ ElementAnnotation（一条元素级标注）
 ├── coordinate_space   坐标空间（固定 frame_client_pixels）
 ├── region_kind        区域性质：状态证据 / UI 元素 / 已验证可点击区域
 ├── visibility         可见性：可见 / 部分可见 / 被遮挡 / 存在但不可交互 / 不存在
-├── annotation_status  未标注 / 已标注 / 待审核 / 审核通过 / 审核不通过
+├── annotation_status  未标注 / 已标注 / 待审核 / 个人已复核 / 审核通过 / 审核不通过
 ├── annotator / review_status / reviewer
+├── self_reviewer / self_review_decision / self_review_comment / self_reviewed_at
 └── created_at / updated_at
 ```
 
-**三条硬规则**（用户要求）：
+**四条硬规则**（用户要求）：
 
 1. **不许把视觉匹配框当已验证点击区域**：``region_kind`` 区分
    ``STATE_EVIDENCE``（状态证据区域）/ ``UI_ELEMENT``（UI 元素区域）/
@@ -23,6 +24,10 @@ ElementAnnotation（一条元素级标注）
    "画面中不存在该元素"，未标注不参与统计。
 3. **未审核不得计入真值**：``is_verified_ground_truth`` 要求
    ``annotation_status == VERIFIED`` **且** ``review_status == APPROVED``。
+4. **个人复核 ≠ 独立审核**（Phase 11.4）：单人开发下的 ``self_review_*`` 字段与
+   ``AnnotationStatus.SELF_REVIEWED`` 只表达"开发者自己看过一遍"，
+   **永远不构成** ``is_verified_ground_truth``，也不授予 ``clickable_verified``
+   或真实输入资格（真值要求 ``annotator != reviewer`` 的独立审核）。
 
 坐标空间只允许"原始帧客户区像素"（与 Phase 11.0 的 bbox 语义一致），
 不允许混用屏幕绝对坐标或参考分辨率坐标。
@@ -55,6 +60,7 @@ __all__ = [
     "ElementVisibility",
     "ReviewDecision",
     "ReviewStatus",
+    "SelfReviewDecision",
     "annotation_stats",
     "local_now_iso",
 ]
@@ -84,6 +90,11 @@ ANNOTATION_FIELDS: frozenset[str] = frozenset(
         "revision",
         "supersedes_annotation_id",
         "instance_index",
+        # ---- Phase 11.4 个人复核（单人开发；**不构成**独立审核）----
+        "self_reviewer",
+        "self_review_decision",
+        "self_review_comment",
+        "self_reviewed_at",
         "note",
         "created_at",
         "updated_at",
@@ -139,6 +150,9 @@ class AnnotationStatus(StrEnum):
     UNLABELED = "unlabeled"
     LABELED = "labeled"
     PENDING_REVIEW = "pending_review"
+    #: **仅个人复核过**（Phase 11.4，单人开发）：开发者自己看过并给出结论，
+    #: 但**没有**独立审核 ⇒ 不构成真值、不授予可点击 / 真实输入资格。
+    SELF_REVIEWED = "self_reviewed"
     VERIFIED = "verified"
     REJECTED = "rejected"
 
@@ -159,6 +173,22 @@ class ReviewDecision(StrEnum):
     * ``REJECTED``：不通过（标注本身有错，放弃这条）；
     * ``NEEDS_REVISION``：需要修订（审核者给出 ``review_comment``，
       修订应作为**新标注**提交并回退到 ``pending_review``）。
+    """
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    NEEDS_REVISION = "needs_revision"
+
+
+class SelfReviewDecision(StrEnum):
+    """**个人复核**结论（Phase 11.4）——取值与 :class:`ReviewDecision` 对齐，
+
+    但语义**严格不同**：这里记录的是开发者对**自己**标注的复核结论，
+    仅用于开发期离线对照（``exploratory_self_reviewed`` 口径），
+
+    * **不得**计入 ``independently_verified`` ground truth；
+    * **不得**授予 ``clickable_verified`` / 真实输入资格；
+    * 仍必须由**独立审核者**用 ``promote --approve`` 才能产生真值。
     """
 
     APPROVED = "approved"
@@ -252,6 +282,15 @@ class ElementAnnotation:
     revision: int = 1
     #: 本标注取代哪一条（修订链；空串 = 原始标注）
     supersedes_annotation_id: str = ""
+    # ---- Phase 11.4 个人复核（单人开发；**不构成**独立审核）----
+    #: 复核人（通常是开发者本人；与 ``reviewer`` **不同**，不参与真值判定）
+    self_reviewer: str = ""
+    #: 个人复核结论（``SelfReviewDecision`` 取值；空串 = 尚未个人复核）
+    self_review_decision: str = ""
+    #: 个人复核意见（开发者对自己的标注写下的问题 / 结论）
+    self_review_comment: str = ""
+    #: 个人复核时间（ISO 8601）
+    self_reviewed_at: str = ""
 
     def __post_init__(self) -> None:
         self.source_id = str(self.source_id or "").strip()
@@ -282,6 +321,23 @@ class ElementAnnotation:
                 self.review_decision = ReviewDecision(self.review_decision).value
             except ValueError as exc:
                 raise AnnotationError(f"review_decision 取值非法: {exc}") from exc
+        self.self_reviewer = str(self.self_reviewer or "")
+        self.self_review_comment = str(self.self_review_comment or "")
+        self.self_reviewed_at = str(self.self_reviewed_at or "")
+        self.self_review_decision = str(self.self_review_decision or "")
+        if self.self_review_decision:
+            try:
+                self.self_review_decision = SelfReviewDecision(self.self_review_decision).value
+            except ValueError as exc:
+                raise AnnotationError(f"self_review_decision 取值非法: {exc}") from exc
+        if self.self_reviewed_at and not self.self_review_decision:
+            raise AnnotationError(
+                "个人复核记录必须同时给出 self_review_decision（只有时间没有结论不算复核）"
+            )
+        if self.self_review_decision and not self.self_reviewed_at:
+            raise AnnotationError(
+                "个人复核记录必须记录 self_reviewed_at（复核时间不可缺省）"
+            )
         if not self.annotation_id:
             base = f"{self.source_id}:{self.element_name}:{self.region_kind.value}"
             # 同元素多实例：0 时不加后缀（保持 Phase 11.2 的既有 id 不变）
@@ -304,12 +360,24 @@ class ElementAnnotation:
 
     @property
     def is_self_reviewed(self) -> bool:
-        """是否"自审"（标注人与审核人相同）——**不算独立审核**。"""
+        """是否"自审"：``annotator == reviewer`` —— **不算独立审核**。
+
+        Notes:
+            本属性描述"同一人同时充当标注者与审核者"这一**被禁止**的情形，
+            与 Phase 11.4 的**个人复核**（``self_review_*`` 字段 /
+            :attr:`has_self_review`）是两个不同概念：前者是想冒充独立审核，
+            后者是单人开发下**明确标注为非独立**的自我复核。
+        """
         return bool(self.annotator) and self.annotator.strip() == self.reviewer.strip()
 
     @property
-    def is_verified_ground_truth(self) -> bool:
-        """是否可作为**真值**使用。
+    def has_self_review(self) -> bool:
+        """是否存在**个人复核记录**（Phase 11.4；结论 + 时间俱全才算）。"""
+        return bool(self.self_review_decision) and bool(self.self_reviewed_at)
+
+    @property
+    def is_independently_verified(self) -> bool:
+        """是否为**经独立审核**的真值（``independently_verified`` 口径）。
 
         四个必要条件（缺一不可）：
 
@@ -317,6 +385,11 @@ class ElementAnnotation:
         2. ``review_status == approved``；
         3. **独立审核**：``annotator`` 与 ``reviewer`` 都非空且**不是同一人**；
         4. 不是 ``visibility: absent``（"不存在"是负样本结论，不是真值 bbox）。
+
+        Notes:
+            **个人复核（``self_review_*``）不参与本判定**：即使开发者已经对同一条
+            标注写下 ``self_review_decision=approved``，只要没有独立审核者，
+            本属性仍为 ``False``（Phase 11.4 硬约束）。
         """
         return (
             self.annotation_status is AnnotationStatus.VERIFIED
@@ -333,12 +406,32 @@ class ElementAnnotation:
         )
 
     @property
+    def is_verified_ground_truth(self) -> bool:
+        """历史名称（Phase 11.1 起）：等价于 :attr:`is_independently_verified`。"""
+        return self.is_independently_verified
+
+    @property
+    def is_self_reviewed_only(self) -> bool:
+        """是否**只**经个人复核（离线评估的 ``exploratory_self_reviewed`` 口径）。
+
+        Returns:
+            ``True`` 表示"有个人复核记录，但**不是**独立审核真值" ——
+            这类标注只能用于开发期诊断，**不得**计入正式定位指标。
+        """
+        return self.has_self_review and not self.is_independently_verified
+
+    @property
     def awaits_review(self) -> bool:
-        """是否仍在等待独立审核（Phase 11.3：报告用口径）。"""
+        """是否仍在等待**独立**审核（Phase 11.3/11.4：报告用口径）。
+
+        Notes:
+            ``self_reviewed`` 只是"开发者自己看过"，**仍需**独立审核 ⇒ 计入本口径。
+        """
         return self.annotation_status in (
             AnnotationStatus.LABELED,
             AnnotationStatus.PENDING_REVIEW,
-        ) and not self.is_verified_ground_truth
+            AnnotationStatus.SELF_REVIEWED,
+        ) and not self.is_independently_verified
 
     @property
     def needs_revision(self) -> bool:
@@ -393,6 +486,10 @@ class ElementAnnotation:
             "reviewed_at": self.reviewed_at,
             "revision": self.revision,
             "supersedes_annotation_id": self.supersedes_annotation_id,
+            "self_reviewer": self.self_reviewer,
+            "self_review_decision": self.self_review_decision,
+            "self_review_comment": self.self_review_comment,
+            "self_reviewed_at": self.self_reviewed_at,
         }
 
     @classmethod
@@ -431,6 +528,10 @@ class ElementAnnotation:
             reviewed_at=str(data.get("reviewed_at", "") or ""),
             revision=int(data.get("revision", 1) or 1),
             supersedes_annotation_id=str(data.get("supersedes_annotation_id", "") or ""),
+            self_reviewer=str(data.get("self_reviewer", "") or ""),
+            self_review_decision=str(data.get("self_review_decision", "") or ""),
+            self_review_comment=str(data.get("self_review_comment", "") or ""),
+            self_reviewed_at=str(data.get("self_reviewed_at", "") or ""),
         )
 
     def describe(self) -> str:
@@ -440,6 +541,8 @@ class ElementAnnotation:
             flags.append("absent")
         if self.is_clickable_verified:
             flags.append("clickable")
+        if self.has_self_review:
+            flags.append("self-reviewed")
         if self.is_verified_ground_truth:
             flags.append("ground-truth")
         suffix = f" [{','.join(flags)}]" if flags else ""
@@ -520,6 +623,14 @@ class AnnotationStore:
     def verified(self) -> tuple[ElementAnnotation, ...]:
         """取**可作真值**的标注（已审核 `VERIFIED` 且独立审核 `APPROVED`）。"""
         return tuple(item for item in self._items if item.is_verified_ground_truth)
+
+    def self_reviewed_only(self) -> tuple[ElementAnnotation, ...]:
+        """取**仅经个人复核**的标注（Phase 11.4：开发期诊断口径，不是真值）。
+
+        Returns:
+            有个人复核记录、但**没有**独立审核的标注。
+        """
+        return tuple(item for item in self._items if item.is_self_reviewed_only)
 
     def source_ids(self) -> tuple[str, ...]:
         """涉及的原图身份（去重，保序）。"""
@@ -643,8 +754,15 @@ def annotation_stats(annotations: Iterable[ElementAnnotation]) -> dict[str, Any]
         annotations: 标注序列。
 
     Returns:
-        统计字典（``annotations`` / ``verified`` / ``clickable_verified`` / ``absent`` /
-        ``sources`` / ``elements`` / ``by_status`` / ``by_region`` / ``by_visibility``）。
+        统计字典（``annotations`` / ``verified`` / ``independently_verified`` /
+        ``self_reviewed`` / ``self_reviewed_only`` / ``awaiting_review`` /
+        ``clickable_verified`` / ``absent`` / ``sources`` / ``elements`` /
+        ``by_status`` / ``by_region`` / ``by_visibility``）。
+
+    Notes:
+        ``independently_verified`` 与 ``verified`` 同值（前者是 Phase 11.4 的显式命名）；
+        ``self_reviewed_only`` 是"只有个人复核"的子集 —— 它**永远不**等于真值，
+        也不得用于对外宣称的定位指标（见 ``tools/evaluate_localization.py``）。
     """
     items = list(annotations)
     by_status: dict[str, int] = {}
@@ -654,9 +772,13 @@ def annotation_stats(annotations: Iterable[ElementAnnotation]) -> dict[str, Any]
         by_status[item.annotation_status.value] = by_status.get(item.annotation_status.value, 0) + 1
         by_region[item.region_kind.value] = by_region.get(item.region_kind.value, 0) + 1
         by_visibility[item.visibility.value] = by_visibility.get(item.visibility.value, 0) + 1
+    independently_verified = sum(1 for item in items if item.is_independently_verified)
     return {
         "annotations": len(items),
-        "verified": sum(1 for item in items if item.is_verified_ground_truth),
+        "verified": independently_verified,
+        "independently_verified": independently_verified,
+        "self_reviewed": sum(1 for item in items if item.has_self_review),
+        "self_reviewed_only": sum(1 for item in items if item.is_self_reviewed_only),
         "awaiting_review": sum(1 for item in items if item.awaits_review),
         "needs_revision": sum(1 for item in items if item.needs_revision),
         "clickable_verified": sum(1 for item in items if item.is_clickable_verified),

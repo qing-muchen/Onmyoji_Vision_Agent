@@ -183,6 +183,18 @@ def build_pack(
     manifest: list[dict[str, object]] = []
     index_lines = ["# 审核索引（按原图）", ""]
     form_lines = ["# 审核表（请逐条填写）", "", "| annotation_id | 判定 | 意见 |", "| --- | --- | --- |"]
+    #: 个人复核表（Phase 11.4）：单人开发用。工具**只生成空表**，绝不预填结论。
+    self_form_lines = [
+        "# 个人复核表（单人开发；Phase 11.4）",
+        "",
+        "> 供**开发者本人**逐条复核草稿。它**不是**独立审核：",
+        "> 逐条判断请由人完成（本表**不预填**任何结论），填完后用",
+        "> `annotate.py self-review` 记录 —— 那条记录**不会**产生真值，",
+        "> 也不会授予 `clickable_verified` 或真实输入资格。",
+        "",
+        "| annotation_id | 元素 | 实例 | 个人结论（请手动勾选） | 意见 |",
+        "| --- | --- | --- | --- | --- |",
+    ]
 
     for relative in dict.fromkeys(item.image_path for item in store):
         source = dataset / relative
@@ -267,6 +279,15 @@ def build_pack(
                 "image_sha256": digest,
                 "questions": list(questions),
                 "must_open_original": "请打开原图（不是只看局部放大）再判断边界",
+                "self_review_command": (
+                    "python tools/annotate.py self-review --id "
+                    f"{item.annotation_id} --decision <approved|rejected|needs_revision> "
+                    '--comment "<本人复核意见>" --developer <你的名字>'
+                ),
+                "self_review_note": (
+                    "个人复核**不是**独立审核：不产生真值、不授予 clickable_verified，"
+                    "正式的 verified 只能由独立审核者用 promote --approve 产生"
+                ),
             }
             (image_dir / f"meta_{item.element_name}_{item.instance_index}.json").write_text(
                 json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -281,6 +302,11 @@ def build_pack(
             form_lines.append(
                 f"| `{item.annotation_id}` | ☐ 通过 / ☐ 拒绝 / ☐ 需修订 |  |"
             )
+            # 个人复核表：**不预填**任何结论，仅给出条目与空栏
+            self_form_lines.append(
+                f"| `{item.annotation_id}` | {item.element_name} | {item.instance_index} | "
+                "☐ 通过 / ☐ 拒绝 / ☐ 需修订 |  |"
+            )
         index_lines.append("")
 
     (out_dir / "manifest.json").write_text(
@@ -289,10 +315,13 @@ def build_pack(
     )
     (out_dir / "index.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
     (out_dir / "review_form.md").write_text("\n".join(form_lines) + "\n", encoding="utf-8")
+    (out_dir / "self_review_form.md").write_text(
+        "\n".join(self_form_lines) + "\n", encoding="utf-8"
+    )
     (out_dir / "README.md").write_text(
         "\n".join(
             [
-                "# 元素级标注审核包（Phase 11.3）",
+                "# 元素级标注审核包（Phase 11.3 / 11.4）",
                 "",
                 "本审核包由 `tools/build_annotation_review_pack.py` 生成（**只生成派生预览，未修改任何原图**）。",
                 "",
@@ -311,8 +340,19 @@ def build_pack(
                 "    --annotator <标注者> --reviewer <你的名字> --approve --comment \"已核对原图\"",
                 "```",
                 "",
+                "## 单人开发的个人复核（Phase 11.4）",
+                "若你就是标注者本人（**没有**第二名审核者）：",
+                "1. 打开 `self_review_form.md` **逐条**填写个人结论（工具**不会预填**任何结论）；",
+                "2. 用 `python tools/annotate.py self-review --id <annotation_id> \\",
+                "   --decision approved|rejected|needs_revision --comment \"…\"` 落库；",
+                "3. 该记录**不是**独立审核：状态变为 `self_reviewed`，而 `reviewer` / `review_status`",
+                "   **保持不变** ⇒ 不产生真值，也不授予 `clickable_verified` 或真实输入资格；",
+                "4. 离线评估用 `--status self_reviewed`（`exploratory_self_reviewed` 口径）只看开发期诊断，",
+                "   其 `admissible_as_official_metric=False`，**不得**对外宣称准确率。",
+                "",
                 "## 重要提醒",
                 "* 审核包**不会**自动批准任何标注；`approved` 只能由**独立审核者**主动确认；",
+                "* `self-review` 命令**没有** `--reviewer` 参数：无法借个人复核伪造独立审核；",
                 "* 若对 bbox 有异议，请用 `annotate.py revise` 提交修订（旧草稿**保留**不改写）；",
                 "* `victory_icon` 等**状态证据**不应被标为可点击区域。",
             ]
@@ -326,7 +366,10 @@ def build_pack(
         "images": len({item.image_path for item in store}),
         "annotations": len(manifest),
         "promoted": 0,
-        "note": "审核包不执行 promote；approved 需独立审核者显式确认",
+        #: 工具**不代填**任何个人复核结论（逐条判断必须由人完成）
+        "self_review_decisions": 0,
+        "self_review_form": str(out_dir / "self_review_form.md"),
+        "note": "审核包不执行 promote，也不代填个人复核结论；approved 需独立审核者显式确认",
     }
     if near_duplicate:
         result["near_duplicates"] = near_duplicate_scan(dataset=dataset)
@@ -362,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"审核包输出: {result['out']}")
         print(f"原图 {result['images']} 张 / 标注 {result['annotations']} 条 / promote {result['promoted']} 次")
+        print(f"个人复核表: {result['self_review_form']}（工具代填结论 {result['self_review_decisions']} 条）")
         near = result.get("near_duplicates") or {}
         if near:
             print(f"近重复扫描: {near['scanned']} 张；完全重复 {len(near['exact_duplicates'])} 组；"

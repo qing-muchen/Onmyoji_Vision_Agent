@@ -2080,7 +2080,25 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   等待独立审核 **8** 条、**经独立审核真值 0 条**、`clickable_verified` **0 条** ⇒
   定位指标仍 `insufficient_data`。详见
   `docs/PHASE11_3_REVIEW_AND_LOCALIZATION_ALIGNMENT_REPORT.md`。
-- Phase 11.4：**由独立审核者**复核 8 条草稿（`review_pack/` → `promote --approve`）；
+- Phase 11.4（**已完成：单人开发复核工作流**，`feat(dataset): add single developer self-review
+  workflow`）：新增 `AnnotationStatus.SELF_REVIEWED` 与 `self_review_*` 审计字段
+  （复核人 / 结论 / 意见 / 时间，**结论与时间必须成对**）；
+  `python tools/annotate.py self-review` 记录**个人复核** —— 该命令**没有** `--reviewer`
+  参数、从不写 `reviewer` / `review_status`，因此**结构上无法**伪造独立审核，
+  也**不会**产生真值或授予 `clickable_verified` / 真实输入资格；真值判定新增
+  `is_independently_verified`（主口径）与 `is_self_reviewed_only`，
+  `promote --approve` 仍是唯一真值入口且自审照旧被拒；离线评估新增
+  `--status self_reviewed`（`exploratory_self_reviewed`，`admissible_as_official_metric=False`，
+  仅开发期诊断），`template_hit` 与 `element_bbox` 的语义不可比约束**不放宽**；
+  审核包复用既有 `review_pack` 并新增 `self_review_form.md`（逐条空栏，工具**零预填**，
+  `promoted=0` / `self_review_decisions=0`）；`check_annotations` 新增第 11 项校验。
+  测试 **1545 passed / 1 skipped**（+15）；`raw/` 178 张与正式标注 SHA256 未变；
+  等待独立审核 **8** 条、个人复核 **0** 条（工具不代填结论）、**经独立审核真值 0 条**、
+  `clickable_verified` **0 条** ⇒ 定位指标仍 `insufficient_data`；
+  `action.enabled=false` / `backend=dry_run` 未改动。详见
+  `docs/PHASE11_4_SELF_REVIEW_WORKFLOW_REPORT.md`。
+- Phase 11.5：**由独立审核者**复核 8 条草稿（`review_pack/` → `promote --approve`）——
+  Phase 11.4 **不要求**取得独立真值，也不需要虚构审核人员；
   目视核查 `battle_reward` 并把试点扩到 10–20 张；补 `battle_auto_button` 点击热区候选；
   为 `yard_exploration_entry` / `exploration_stage_node` 补 detector；补采（≥100 独立原图 /
   跨分辨率 / 跨皮肤 / 会话登记）；编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。

@@ -276,7 +276,8 @@ core ──▶ capture ──▶ detector / scene / ocr ──▶ evidence ─�
 
 | Phase 11.2 | 元素级标注试点与真值验证（`tools/annotate.py` 标注 CLI（原子写入 + 强制独立审核）/ `tools/evaluate_localization.py`（IoU + 中心误差，状态与定位分开统计，跨语义拒绝比较）；8 条候选草稿 / 4 张独立原图 / 真值 0） | `PHASE11_2_ANNOTATION_PILOT_REPORT.md` || 项 | 现状 | 归属 |
 
-| Phase 11.3 | 审核交接与定位语义对齐（`tools/build_annotation_review_pack.py` 审核包 + 近重复诊断；审核审计字段与 `review`/`revise`；`src/vision/dataset/elements.py` 唯一元素注册表；登记表下沉 `src/core/elements.py` 且 `calibrated` 只认代码登记；评估 6 类不可比原因） | `PHASE11_3_REVIEW_AND_LOCALIZATION_ALIGNMENT_REPORT.md` || --- | --- | --- |
+| Phase 11.3 | 审核交接与定位语义对齐（`tools/build_annotation_review_pack.py` 审核包 + 近重复诊断；审核审计字段与 `review`/`revise`；`src/vision/dataset/elements.py` 唯一元素注册表；登记表下沉 `src/core/elements.py` 且 `calibrated` 只认代码登记；评估 6 类不可比原因） | `PHASE11_3_REVIEW_AND_LOCALIZATION_ALIGNMENT_REPORT.md` |
+| Phase 11.4 | 单人开发复核工作流（`AnnotationStatus.SELF_REVIEWED` + `self_review_*` 审计字段；`annotate.py self-review`（**没有** `--reviewer`，从不写独立审核字段）；`is_independently_verified` / `is_self_reviewed_only`；评估 `--status self_reviewed`（`exploratory_self_reviewed`，`admissible_as_official_metric=False`）；审核包新增 `self_review_form.md`（零预填）；`check_annotations` 第 11 项） | `PHASE11_4_SELF_REVIEW_WORKFLOW_REPORT.md` || --- | --- | --- |
 | 实时循环（真实采集） | **已接线**（Phase 5.2）：`WindowFrameSource`（dxcam 优先 / mss 回退）+ `ForegroundGuard`（只检查不抢占）+ `CycleScheduler`（deadline based，late cycle 有记录）；真实窗口长跑见报告 | 已完成 |
 | Runtime 模块边界 | **已收敛**（Phase 5.3 / 5.4）：`window_binding` / `foreground_guard` / `window_capture` / `capture_backend` / `frame_source` 单一职责，`window_source` 仅作兼容层；**Runtime 层自此冻结** | 已完成 |
 | Runtime 可靠性 | **已加固**（Phase 5.4）：生命周期状态机（7 状态 + 转换表）、`pause`/`resume`/`stop` 与资源释放、失败恢复策略（退避 + 上限，默认关闭）、指标含 `runtime_state` / `recovery_count` | 已完成 |
