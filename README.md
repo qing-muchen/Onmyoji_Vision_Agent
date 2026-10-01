@@ -2131,8 +2131,19 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   模板来源映射已保存为 `dataset/features/bottom_menu/yard/positive_sources.json`（33 条，可追溯）；
   `threshold=0.85`、`action.enabled=false`、`backend=dry_run` 均未改动。测试 **1570 passed / 1 skipped**
   （+13）。详见 `docs/PHASE11_5B_YARD_SKIN_TEMPLATES_REPORT.md`。
-- Phase 11.6：**模板匹配耗时优化**（降采样匹配 / 金字塔剪枝）—— 这是"覆盖 ≥33 且仍在 500ms 节拍内"
-  的前提；随后按选定参数接入 `configs/config.yaml`；**由独立审核者**复核 8 条草稿
+- Phase 11.6-A（**已完成：证据 detector 的 ROI 模板结果缓存**，`feat(vision): add template cache for
+  evidence detector`）：给模板型证据 detector 增加**默认关闭**的「ROI 结果缓存」
+  （`src/vision/evidence/base.py`：`roi_fingerprint` + `LruEvidenceCache`，键 = 帧尺寸 + ROI 像素指纹），
+  命中时完全跳过 ROI 裁剪 / 灰度化 / 全部 `matchTemplate`，而返回的证据与未命中路径**逐字段一致**；
+  **不改匹配算法、不增加模板、不修改配置**（`detector.detect()` 的判定逻辑整体移到 `_detect_uncached`，
+  一行未改）。实测（12 张模板、阈值 0.85、`tools/benchmark_template_cache.py`）：
+  「同一画面连续重复」与「画面只在 ROI 之外变化（HUD/动画）」两种场景命中率 **95%**，
+  yard 单项中位 **197.9ms / 187.9ms → 1.5ms / 1.7ms**（≈130×），推算整链 **~480 / ~470ms → ~284ms**；
+  「画面在 ROI 内改动 1 像素」与「连续不同画面」命中率 **0%**（保守语义：宁可重算也不返回过期结果）。
+  默认关闭 ⇒ **运行期行为零变化**；接入方式（配置字段 / 装配参数 / 离线注入）留待后续决策。
+  测试 **1580 passed / 1 skipped**（+10）。详见 `docs/PHASE11_6A_TEMPLATE_CACHE_REPORT.md`。
+- Phase 11.6-B：**匹配耗时优化**（降采样匹配 / 金字塔剪枝）—— 这是"覆盖 ≥33 且仍在 500ms 节拍内"的
+  前提；随后按选定参数把 ROI 缓存与模板数一并接入 `configs/config.yaml`；**由独立审核者**复核 8 条草稿
   （`review_pack/` → `promote --approve`）；目视核查 `battle_reward` 并把试点扩到 10–20 张；
   补 `battle_auto_button` 点击热区候选；补采（跨分辨率 / 多 DPI / 新活动皮肤 / 会话登记）；
   编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。

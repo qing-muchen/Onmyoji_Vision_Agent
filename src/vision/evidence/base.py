@@ -12,13 +12,33 @@
 证据检测直接消费 ``frame.image``，因此**不要求**帧携带 ``coordinate_transform``：
 ROI 用相对比例描述，输出的 ``bbox`` 位于输入帧的像素坐标系。
 
+**三层缓存的分工（Phase 11.6-A）**：
+
+======================== ==================================================================
+缓存                     作用 / 生命周期
+======================== ==================================================================
+模板金字塔               ``TemplateMatcher`` 内部：模板灰度图 + 各 scale 缩放图，
+                         构造期生成、跨帧复用（Phase 5.1）
+帧结果缓存               ``EvidenceRegistry(cache_size=N)``：整帧 ``detect_all`` 结果，
+                         按**整帧内容指纹**命中（Phase 5.1，默认关闭）
+**ROI 结果缓存**          本模块 ``TemplateEvidenceDetector(cache_size=N)``：
+                         按**ROI 内容指纹**复用单条证据结果（Phase 11.6-A，默认关闭）
+======================== ==================================================================
+
+ROI 缓存是比帧缓存**更细**的一层：画面只在别处变化（HUD 数字、技能动画）时，帧指纹已经变了，
+但这条证据的 ROI 内容并未改变，仍然可以命中。缓存命中时**完全跳过**
+"ROI 裁剪 → 灰度化 → 全部模板的 matchTemplate"，但**不改变任何判定结果**：
+命中返回的就是未命中路径本该算出的同一条 :class:`EvidenceResult`（逐字段一致）。
+
 相关模块：数据模型见 :mod:`src.vision.evidence.models`（``Roi`` / ``TextMatch`` 亦在其中），
 模板加载见 :mod:`src.vision.evidence.templates`。
 """
 
 from __future__ import annotations
 
+import hashlib
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,7 +68,9 @@ if TYPE_CHECKING:  # pragma: no cover - 仅用于类型注解，避免运行期�
 __all__ = [
     "BaseDetector",
     "BaseEvidenceDetector",
+    "LruEvidenceCache",
     "TemplateEvidenceDetector",
+    "roi_fingerprint",
 ]
 
 logger = get_logger("vision.evidence.base")
@@ -57,6 +79,124 @@ logger = get_logger("vision.evidence.base")
 def _normalize_text(value: str) -> str:
     """归一化 OCR 文本（去掉空白，便于子串匹配）。"""
     return "".join(value.split())
+
+
+def roi_fingerprint(roi_image: np.ndarray) -> bytes:
+    """ROI 像素内容的**指纹**（不含时间戳与来源信息）。
+
+    与 :func:`~src.vision.evidence.registry.frame_fingerprint` 的差别：只覆盖该 detector
+    的 ROI 像素，因此**粒度更细** —— 画面在别处变化时它不变。
+
+    Args:
+        roi_image: ROI 裁剪图（``frame.image`` 的切片视图即可）。
+
+    Returns:
+        16 字节 ``blake2b`` 摘要；形状或 dtype 不同必然得到不同指纹。
+    """
+    contiguous = np.ascontiguousarray(roi_image)
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(str(contiguous.shape).encode("ascii"))
+    digest.update(str(contiguous.dtype).encode("ascii"))
+    digest.update(contiguous.tobytes())
+    return digest.digest()
+
+
+class LruEvidenceCache:
+    """按内容指纹复用**单条证据结果**的定容 LRU 缓存（Phase 11.6-A）。
+
+    设计约束（用户要求：只加缓存，不动匹配算法）：
+
+    * 缓存只做"跳过重复计算"，**不参与任何判定**：命中返回的就是未命中路径本该算出的
+      同一条 :class:`~src.vision.evidence.models.EvidenceResult`；
+    * 键由调用方给出（本模块用"帧尺寸 + ROI 内容指纹"），因此**帧尺寸变化必然不命中**
+      （避免把 A 尺寸下算出的 ``bbox`` 用到 B 尺寸上）；
+    * 默认容量 ``0`` = **关闭**，行为与没有缓存时完全一致。
+
+    Args:
+        capacity: 容量（``<=0`` 表示关闭；只保留最近使用的 ``capacity`` 条）。
+
+    Notes:
+        线程约定与 :class:`~src.vision.evidence.registry.EvidenceRegistry` 的内部缓存一致：
+        面向单线程的顺序调用（运行期是单线程采集/识别循环），不做并发加锁。
+    """
+
+    def __init__(self, capacity: int) -> None:
+        self._capacity = max(0, int(capacity))
+        self._entries: OrderedDict[tuple[object, ...], object] = OrderedDict()
+        self._hits = 0
+        self._misses = 0
+
+    @property
+    def enabled(self) -> bool:
+        """是否启用（容量 > 0）。"""
+        return self._capacity > 0
+
+    @property
+    def capacity(self) -> int:
+        """容量。"""
+        return self._capacity
+
+    @property
+    def hits(self) -> int:
+        """命中次数。"""
+        return self._hits
+
+    @property
+    def misses(self) -> int:
+        """未命中次数。"""
+        return self._misses
+
+    @property
+    def size(self) -> int:
+        """当前缓存条目数。"""
+        return len(self._entries)
+
+    @property
+    def hit_rate(self) -> float:
+        """命中率（无查询时为 ``0.0``）。"""
+        total = self._hits + self._misses
+        return self._hits / total if total else 0.0
+
+    def get(self, key: tuple[object, ...]) -> object | None:
+        """取缓存项（未启用时直接返回 ``None``，且不计入统计）。"""
+        if not self.enabled:
+            return None
+        cached = self._entries.get(key)
+        if cached is None:
+            self._misses += 1
+            return None
+        self._entries.move_to_end(key)
+        self._hits += 1
+        return cached
+
+    def put(self, key: tuple[object, ...], value: object) -> None:
+        """写入缓存项（超出容量时淘汰最久未使用的一条）。"""
+        if not self.enabled:
+            return
+        self._entries[key] = value
+        self._entries.move_to_end(key)
+        while len(self._entries) > self._capacity:
+            self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        """清空条目（保留命中/未命中统计）。"""
+        self._entries.clear()
+
+    def reset_statistics(self) -> None:
+        """清零命中/未命中统计（保留条目）。"""
+        self._hits = 0
+        self._misses = 0
+
+    def stats(self) -> dict[str, float | int | bool]:
+        """返回可读统计（供报告与 benchmark 使用）。"""
+        return {
+            "enabled": self.enabled,
+            "capacity": self._capacity,
+            "size": self.size,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": round(self.hit_rate, 4),
+        }
 
 
 class BaseEvidenceDetector(ABC):
@@ -123,6 +263,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         *,
         ocr_engine: OCREngine | None = None,
         root: Path | None = None,
+        cache_size: int = 0,
     ) -> TemplateEvidenceDetector:
         """按证据配置构造 detector（模板在构造期加载）。
 
@@ -130,6 +271,10 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             config: 证据层配置。
             ocr_engine: 可选的 OCR 引擎（注入后启用第二证据源）。
             root: 解析模板相对路径的基准目录；省略时使用项目根。
+            cache_size: ROI 结果缓存容量（Phase 11.6-A）。``0``（默认）= **关闭**；
+                ``>0`` 时按"帧尺寸 + ROI 内容指纹"复用单条证据结果。
+                装配层（``create_detectors`` / ``EvidenceFrameProcessor.from_config``）
+                不传该参数，因此**不改配置就没有缓存**（行为与既有版本一致）。
 
         Returns:
             detector 实例。
@@ -165,6 +310,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             ocr_engine=ocr_engine,
             reliability=config.reliability_for(cls.NAME),
             group=config.group_of(cls.NAME) or "",
+            cache_size=cache_size,
         )
 
     def __init__(
@@ -177,6 +323,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         ocr_engine: OCREngine | None = None,
         reliability: float = DEFAULT_RELIABILITY,
         group: str = "",
+        cache_size: int = 0,
     ) -> None:
         self._name = name
         self._config = config
@@ -185,6 +332,26 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         self._ocr_engine = ocr_engine
         self._reliability = reliability
         self._group = group
+        #: ROI 结果缓存（Phase 11.6-A）：``cache_size <= 0`` 时关闭，行为与无缓存一致
+        self._cache = LruEvidenceCache(cache_size)
+
+    @property
+    def cache(self) -> LruEvidenceCache:
+        """ROI 结果缓存（Phase 11.6-A）。"""
+        return self._cache
+
+    @property
+    def cache_size(self) -> int:
+        """ROI 结果缓存容量（``0`` = 关闭）。"""
+        return self._cache.capacity
+
+    def cache_stats(self) -> dict[str, float | int | bool]:
+        """返回缓存统计（``enabled`` / ``capacity`` / ``size`` / ``hits`` / ``misses`` / ``hit_rate``）。"""
+        return self._cache.stats()
+
+    def clear_cache(self) -> None:
+        """清空 ROI 结果缓存（保留统计）。"""
+        self._cache.clear()
 
     @property
     def evidence_type(self) -> EvidenceType:
@@ -367,7 +534,48 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         )
 
     def detect(self, frame: Frame) -> EvidenceResult:
-        """在 ROI 内检测该证据（模板匹配 + 可选的 OCR 文字锚点）。
+        """在 ROI 内检测该证据（**带可选的 ROI 结果缓存**）。
+
+        缓存说明（Phase 11.6-A）：容量为 ``0``（默认）时直接走 :meth:`_detect_uncached`，
+        没有任何额外开销；容量 ``>0`` 时先按"帧尺寸 + ROI 内容指纹"查缓存，未命中才真正检测。
+        **匹配算法与判定逻辑完全没有变化** —— 命中返回的就是未命中路径本该得到的同一条结果。
+
+        Args:
+            frame: 待检测的帧。
+
+        Returns:
+            证据结果（与关闭缓存时逐字段一致）。
+        """
+        if not self._config.enabled:
+            return self.miss(reason="detector disabled")
+        if not self._cache.enabled:
+            return self._detect_uncached(frame)
+
+        key = self._cache_key(frame)
+        if key is None:
+            # ROI 裁不出像素（极小/异常帧）：不缓存，直接走正常路径（本就没有重复计算价值）
+            return self._detect_uncached(frame)
+        cached = self._cache.get(key)
+        if cached is not None:
+            assert isinstance(cached, EvidenceResult)
+            return cached
+        result = self._detect_uncached(frame)
+        self._cache.put(key, result)
+        return result
+
+    def _cache_key(self, frame: Frame) -> tuple[int, int, bytes] | None:
+        """ROI 缓存键 ``(帧宽, 帧高, ROI 内容指纹)``；ROI 为空时返回 ``None``。
+
+        把帧尺寸放进键里是必需的：``bbox`` 位于帧坐标系，同一块 ROI 内容若出现在不同尺寸的
+        帧上，坐标并不相同 —— 尺寸不同必然不会命中。
+        """
+        cropped, _rect = self.crop_roi(frame)
+        if cropped.size == 0:
+            return None
+        return (frame.width, frame.height, roi_fingerprint(cropped))
+
+    def _detect_uncached(self, frame: Frame) -> EvidenceResult:
+        """真正的检测路径（ROI → OCR → 模板匹配）；由 :meth:`detect` 复用。
 
         检测顺序遵循 Phase 4.1 的优先级：**ROI → OCR → 模板匹配**。
         两源同时命中时按配置权重融合（来源标记为 ``fused``）；只命中一源时按各自
@@ -380,9 +588,6 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         Returns:
             证据结果。
         """
-        if not self._config.enabled:
-            return self.miss(reason="detector disabled")
-
         match, _roi_rect = self.best_match(frame)
         text = self.find_target_text(frame)
 
