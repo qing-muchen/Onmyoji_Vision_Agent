@@ -152,6 +152,9 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
                     source,
                     cls.NAME,
                     limit=detector_config.max_templates,
+                    dedupe_threshold=int(getattr(detector_config, "dedupe_threshold", 0) or 0),
+                    per_source_limit=int(getattr(detector_config, "per_source_limit", 0) or 0),
+                    round_robin=bool(getattr(detector_config, "round_robin", False)),
                     root=root,
                 )
             )

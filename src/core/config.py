@@ -690,6 +690,11 @@ class EvidenceDetectorConfig(StrictModel):
         multi_scale: 是否多尺度匹配（窗口尺寸不固定时需要）。
         scales: 多尺度搜索比例。
         max_templates: 最多加载多少个模板（均匀抽样，控制匹配耗时）。
+        dedupe_threshold: 模板去重的 dHash 汉明距离阈值（Phase 11.5，``0`` = 不去重）。
+        per_source_limit: 每个来源（``cap`` / ``skinNNN``）最多保留多少张模板
+            （Phase 11.5，``0`` = 不限制）。
+        round_robin: 抽样时是否按来源**轮转**（Phase 11.5-B）——``True`` 时保证
+            "``max_templates`` ≥ 来源数 ⇒ 每个来源至少 1 张模板进入 detector"。
         min_templates: 模板数量的"充足"门槛，低于该值视为数据不足。
         shortfall_factor: 数据不足时的置信度折价（不允许伪造高准确率）。
         text_targets: OCR 目标文本；为空表示该 detector 不做文字识别。
@@ -705,6 +710,9 @@ class EvidenceDetectorConfig(StrictModel):
     multi_scale: bool = True
     scales: list[float] = Field(default_factory=lambda: list(DEFAULT_TEMPLATE_SCALES))
     max_templates: int = Field(default=DEFAULT_EVIDENCE_MAX_TEMPLATES, ge=0)
+    dedupe_threshold: int = Field(default=0, ge=0)
+    per_source_limit: int = Field(default=0, ge=0)
+    round_robin: bool = False
     min_templates: int = Field(default=DEFAULT_EVIDENCE_MIN_TEMPLATES, ge=0)
     shortfall_factor: float = Field(default=DEFAULT_EVIDENCE_SHORTFALL_FACTOR, gt=0.0, le=1.0)
     text_targets: list[str] = Field(default_factory=list)

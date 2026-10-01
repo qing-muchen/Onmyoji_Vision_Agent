@@ -2097,8 +2097,42 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `clickable_verified` **0 条** ⇒ 定位指标仍 `insufficient_data`；
   `action.enabled=false` / `backend=dry_run` 未改动。详见
   `docs/PHASE11_4_SELF_REVIEW_WORKFLOW_REPORT.md`。
-- Phase 11.5：**由独立审核者**复核 8 条草稿（`review_pack/` → `promote --approve`）——
-  Phase 11.4 **不要求**取得独立真值，也不需要虚构审核人员；
-  目视核查 `battle_reward` 并把试点扩到 10–20 张；补 `battle_auto_button` 点击热区候选；
-  为 `yard_exploration_entry` / `exploration_stage_node` 补 detector；补采（≥100 独立原图 /
-  跨分辨率 / 跨皮肤 / 会话登记）；编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。
+- Phase 11.5（**已完成：yard 数据审计与模板利用改进**，`feat(vision): add yard data audit and
+  template usage improvement`）：先回答"现有 dataset 是否真的缺 yard 样本" —— **不缺，是数据利用不足**。
+  实测 `dataset/raw/yard` **98 张**原图（SHA256 去重 98、精确重复 **0**）、**18 种皮肤**
+  （`cap` 28 + `skin001…018` 70）、dHash 聚类 **57 个视觉组**（近重复 53 对**全部同皮肤内部**，跨皮肤 0）；
+  而模板目录 28 张只加载 **8** 张且**全部来自 `cap`** ⇒ 18 种皮肤 **0 覆盖**，
+  98 张里判为 yard 的 8 张**恰好就是被抽样的 8 张模板源图**（自匹配），留一法(LOO) 泛化 **0/98**；
+  80 张负样本 **FP 0**、证据假命中 0（0.85 阈值在现有负样本上**不过松**，最像 yard 的
+  `unknown/friends` 也只 0.74）。据此做**最小改动**：`load_feature_templates` 新增
+  `dedupe_threshold`（dHash 近重复去重）与 `per_source_limit`（每来源限量；**默认关闭** ⇒ 旧配置行为不变），
+  配置 `max_templates: 8 → 16` + `dedupe_threshold: 6`（**阈值 0.85 未改**）；
+  复测 **库内命中 8 → 21**、**LOO 泛化 0 → 9/98**、**负样本 FP 仍 0/80**，
+  代价是 yard detector 单项 **111ms → 218ms**（整链 374→488ms，**逼近 500ms 节拍**，已列为下一阶段优化项）。
+  审计还量化了"把已有 70 张皮肤原图做成模板"的收益：**LOO 泛化 44/98（每皮肤 1 张）~ 61/98（2 张）、
+  误报仍 0/80** ⇒ 天花板在**皮肤覆盖**，但生成派生模板需要授权，本阶段**只评估、不落盘**。
+  未新增/复制任何图片、未改阈值、未引入 YOLO、未改 `action.enabled=false` / `backend=dry_run`；
+  `features/states/scenes` 派生图一律单独统计，**不计入**独立样本。
+  测试 **1557 passed / 1 skipped**（+12）；`raw/` 178 张 SHA256 未变。详见
+  `docs/PHASE11_5_YARD_DATA_AUDIT_REPORT.md`。
+- Phase 11.5-B（**已完成：yard 皮肤模板派生与验证**，`feat(vision): derive yard skin templates and
+  validate template selection`）：按授权从**已有**的 70 张皮肤原图派生出 **33 张**皮肤模板，
+  **覆盖 18/18 种皮肤**（每皮肤 ≥1 张、组内 dHash 去重），ROI 与运行期一致（`[0.00,0.80,1.00,1.00]`），
+  与 raw ROI 逐像素一致 50 张 / 像素不符 0；写入派生目录、**不覆盖** cap 模板、**不改** raw 与
+  annotations（`dataset/**/*.png` 本就不入库，可用 `tools/build_yard_skin_templates.py` 可复现重建）。
+  新增"按来源**轮转**抽样"能力（`round_robin`，让预算内的模板分散到尽量多的皮肤）。
+  端到端对照（同批次、阈值 0.85 不变、负样本 80 张）：轮转 16 张 TP 40→49、LOO 24→33；
+  轮转 24 张 TP 63、LOO 41（**18 种皮肤全部有贡献**）；**所有变体 FP 仍 0/80**、证据假命中 0。
+  新增**稳健耗时基准**（30 张 × 3 次取中位数）：`单项 ≈ 17ms×模板数`、`整链 ≈ 单项 + 282ms`
+  ⇒ **500ms 节拍内上限约 12 张**，据此修正：Phase 11.5 选定的 16 张实测整链 **554ms（超出预算）**。
+  节拍内推荐：`max_templates: 12` + `round_robin: true`（LOO 29 > 现状 24，且耗时更低）。
+  **已按此接入**（`bottom_menu_yard`：`max_templates: 16 → 12`、新增 `round_robin: true`；
+  相比 16 张均匀：模板更少、LOO 24→29、TP 40→41、FP 仍 0/80；整链从 ~554ms 回到 ~486ms）；
+  模板来源映射已保存为 `dataset/features/bottom_menu/yard/positive_sources.json`（33 条，可追溯）；
+  `threshold=0.85`、`action.enabled=false`、`backend=dry_run` 均未改动。测试 **1570 passed / 1 skipped**
+  （+13）。详见 `docs/PHASE11_5B_YARD_SKIN_TEMPLATES_REPORT.md`。
+- Phase 11.6：**模板匹配耗时优化**（降采样匹配 / 金字塔剪枝）—— 这是"覆盖 ≥33 且仍在 500ms 节拍内"
+  的前提；随后按选定参数接入 `configs/config.yaml`；**由独立审核者**复核 8 条草稿
+  （`review_pack/` → `promote --approve`）；目视核查 `battle_reward` 并把试点扩到 10–20 张；
+  补 `battle_auto_button` 点击热区候选；补采（跨分辨率 / 多 DPI / 新活动皮肤 / 会话登记）；
+  编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。

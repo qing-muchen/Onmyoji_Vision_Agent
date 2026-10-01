@@ -202,7 +202,24 @@ evidence:
       roi: [0.00, 0.80, 1.00, 1.00]
       templates: "dataset/features/bottom_menu/yard/positive"
       threshold: 0.85
-      max_templates: 8
+      # Phase 11.5 数据审计：模板只是"cap"一个来源，且原先只加载 8 张（恰为自匹配）⇒ 泛化 0。
+      # Phase 11.5-B 派生皮肤模板并实测（阈值 0.85 不变、负样本 80 张、留一法排除自匹配）：
+      #   模板目录现有 61 张（cap 28 + skin 33，覆盖 18/18 种皮肤，来源映射见
+      #   dataset/features/bottom_menu/yard/positive_sources.json）
+      #   稳健耗时基准（30 张 × 3 次取中位数）：单项 ≈ 17ms×模板数，整链 ≈ 单项 + 282ms
+      #   ⇒ 500ms 节拍内上限约 12 张；实测各级覆盖（LOO 泛化）：
+      #     16 张均匀抽样 → LOO 24/98，整链 554ms（超预算）
+      #     12 张轮转     → LOO 29/98，整链 ~486ms（节拍内）★ 采用
+      #     16 张轮转     → LOO 33/98，整链 ~554ms（超预算）
+      #     24 张轮转     → LOO 41/98，整链 ~684ms（需先做匹配耗时优化）
+      max_templates: 12
+      # 去掉近重复模板（dHash ≤ 6）：同一场景的连续帧不应重复占用模板配额
+      dedupe_threshold: 6
+      # 按来源**轮转**抽样：预算 12 ≥ 已加载来源数 12 ⇒ 每种皮肤保证至少 1 张进入 detector，
+      # 避免"整类皮肤被均匀抽样漏掉"（实测同样 16 张预算下轮转比均匀多 9 次 LOO 命中）
+      round_robin: true
+      # 每来源限量仍不启用（轮转已保证来源分散；限量会额外削减同一来源的多张代表）
+      per_source_limit: 0
     bottom_menu_exploration:
       enabled: true
       roi: [0.00, 0.80, 1.00, 1.00]

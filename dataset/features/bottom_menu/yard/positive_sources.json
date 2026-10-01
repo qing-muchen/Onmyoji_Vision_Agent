@@ -1,0 +1,387 @@
+{
+  "generated_from": "dataset/raw/yard",
+  "roi": [
+    0.0,
+    0.8,
+    1.0,
+    1.0
+  ],
+  "dedupe_threshold": 6,
+  "candidates": 33,
+  "written": 0,
+  "skipped_existing": 33,
+  "sources_covered": [
+    "skin001",
+    "skin002",
+    "skin003",
+    "skin004",
+    "skin005",
+    "skin006",
+    "skin007",
+    "skin008",
+    "skin009",
+    "skin010",
+    "skin011",
+    "skin012",
+    "skin013",
+    "skin014",
+    "skin015",
+    "skin016",
+    "skin017",
+    "skin018"
+  ],
+  "source_count": 18,
+  "per_source": {
+    "skin001": 3,
+    "skin002": 3,
+    "skin003": 4,
+    "skin004": 3,
+    "skin005": 2,
+    "skin006": 3,
+    "skin007": 2,
+    "skin008": 3,
+    "skin009": 1,
+    "skin010": 1,
+    "skin011": 1,
+    "skin012": 1,
+    "skin013": 1,
+    "skin014": 1,
+    "skin015": 1,
+    "skin016": 1,
+    "skin017": 1,
+    "skin018": 1
+  },
+  "templates": [
+    {
+      "template_name": "bottom_menu_yard_skin001_001.png",
+      "from_image": "raw/yard/yard_skin001_001.png",
+      "source_id": "src_30c19de243049464",
+      "source": "skin001",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin001_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin001_003.png",
+      "from_image": "raw/yard/yard_skin001_003.png",
+      "source_id": "src_8f6abbf8f9b4aec8",
+      "source": "skin001",
+      "number": "003",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin001_003.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin001_005.png",
+      "from_image": "raw/yard/yard_skin001_005.png",
+      "source_id": "src_bfd7c72f1766c200",
+      "source": "skin001",
+      "number": "005",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin001_005.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin002_001.png",
+      "from_image": "raw/yard/yard_skin002_001.png",
+      "source_id": "src_a067ae318923bc14",
+      "source": "skin002",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin002_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin002_003.png",
+      "from_image": "raw/yard/yard_skin002_003.png",
+      "source_id": "src_2a505a150765dcc7",
+      "source": "skin002",
+      "number": "003",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin002_003.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin002_005.png",
+      "from_image": "raw/yard/yard_skin002_005.png",
+      "source_id": "src_4c0e825b0dcec737",
+      "source": "skin002",
+      "number": "005",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin002_005.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin003_001.png",
+      "from_image": "raw/yard/yard_skin003_001.png",
+      "source_id": "src_ee9b81ee83b8dd9a",
+      "source": "skin003",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin003_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin003_003.png",
+      "from_image": "raw/yard/yard_skin003_003.png",
+      "source_id": "src_6887997be8dfd4a2",
+      "source": "skin003",
+      "number": "003",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin003_003.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin003_004.png",
+      "from_image": "raw/yard/yard_skin003_004.png",
+      "source_id": "src_52b0284458555f54",
+      "source": "skin003",
+      "number": "004",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin003_004.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin003_005.png",
+      "from_image": "raw/yard/yard_skin003_005.png",
+      "source_id": "src_3cb44d53ecf79e76",
+      "source": "skin003",
+      "number": "005",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin003_005.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin004_001.png",
+      "from_image": "raw/yard/yard_skin004_001.png",
+      "source_id": "src_c8d50df97d2d5c2e",
+      "source": "skin004",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin004_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin004_003.png",
+      "from_image": "raw/yard/yard_skin004_003.png",
+      "source_id": "src_6d9a9770f56609b2",
+      "source": "skin004",
+      "number": "003",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin004_003.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin004_005.png",
+      "from_image": "raw/yard/yard_skin004_005.png",
+      "source_id": "src_b6a7a6662838939c",
+      "source": "skin004",
+      "number": "005",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin004_005.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin005_001.png",
+      "from_image": "raw/yard/yard_skin005_001.png",
+      "source_id": "src_897e81d520c21cba",
+      "source": "skin005",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin005_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin005_005.png",
+      "from_image": "raw/yard/yard_skin005_005.png",
+      "source_id": "src_fbc6b0d4f1bd4317",
+      "source": "skin005",
+      "number": "005",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin005_005.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin006_001.png",
+      "from_image": "raw/yard/yard_skin006_001.png",
+      "source_id": "src_c98e153c0efd84e4",
+      "source": "skin006",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin006_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin006_003.png",
+      "from_image": "raw/yard/yard_skin006_003.png",
+      "source_id": "src_29319c627574e324",
+      "source": "skin006",
+      "number": "003",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin006_003.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin006_005.png",
+      "from_image": "raw/yard/yard_skin006_005.png",
+      "source_id": "src_46b0706b0db124f2",
+      "source": "skin006",
+      "number": "005",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin006_005.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin007_001.png",
+      "from_image": "raw/yard/yard_skin007_001.png",
+      "source_id": "src_6d138f7ff6f936a9",
+      "source": "skin007",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin007_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin007_003.png",
+      "from_image": "raw/yard/yard_skin007_003.png",
+      "source_id": "src_fb05d8881a20df69",
+      "source": "skin007",
+      "number": "003",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin007_003.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin008_001.png",
+      "from_image": "raw/yard/yard_skin008_001.png",
+      "source_id": "src_c02d3ff680f34253",
+      "source": "skin008",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin008_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin008_003.png",
+      "from_image": "raw/yard/yard_skin008_003.png",
+      "source_id": "src_b760c4994e0351a4",
+      "source": "skin008",
+      "number": "003",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin008_003.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin008_005.png",
+      "from_image": "raw/yard/yard_skin008_005.png",
+      "source_id": "src_9dd8b6760956202e",
+      "source": "skin008",
+      "number": "005",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin008_005.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin009_001.png",
+      "from_image": "raw/yard/yard_skin009_001.png",
+      "source_id": "src_fc33f404603c1872",
+      "source": "skin009",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin009_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin010_001.png",
+      "from_image": "raw/yard/yard_skin010_001.png",
+      "source_id": "src_1bdb879a150f5916",
+      "source": "skin010",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin010_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin011_001.png",
+      "from_image": "raw/yard/yard_skin011_001.png",
+      "source_id": "src_0cf0563e18f83e27",
+      "source": "skin011",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin011_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin012_001.png",
+      "from_image": "raw/yard/yard_skin012_001.png",
+      "source_id": "src_9cb6b85aab584c1d",
+      "source": "skin012",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin012_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin013_001.png",
+      "from_image": "raw/yard/yard_skin013_001.png",
+      "source_id": "src_41ce5bdfa708edb9",
+      "source": "skin013",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin013_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin014_001.png",
+      "from_image": "raw/yard/yard_skin014_001.png",
+      "source_id": "src_be4c05746b4ba8e0",
+      "source": "skin014",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin014_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin015_001.png",
+      "from_image": "raw/yard/yard_skin015_001.png",
+      "source_id": "src_c6fb7bd3dab955d9",
+      "source": "skin015",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin015_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin016_001.png",
+      "from_image": "raw/yard/yard_skin016_001.png",
+      "source_id": "src_491e8627c3803afa",
+      "source": "skin016",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin016_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin017_001.png",
+      "from_image": "raw/yard/yard_skin017_001.png",
+      "source_id": "src_317ca460781823fd",
+      "source": "skin017",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin017_001.png",
+      "action": "skip_existing"
+    },
+    {
+      "template_name": "bottom_menu_yard_skin018_001.png",
+      "from_image": "raw/yard/yard_skin018_001.png",
+      "source_id": "src_d441d3daf96f7924",
+      "source": "skin018",
+      "number": "001",
+      "crop_size": "1704x192",
+      "target_path": "features/bottom_menu/yard/positive/bottom_menu_yard_skin018_001.png",
+      "action": "skip_existing"
+    }
+  ],
+  "note": "派生模板**不计入**独立样本（独立样本只有 dataset/raw 的原始截图）；本映射用于追溯每个模板来自哪张原图"
+}
