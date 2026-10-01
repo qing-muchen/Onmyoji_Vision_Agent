@@ -220,6 +220,15 @@ evidence:
       round_robin: true
       # 每来源限量仍不启用（轮转已保证来源分散；限量会额外削减同一来源的多张代表）
       per_source_limit: 0
+      # Phase 11.6-C：ROI 降采样比例（1.0 = 不降采样，保持既有行为）。
+      #   生产配置实测（tools/benchmark_roi_downscale.py --mode production --repeat 3，
+      #   98 正 + 41 负；阈值 0.85 与 12 张模板均未改动）：
+      #     1.00 → 单项 p50 151.2ms，判定 41 TP / 57 FN / 0 FP / 41 TN
+      #     0.75 → 单项 p50  83.0ms（0.549×），判定与 1.0 **完全相同**（逐图 0 翻转），
+      #            命中框越界 0（bbox 已 clamp 回 ROI）
+      #     0.50 → 单项 p50  22.3ms（0.148×），同样 0 翻转（本阶段未接入）
+      #   ⇒ 首次只接入 0.75；其余 detector 保持默认 1.0（未验证，勿批量开启）。
+      roi_scale: 0.75
     bottom_menu_exploration:
       enabled: true
       roi: [0.00, 0.80, 1.00, 1.00]

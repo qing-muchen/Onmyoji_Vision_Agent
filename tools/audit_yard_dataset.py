@@ -449,7 +449,9 @@ def audit_detector_usage(
         "threshold": float(detector_config.threshold),
         "method": detector_config.method,
         "multi_scale": bool(detector_config.multi_scale),
-        "scales": list(detector_config.scales),
+        # Phase 11.6-C：报告**实际搜索尺度**（含 roi_scale 缩放）与降采样比例
+        "scales": list(detector_config.matcher_config().scales),
+        "roi_scale": float(detector_config.roi_scale),
         "max_templates": int(detector_config.max_templates),
         "dedupe_threshold": dedupe,
         "per_source_limit": per_source,
@@ -499,20 +501,23 @@ class ProbeSet:
         self._config = detector_config
         self._available = tuple(available)
         self._used = tuple(used)
+        # Phase 11.6-C：搜索尺度取"生产 matcher 配置"（含 roi_scale 缩放），
+        # 保证探针与 detector 的降采样 ROI 处在同一个像素网格上。
+        production = detector_config.matcher_config()
         self._probe_matcher = TemplateMatcher(
             TemplateDetectorConfig(
-                method=detector_config.method,
+                method=production.method,
                 threshold=PROBE_THRESHOLD,
-                multi_scale=detector_config.multi_scale,
-                scales=list(detector_config.scales),
+                multi_scale=production.multi_scale,
+                scales=list(production.scales),
             )
         )
         self._gate_matcher = TemplateMatcher(
             TemplateDetectorConfig(
-                method=detector_config.method,
-                threshold=float(detector_config.threshold),
-                multi_scale=detector_config.multi_scale,
-                scales=list(detector_config.scales),
+                method=production.method,
+                threshold=float(production.threshold),
+                multi_scale=production.multi_scale,
+                scales=list(production.scales),
             )
         )
 
@@ -948,7 +953,7 @@ def run_template_strategy_experiment(
                 method=detector_config.method,
                 threshold=threshold,
                 multi_scale=detector_config.multi_scale,
-                scales=list(detector_config.scales),
+                scales=list(detector_config.matcher_config().scales),
             )
         )
 
@@ -1014,7 +1019,7 @@ def run_template_strategy_experiment(
                 method=detector_config.method,
                 threshold=threshold,
                 multi_scale=detector_config.multi_scale,
-                scales=list(detector_config.scales),
+                scales=list(detector_config.matcher_config().scales),
             )
         )
         loo_cache: dict[str, BottomMenuYardDetector] = {}
@@ -1242,7 +1247,7 @@ def run_chain_comparison(
                 method=detector_config.method,
                 threshold=PROBE_THRESHOLD,
                 multi_scale=detector_config.multi_scale,
-                scales=list(detector_config.scales),
+                scales=list(detector_config.matcher_config().scales),
             )
         )
         loo_cache: dict[str, BottomMenuYardDetector] = {}

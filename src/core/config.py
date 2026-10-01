@@ -689,6 +689,11 @@ class EvidenceDetectorConfig(StrictModel):
         method: 模板匹配方法（仅限归一化方法）。
         multi_scale: 是否多尺度匹配（窗口尺寸不固定时需要）。
         scales: 多尺度搜索比例。
+        roi_scale: ROI 降采样比例（Phase 11.6-C）。``1.0``（默认）= **不降采样**，
+            与既有行为逐字段一致；``< 1`` 时 ROI 先缩放到该比例再匹配，
+            **模板搜索尺度同比例缩放**（``scales × roi_scale``），命中坐标按
+            ``1/roi_scale`` 恢复并 **clamp 回 ROI 边界内**。只影响模板匹配路径；
+            OCR 仍使用原尺寸 ROI（不降采样）。
         max_templates: 最多加载多少个模板（均匀抽样，控制匹配耗时）。
         dedupe_threshold: 模板去重的 dHash 汉明距离阈值（Phase 11.5，``0`` = 不去重）。
         per_source_limit: 每个来源（``cap`` / ``skinNNN``）最多保留多少张模板
@@ -709,6 +714,7 @@ class EvidenceDetectorConfig(StrictModel):
     method: TemplateMatchMethod = "TM_CCOEFF_NORMED"
     multi_scale: bool = True
     scales: list[float] = Field(default_factory=lambda: list(DEFAULT_TEMPLATE_SCALES))
+    roi_scale: float = Field(default=IDENTITY_SCALE, gt=0.0, le=1.0)
     max_templates: int = Field(default=DEFAULT_EVIDENCE_MAX_TEMPLATES, ge=0)
     dedupe_threshold: int = Field(default=0, ge=0)
     per_source_limit: int = Field(default=0, ge=0)
@@ -736,12 +742,18 @@ class EvidenceDetectorConfig(StrictModel):
         return self.templates.strip()
 
     def matcher_config(self) -> TemplateDetectorConfig:
-        """构造供 :class:`~src.vision.detector.template.matcher.TemplateMatcher` 使用的配置。"""
+        """构造供 :class:`~src.vision.detector.template.matcher.TemplateMatcher` 使用的配置。
+
+        Phase 11.6-C：``roi_scale < 1`` 时把模板的搜索尺度**同比例缩放**
+        （``scales → scales × roi_scale``），使模板与降采样后的 ROI 处在同一个像素网格上
+        （只缩 ROI 不缩尺度会让多尺度搜索窗口整体错位）。``roi_scale == 1.0``（默认）时
+        与原实现完全一致。
+        """
         return TemplateDetectorConfig(
             method=self.method,
             threshold=self.threshold,
             multi_scale=self.multi_scale,
-            scales=list(self.scales),
+            scales=[self.roi_scale * scale for scale in self.scales],
         )
 
 

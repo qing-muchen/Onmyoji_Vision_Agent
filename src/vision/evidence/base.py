@@ -44,13 +44,19 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from src.core.config import EvidenceConfig, EvidenceDetectorConfig, TemplateDetectorConfig
+from src.core.config import (
+    IDENTITY_SCALE,
+    EvidenceConfig,
+    EvidenceDetectorConfig,
+    TemplateDetectorConfig,
+)
 from src.core.exceptions import EvidenceError
 from src.core.geometry import CoordinateTransform, Rect, Size
 from src.utils.logger import get_logger
 from src.vision.capture.models import Frame
 from src.vision.detector.models import TemplateInfo
 from src.vision.detector.template.matcher import TemplateMatch, TemplateMatcher
+from src.vision.detector.template.preprocess import resize_image
 from src.vision.evidence.models import (
     DEFAULT_RELIABILITY,
     MIN_CONFIDENCE,
@@ -395,8 +401,13 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
 
     @property
     def matcher_config(self) -> TemplateDetectorConfig:
-        """模板匹配配置。"""
+        """模板匹配配置（含 Phase 11.6-C 的 ROI 降采样尺度缩放）。"""
         return self._config.matcher_config()
+
+    @property
+    def roi_scale(self) -> float:
+        """ROI 降采样比例（Phase 11.6-C）；``1.0``（默认）= 不降采样。"""
+        return float(self._config.roi_scale)
 
     def crop_roi(self, frame: Frame) -> tuple[np.ndarray, Rect]:
         """按 ROI 裁剪帧图像。
@@ -497,12 +508,17 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
     def best_match(self, frame: Frame) -> tuple[TemplateMatch | None, Rect]:
         """在 ROI 内对所有模板做多尺度匹配，取置信度最高者。
 
+        Phase 11.6-C：``roi_scale < 1`` 时 ROI 先降采样再匹配（模板搜索尺度已在
+        :meth:`~src.core.config.EvidenceDetectorConfig.matcher_config` 中同比例缩放），
+        命中坐标按 ``1/roi_scale`` 恢复到帧坐标系并 **clamp 在 ROI 内**。
+        ``roi_scale == 1.0``（默认）时与既有实现逐字段一致。
+
         Args:
             frame: 待检测的帧。
 
         Returns:
             ``(最佳匹配或 None, ROI 在帧中的像素矩形)``；匹配结果的 ``rect``
-            已换算回**帧坐标系**。
+            已换算回**帧坐标系**，且保证不越出 ROI。
         """
         cropped, roi_rect = self.crop_roi(frame)
         if cropped.size == 0:
@@ -510,7 +526,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             return None, roi_rect
         if not self._templates:
             return None, roi_rect
-        frame_gray = self._matcher.prepare(cropped)
+        frame_gray = self._matcher.prepare(self._matching_image(cropped))
 
         best: TemplateMatch | None = None
         for template in self._templates:
@@ -522,7 +538,9 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         if best is None:
             return None, roi_rect
 
-        offset_rect = best.rect.translated(roi_rect.x, roi_rect.y)
+        offset_rect = self._restore_rect(best.rect, roi_rect.size).translated(
+            roi_rect.x, roi_rect.y
+        )
         return (
             TemplateMatch(
                 template=best.template,
@@ -532,6 +550,32 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             ),
             roi_rect,
         )
+
+    def _matching_image(self, cropped: np.ndarray) -> np.ndarray:
+        """模板匹配的输入图：``roi_scale < 1`` 时降采样，否则原样返回。"""
+        scale = self.roi_scale
+        return cropped if scale == IDENTITY_SCALE else resize_image(cropped, scale)
+
+    def _restore_rect(self, rect: Rect, roi_size: Size) -> Rect:
+        """把匹配结果从降采样空间恢复到 ROI 局部像素坐标，并 clamp 在 ROI 内。
+
+        Phase 11.6-C：``round(round(w · s) / s)`` 不一定等于 ``w``，降采样后的命中框
+        可能比 ROI 边界多出 ≤1 像素（Phase 11.6-B 实测）。这里统一 clamp，保证
+        ``bbox`` **严格落在 ROI（因而也在帧）内**，且宽高至少 1 像素。
+
+        Args:
+            rect: 匹配结果矩形（位于降采样后的灰度图坐标系）。
+            roi_size: ROI 的原始像素尺寸。
+
+        Returns:
+            位于 **ROI 局部坐标系**（左上角为原点）的矩形。
+        """
+        inverse = 1.0 / self.roi_scale
+        left = min(max(0, round(rect.x * inverse)), max(0, roi_size.width - 1))
+        top = min(max(0, round(rect.y * inverse)), max(0, roi_size.height - 1))
+        right = min(max(left + 1, left + round(rect.width * inverse)), roi_size.width)
+        bottom = min(max(top + 1, top + round(rect.height * inverse)), roi_size.height)
+        return Rect(x=left, y=top, width=right - left, height=bottom - top)
 
     def detect(self, frame: Frame) -> EvidenceResult:
         """在 ROI 内检测该证据（**带可选的 ROI 结果缓存**）。
@@ -706,6 +750,10 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             "roi": self.roi.describe(),
             "template_count": len(self._templates),
         }
+        if self.roi_scale != IDENTITY_SCALE:
+            # Phase 11.6-C：记录该命中是在**降采样**的 ROI 上算出的。
+            # 只在降采样时写入，保证 roi_scale = 1.0 时 metadata 与既有版本逐字段一致。
+            metadata["roi_scale"] = self.roi_scale
         if self.template_shortfall_factor < 1.0:
             metadata["insufficient_templates"] = True
             metadata["shortfall_factor"] = self.template_shortfall_factor

@@ -39,8 +39,18 @@ SCALES = (1.0, 0.75, 0.5)
 
 @pytest.fixture(scope="module")
 def yard_detector() -> BottomMenuYardDetector:
-    """生产 yard detector（真实配置 + 真实模板，只读）。"""
-    return BottomMenuYardDetector.from_config(load_config().evidence)
+    """本文件的**基准** detector：``roi_scale = 1.0``（真实配置 + 真实模板，只读）。
+
+    Phase 11.6-C 起 ``configs/config.yaml`` 的 ``bottom_menu_yard`` 已接入
+    ``roi_scale: 0.75``；而本文件验证的是 Phase 11.6-B 的**参考实现**
+    （它自己负责降采样，因而要求基准 detector 不降采样），故这里显式置回 ``1.0``。
+    """
+    config = load_config()
+    production = BottomMenuYardDetector.from_config(config.evidence)
+    baseline_config = config.evidence.detectors[bench.YARD_EVIDENCE].model_copy(
+        update={"roi_scale": 1.0}
+    )
+    return BottomMenuYardDetector(bench.YARD_EVIDENCE, baseline_config, production.templates)
 
 
 @pytest.fixture(scope="module")
@@ -113,16 +123,25 @@ def test_scale_one_is_identical_to_production(
         assert candidate.scale == production.scale, name
 
 
-def test_equivalence_check_helper_reports_no_mismatch(
+def test_reference_alignment_helper_reports_no_mismatch(
     yard_detector: BottomMenuYardDetector,
 ) -> None:
-    """内置自检在真实图上报告 0 处不一致。"""
+    """交叉验证辅助函数在真实图上报告 0 处不一致（``scale = 1.0`` 时 clamp 是恒等）。"""
     paths = sorted(YARD_DIR.glob("*.png"))[:3]
     if not paths:
         pytest.skip("缺少 yard 原图")
-    report = bench.check_equivalence(yard_detector, paths)
+    report = bench.check_reference_alignment(
+        yard_detector,
+        yard_detector.config,
+        yard_detector.templates,
+        paths,
+        (1.0,),
+        samples=3,
+    )
     assert report["checked"] >= 1
-    assert report["mismatches"] == 0
+    assert report["decision_mismatches"] == 0
+    assert report["confidence_mismatches"] == 0
+    assert report["rect_mismatches"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -195,15 +214,18 @@ def test_downscale_preserves_hit_position(
 # ---------------------------------------------------------------------------
 
 
-def test_decisions_agree_across_scales() -> None:
-    """同一批正/负样本上，1.0 / 0.75 / 0.5 的检出判定一致。"""
+def test_decisions_agree_across_scales(yard_detector: BottomMenuYardDetector) -> None:
+    """同一批正/负样本上，1.0 / 0.75 / 0.5 的检出判定一致（参考实现）。"""
     positives = sorted(YARD_DIR.glob("*.png"))[:6]
     negatives = sorted(EXPLORATION_DIR.glob("*.png"))[:4]
     if not positives:
         pytest.skip("缺少 yard 原图")
 
-    detector = BottomMenuYardDetector.from_config(load_config().evidence)
-    matchers = {scale: bench.build_downscale_matcher(detector.matcher_config, scale) for scale in SCALES}
+    detector = yard_detector
+    matchers = {
+        scale: bench.build_downscale_matcher(detector.matcher_config, scale)
+        for scale in SCALES
+    }
 
     for path in positives + negatives:
         image = bench.read_image(path)
@@ -234,7 +256,10 @@ def test_benchmark_report_uses_production_settings() -> None:
     assert report["templates_used"] == len(
         BottomMenuYardDetector.from_config(config.evidence).templates
     )
-    assert report["equivalence_check"]["mismatches"] == 0
+    # production 实现与参考实现交叉验证：判定与 confidence 必须完全一致
+    alignment = report["reference_alignment"]
+    assert alignment["decision_mismatches"] == 0
+    assert alignment["confidence_mismatches"] == 0
     assert set(report["results"]) == {"1.00", "0.75", "0.50"}
 
     for key, row in report["results"].items():

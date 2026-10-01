@@ -2152,8 +2152,18 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **149.3ms → 77.6ms（0.52×）/ 25.2ms（0.169×）**；代价是坐标 **≤1 像素**取整量化误差（139 张中各 1 张）。
   **未接入生产**（配置 / 运行期一行未改）；外推 33 张模板在 `s=0.5` 下整链 ~351ms（< 500ms 节拍）。
   测试 **1596 passed / 1 skipped**（+16）。详见 `docs/PHASE11_6B_ROI_DOWNSCALE_BENCHMARK_REPORT.md`。
-- 后续（未执行）：按选定参数把 ROI 缓存（11.6-A）与 ROI 降采样（11.6-B）连同模板数一并接入
-  `configs/config.yaml`；**由独立审核者**复核 8 条草稿
+- Phase 11.6-C（**已完成：ROI 降采样接入生产**，`feat(vision): add configurable roi downscale
+  matching`）：新增配置字段 `evidence.detectors.<name>.roi_scale`（**默认 1.0 = 不降采样**），
+  `matcher_config()` 把搜索尺度同比例缩放（`scales × roi_scale`），`best_match` 在降采样后按
+  `1/roi_scale` 恢复坐标并新增 **bbox clamp**（11.6-B 的 1 像素越界归零）；OCR 路径仍用原尺寸 ROI。
+  **首次只把 `bottom_menu_yard` 接入 `0.75`**，其余 detector 保持 1.0。生产配置实测
+  （`tools/benchmark_roi_downscale.py --mode production --repeat 3`，98 正 + 41 负）：单项 p50
+  **151.2ms → 83.0ms（0.549×）**、判定 **0 翻转**（三档 41/57/0/41 相同）、IoU 中位 **1.0**、
+  越界 **0**（`0.50` 档 22.3ms，未接入）。阈值 0.85 与模板数 12 均未改，模板文件零改动。
+  测试 **1618 passed / 1 skipped**（+22）。详见 `docs/PHASE11_6C_ROI_SCALE_PRODUCTION_REPORT.md`。
+- 后续（未执行）：评估 ROI 缓存（11.6-A）与 `roi_scale = 0.5` 的接入；把模板扩到 ≥33 张
+  （需先确认 `0.5` 或匹配算法优化 —— `0.75` 外推整链 ≈510ms，仍超 500ms 节拍）；
+  **由独立审核者**复核 8 条草稿
   （`review_pack/` → `promote --approve`）；目视核查 `battle_reward` 并把试点扩到 10–20 张；
   补 `battle_auto_button` 点击热区候选；补采（跨分辨率 / 多 DPI / 新活动皮肤 / 会话登记）；
   编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。
