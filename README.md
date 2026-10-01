@@ -2142,8 +2142,18 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   「画面在 ROI 内改动 1 像素」与「连续不同画面」命中率 **0%**（保守语义：宁可重算也不返回过期结果）。
   默认关闭 ⇒ **运行期行为零变化**；接入方式（配置字段 / 装配参数 / 离线注入）留待后续决策。
   测试 **1580 passed / 1 skipped**（+10）。详见 `docs/PHASE11_6A_TEMPLATE_CACHE_REPORT.md`。
-- Phase 11.6-B：**匹配耗时优化**（降采样匹配 / 金字塔剪枝）—— 这是"覆盖 ≥33 且仍在 500ms 节拍内"的
-  前提；随后按选定参数把 ROI 缓存与模板数一并接入 `configs/config.yaml`；**由独立审核者**复核 8 条草稿
+- Phase 11.6-B（**已完成：ROI 降采样收益 benchmark**，`test(vision): benchmark roi downscale for
+  template matching`）：离线工具 `tools/benchmark_roi_downscale.py` 在 `bottom_menu_yard` 的 ROI
+  （1706×192）上按 **1.0 / 0.75 / 0.5** 降采样匹配 —— 把 ROI 缩小 `s` 的同时**把模板搜索尺度同比例缩放**
+  （`s × [0.8,0.9,1.0,1.1,1.2]`；只缩模板不改尺度会少搜 4 档、与生产不可比），并按 `1/s` 恢复坐标；
+  `scale=1.0` 与生产 `best_match` **逐字段一致**（内置自检 0 处不一致）。实测（98 正 + 41 负、阈值 0.85
+  与 12 张模板均未改、`--repeat 3`）：三档 **TP/FN/FP/TN 完全相同（41/57/0/41，逐图 0 翻转）**、
+  IoU 中位 **1.0**、正样本 conf p50 `0.9848 → 0.9857 → 0.9861`，而单项 p50
+  **149.3ms → 77.6ms（0.52×）/ 25.2ms（0.169×）**；代价是坐标 **≤1 像素**取整量化误差（139 张中各 1 张）。
+  **未接入生产**（配置 / 运行期一行未改）；外推 33 张模板在 `s=0.5` 下整链 ~351ms（< 500ms 节拍）。
+  测试 **1596 passed / 1 skipped**（+16）。详见 `docs/PHASE11_6B_ROI_DOWNSCALE_BENCHMARK_REPORT.md`。
+- 后续（未执行）：按选定参数把 ROI 缓存（11.6-A）与 ROI 降采样（11.6-B）连同模板数一并接入
+  `configs/config.yaml`；**由独立审核者**复核 8 条草稿
   （`review_pack/` → `promote --approve`）；目视核查 `battle_reward` 并把试点扩到 10–20 张；
   补 `battle_auto_button` 点击热区候选；补采（跨分辨率 / 多 DPI / 新活动皮肤 / 会话登记）；
   编排可靠性、触发映射配置化、`exit_actions`、`drag`、长期记忆。
