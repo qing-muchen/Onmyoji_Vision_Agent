@@ -2161,8 +2161,21 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **151.2ms → 83.0ms（0.549×）**、判定 **0 翻转**（三档 41/57/0/41 相同）、IoU 中位 **1.0**、
   越界 **0**（`0.50` 档 22.3ms，未接入）。阈值 0.85 与模板数 12 均未改，模板文件零改动。
   测试 **1618 passed / 1 skipped**（+22）。详见 `docs/PHASE11_6C_ROI_SCALE_PRODUCTION_REPORT.md`。
-- 后续（未执行）：评估 ROI 缓存（11.6-A）与 `roi_scale = 0.5` 的接入；把模板扩到 ≥33 张
-  （需先确认 `0.5` 或匹配算法优化 —— `0.75` 外推整链 ≈510ms，仍超 500ms 节拍）；
+- Phase 11.7-A（**已完成：yard 模板候选预筛选 benchmark**，`test(vision): benchmark yard template
+  candidate prefilter`）：只读工具 `tools/benchmark_template_prefilter.py`，验证"能否只精匹配少量
+  候选、却保住 33 张模板的覆盖"。五个廉价确定性 pre-filter（`thumb` = 32×4 灰度缩略图 L1 /
+  `dhash` / `color` / `edge` / `combined`）× Top-K ∈ {4,6,8,10,12,16}。数据：98 正 + **80 负**
+  （11.5 canonical，含 `unknown/friends`、`unknown/shop`；**注**：11.6-B/C 的 benchmark 用非递归
+  `glob` 只取到 41 张负样本，本阶段修正为递归 80 张并如实说明）。实测：**`thumb` candidate
+  recall@4 = 1.0000**（73/73，最佳模板 p50 = max = 1），判定与 **Naive 33 逐图一致**
+  （TP 73 / FN 25 / FP 0 / TN 80；LOO 50/98；翻转 **0**），bbox 选中模板差异 **0**、越界 **0**；
+  单项 p50 **188.3ms → 23.3ms（8.1×）**，pre-filter 自身仅 **0.288ms**，操作数 **165 → 20 次/帧
+  （−88%）**。相对当前 Production 12：TP **41 → 73**、LOO **29 → 50**。**未接入生产**
+  （配置 / 运行期 / 模板文件零改动，阈值 0.85 未变）。结论 **`prefilter_viable`**：
+  推荐 `thumb` + Top-4（保守可 Top-8）进入 11.7-B 接入评估。测试 **1644 passed / 1 skipped**（+26）。
+  详见 `docs/PHASE11_7A_TEMPLATE_PREFILTER_BENCHMARK_REPORT.md`。
+- 后续（未执行）：按 11.7-A 建议把**模板候选预筛选**（`thumb` + Top-K、**默认关闭**）接入生产，
+  以解锁 33 张模板覆盖（TP 41 → 73）而整链仍 ≈305ms；评估 ROI 缓存（11.6-A）与 `roi_scale = 0.5`；
   **由独立审核者**复核 8 条草稿
   （`review_pack/` → `promote --approve`）；目视核查 `battle_reward` 并把试点扩到 10–20 张；
   补 `battle_auto_button` 点击热区候选；补采（跨分辨率 / 多 DPI / 新活动皮肤 / 会话登记）；
