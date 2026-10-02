@@ -2174,8 +2174,25 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   （配置 / 运行期 / 模板文件零改动，阈值 0.85 未变）。结论 **`prefilter_viable`**：
   推荐 `thumb` + Top-4（保守可 Top-8）进入 11.7-B 接入评估。测试 **1644 passed / 1 skipped**（+26）。
   详见 `docs/PHASE11_7A_TEMPLATE_PREFILTER_BENCHMARK_REPORT.md`。
-- 后续（未执行）：按 11.7-A 建议把**模板候选预筛选**（`thumb` + Top-K、**默认关闭**）接入生产，
-  以解锁 33 张模板覆盖（TP 41 → 73）而整链仍 ≈305ms；评估 ROI 缓存（11.6-A）与 `roi_scale = 0.5`；
+- Phase 11.7-B（**已完成：模板预筛生产加固**，`feat(vision): harden template prefilter for production`）：
+  ① 用 61 张全量分数表澄清了 **Production12 与 Skin33 的真实差异**：普通四分类
+  `both=40 / skin_only=33 / production_only=1 / neither=24`（翻转 33+1=34，与 TP 差 32 自洽），
+  而那唯一的 production-only（`yard_cap_001`）是 `cap_001` 的**自匹配** ⇒ **LOO 下 production_only = 0**，
+  Skin33 是 Production12 的严格超集；② **cap 贪心补集**（数据驱动）：
+  `cap_006`(+5 TP/**+4 LOO**) → `cap_003`(+2/+1) → `cap_007`(+1/**+1**) → 之后 LOO 增益 **0**（纯自匹配）
+  ⇒ 推荐 **Skin33 + 3 cap = 36 张**（TP 81 / **LOO 56** / FP 0；对比现状 41/29）；
+  ③ **生产级预筛**：新增 `src/vision/evidence/template_prefilter.py`（`TemplatePrefilter`，32×4 灰度缩略图 L1，
+  模板特征构造期缓存、每帧 ROI 特征亚毫秒），接线 `base.py::_candidate_templates`，
+  新增配置 `template_prefilter`（默认 `none`）+ `prefilter_top_k`（默认 `0`），**与 `max_templates` 严格分离**，
+  **默认关闭 ⇒ 模板顺序/匹配次数/metadata 逐字段不变**；预筛故障回退全量并记录诊断，
+  而"正常未命中"**不**触发回退；④ **稳定性**：6 种模板库扰动（固定 seed）下 recall@4/6/8 全 **1.0**、
+  最佳模板 rank max ≤ 2；⑤ 36 张库 + Top-4：单项 p50 **29.88ms**（naive 256.09ms ⇒ 8.6×）、
+  操作数 **180 → 20 次/帧（−89%）**、bbox IoU 1.0 / 中心误差 0 / 越界 0、
+  负样本安全边际与 33 张时逐位相同（max 0.7793）。**yard 本阶段仍未启用**新配置。
+  测试 **1680 passed / 1 skipped**（+36）。详见 `docs/PHASE11_7B_TEMPLATE_PREFILTER_PRODUCTION_HARDENING_REPORT.md`。
+- 后续（未执行）：Phase 11.7-C 正式启用 —— 先补"精确加载 36 张"的策略（现有多重回抽样无法表达
+  "33 skin + 指定 3 cap"），再按推荐配置开启 `max_templates: 36 / template_prefilter: thumb / prefilter_top_k: 4`；
+  评估 ROI 缓存（11.6-A）与 `roi_scale = 0.5`；
   **由独立审核者**复核 8 条草稿
   （`review_pack/` → `promote --approve`）；目视核查 `battle_reward` 并把试点扩到 10–20 张；
   补 `battle_auto_button` 点击热区候选；补采（跨分辨率 / 多 DPI / 新活动皮肤 / 会话登记）；

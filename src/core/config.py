@@ -695,6 +695,13 @@ class EvidenceDetectorConfig(StrictModel):
             ``1/roi_scale`` 恢复并 **clamp 回 ROI 边界内**。只影响模板匹配路径；
             OCR 仍使用原尺寸 ROI（不降采样）。
         max_templates: 最多加载多少个模板（均匀抽样，控制匹配耗时）。
+        template_prefilter: 模板候选预筛算法（Phase 11.7-B）。``"none"``（默认）**不预筛**，
+            行为与既有版本逐字段一致；``"thumb"``（32×4 灰度缩略图 L1 距离）时每帧只把
+            Top-``prefilter_top_k`` 张候选送进精匹配。它**只减少进入精匹配的模板数量**，
+            不产生 EvidenceResult / bbox / 状态，也不改变匹配与阈值语义。
+        prefilter_top_k: 每帧进入精匹配的候选数量（Phase 11.7-B）。``0``（默认）= 不预筛；
+            ``>= 已加载模板数`` 等价全量匹配。**与 ``max_templates`` 严格分离**：
+            ``max_templates`` 决定"模板库规模"，``prefilter_top_k`` 决定"每帧精匹配数量"。
         dedupe_threshold: 模板去重的 dHash 汉明距离阈值（Phase 11.5，``0`` = 不去重）。
         per_source_limit: 每个来源（``cap`` / ``skinNNN``）最多保留多少张模板
             （Phase 11.5，``0`` = 不限制）。
@@ -715,6 +722,8 @@ class EvidenceDetectorConfig(StrictModel):
     multi_scale: bool = True
     scales: list[float] = Field(default_factory=lambda: list(DEFAULT_TEMPLATE_SCALES))
     roi_scale: float = Field(default=IDENTITY_SCALE, gt=0.0, le=1.0)
+    template_prefilter: str = "none"
+    prefilter_top_k: int = Field(default=0, ge=0)
     max_templates: int = Field(default=DEFAULT_EVIDENCE_MAX_TEMPLATES, ge=0)
     dedupe_threshold: int = Field(default=0, ge=0)
     per_source_limit: int = Field(default=0, ge=0)
@@ -740,6 +749,20 @@ class EvidenceDetectorConfig(StrictModel):
     def template_source(self) -> str:
         """模板目录（空字符串表示该 detector 不使用模板）。"""
         return self.templates.strip()
+
+    @field_validator("template_prefilter")
+    @classmethod
+    def _validate_template_prefilter(cls, value: str) -> str:
+        """校验预筛算法名（未知算法必须立即暴露，不能静默降级）。"""
+        allowed = ("none", "thumb")
+        if value not in allowed:
+            raise ValueError(f"template_prefilter 只支持 {allowed}，收到 {value!r}")
+        return value
+
+    @property
+    def prefilter_enabled(self) -> bool:
+        """预筛是否真的启用（算法非 ``none`` 且 ``prefilter_top_k > 0``）。"""
+        return self.template_prefilter != "none" and self.prefilter_top_k > 0
 
     def matcher_config(self) -> TemplateDetectorConfig:
         """构造供 :class:`~src.vision.detector.template.matcher.TemplateMatcher` 使用的配置。

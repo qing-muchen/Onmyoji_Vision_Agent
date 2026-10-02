@@ -66,6 +66,7 @@ from src.vision.evidence.models import (
     Roi,
     TextMatch,
 )
+from src.vision.evidence.template_prefilter import TemplatePrefilter
 from src.vision.evidence.templates import load_feature_templates
 
 if TYPE_CHECKING:  # pragma: no cover - 仅用于类型注解，避免运行期强依赖 OCR 栈
@@ -340,6 +341,36 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         self._group = group
         #: ROI 结果缓存（Phase 11.6-A）：``cache_size <= 0`` 时关闭，行为与无缓存一致
         self._cache = LruEvidenceCache(cache_size)
+        #: 模板候选预筛（Phase 11.7-B）：配置未启用时**完全不走该路径**，
+        #: 从而保证模板顺序、匹配次数、metadata 与既有版本逐字段一致
+        self._prefilter_enabled = bool(config.prefilter_enabled)
+        self._prefilter_top_k = int(config.prefilter_top_k) if self._prefilter_enabled else 0
+        self._prefilter: TemplatePrefilter | None = None
+        self._prefilter_error: str | None = None
+        self._templates_by_id = {item.template_id: item for item in self._templates}
+        #: 最近一次 ``best_match`` 的预筛诊断（``None`` = 未启用预筛）
+        self._last_prefilter: dict[str, object] | None = None
+        if self._prefilter_enabled:
+            self._build_prefilter()
+
+    def _build_prefilter(self) -> None:
+        """构造预筛的模板特征缓存（**异常时只记录原因并回退全量匹配，不抛出**）。
+
+        预筛是性能优化，不应成为新的可靠性单点：初始化失败时 detector 继续以
+        "全量匹配"工作，并把原因写进 ``metadata`` 供观测。
+        """
+        if not self._templates:
+            self._prefilter_error = "no templates loaded"
+            return
+        if self._config.template_prefilter != TemplatePrefilter.NAME:
+            self._prefilter_error = f"unknown algorithm {self._config.template_prefilter!r}"
+            logger.warning("未知的 template_prefilter，预筛回退全量匹配：%s", self._prefilter_error)
+            return
+        try:
+            self._prefilter = TemplatePrefilter(self._templates)
+        except Exception as exc:  # noqa: BLE001 - 预筛不得成为可靠性单点
+            self._prefilter_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("模板预筛初始化失败，回退全量匹配：%s", self._prefilter_error)
 
     @property
     def cache(self) -> LruEvidenceCache:
@@ -408,6 +439,21 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
     def roi_scale(self) -> float:
         """ROI 降采样比例（Phase 11.6-C）；``1.0``（默认）= 不降采样。"""
         return float(self._config.roi_scale)
+
+    @property
+    def prefilter(self) -> TemplatePrefilter | None:
+        """模板候选预筛实例（Phase 11.7-B）；``None`` = 未启用或初始化失败（回退全量）。"""
+        return self._prefilter
+
+    @property
+    def prefilter_top_k(self) -> int:
+        """每帧进入精匹配的候选数量（``0`` = 未启用预筛）。"""
+        return self._prefilter_top_k
+
+    @property
+    def prefilter_enabled(self) -> bool:
+        """配置是否要求启用预筛（与"预筛是否可用"区分）。"""
+        return self._prefilter_enabled
 
     def crop_roi(self, frame: Frame) -> tuple[np.ndarray, Rect]:
         """按 ROI 裁剪帧图像。
@@ -529,7 +575,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         frame_gray = self._matcher.prepare(self._matching_image(cropped))
 
         best: TemplateMatch | None = None
-        for template in self._templates:
+        for template in self._candidate_templates(frame_gray):
             match = self._matcher.match(frame_gray, template)
             if match is None:
                 continue
@@ -550,6 +596,80 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             ),
             roi_rect,
         )
+
+    def _candidate_templates(self, frame_gray: np.ndarray) -> tuple[TemplateInfo, ...]:
+        """选出本帧要送进精匹配的模板（Phase 11.7-B）。
+
+        默认（配置未启用预筛）返回**全部模板**且不设置诊断信息 —— 保证既有模板顺序、
+        ``matchTemplate`` 次数与 metadata 逐字段不变。
+
+        预筛**自身故障**时回退全量匹配并记录原因；而"Top-K 里没有模板超过阈值"属于
+        **正常未检出**，**不会**触发任何二次全量匹配（否则在非 yard 帧上会把省下的
+        成本全部付回去）。
+
+        Args:
+            frame_gray: 与模板同处一个像素网格的 ROI 灰度图。
+
+        Returns:
+            本帧要精匹配的模板元组（保持模板库原始顺序）。
+        """
+        if not self._prefilter_enabled:
+            self._last_prefilter = None
+            return self._templates
+
+        if self._prefilter is None:
+            self._record_prefilter_fallback(self._prefilter_error or "prefilter unavailable")
+            return self._templates
+
+        if self._prefilter_top_k >= len(self._templates):
+            # top_k >= 模板数 ⇒ 语义上等价全量匹配，直接走全量、不额外支付预筛开销
+            self._last_prefilter = {
+                "algorithm": self._prefilter.name,
+                "top_k": self._prefilter_top_k,
+                "candidate_count": len(self._templates),
+                "total_templates": len(self._templates),
+                "fallback": False,
+                "reason": "top_k >= template count",
+            }
+            return self._templates
+
+        try:
+            ranking = self._prefilter.rank(frame_gray)
+        except Exception as exc:  # noqa: BLE001 - 预筛不得成为可靠性单点
+            self._record_prefilter_fallback(f"{type(exc).__name__}: {exc}")
+            return self._templates
+
+        selected = tuple(
+            self._templates_by_id[item]
+            for item in ranking.template_ids[: self._prefilter_top_k]
+            if item in self._templates_by_id
+        )
+        if not selected:
+            self._record_prefilter_fallback("prefilter returned no valid candidates")
+            return self._templates
+
+        self._last_prefilter = {
+            "algorithm": self._prefilter.name,
+            "top_k": self._prefilter_top_k,
+            "candidate_count": len(selected),
+            "total_templates": len(self._templates),
+            "fallback": False,
+            "roi_feature_ms": ranking.roi_feature_ms,
+            "ranking_ms": ranking.ranking_ms,
+        }
+        return selected
+
+    def _record_prefilter_fallback(self, reason: str) -> None:
+        """记录"预筛回退全量匹配"的诊断信息（不吞异常，也不抛出）。"""
+        logger.warning("模板预筛回退全量匹配：%s", reason)
+        self._last_prefilter = {
+            "algorithm": self._config.template_prefilter,
+            "top_k": self._prefilter_top_k,
+            "candidate_count": len(self._templates),
+            "total_templates": len(self._templates),
+            "fallback": True,
+            "reason": reason,
+        }
 
     def _matching_image(self, cropped: np.ndarray) -> np.ndarray:
         """模板匹配的输入图：``roi_scale < 1`` 时降采样，否则原样返回。"""
@@ -754,6 +874,16 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             # Phase 11.6-C：记录该命中是在**降采样**的 ROI 上算出的。
             # 只在降采样时写入，保证 roi_scale = 1.0 时 metadata 与既有版本逐字段一致。
             metadata["roi_scale"] = self.roi_scale
+        if self._last_prefilter is not None:
+            # Phase 11.7-B：仅在**预筛启用**时写入观测字段（默认关闭 ⇒ metadata 不变）。
+            # 只记录计数与状态，不把完整候选列表塞进每条正式证据。
+            metadata["template_prefilter"] = self._last_prefilter["algorithm"]
+            metadata["prefilter_top_k"] = self._last_prefilter["top_k"]
+            metadata["prefilter_candidate_count"] = self._last_prefilter["candidate_count"]
+            metadata["prefilter_total_templates"] = self._last_prefilter["total_templates"]
+            if self._last_prefilter["fallback"]:
+                metadata["prefilter_fallback"] = True
+                metadata["prefilter_fallback_reason"] = self._last_prefilter["reason"]
         if self.template_shortfall_factor < 1.0:
             metadata["insufficient_templates"] = True
             metadata["shortfall_factor"] = self.template_shortfall_factor
