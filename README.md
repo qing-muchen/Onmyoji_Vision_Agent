@@ -2239,6 +2239,24 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **`True/0.9935`**。⚠️ **B-2（内容覆盖）未解决**：真实庭院帧最佳相似度仅 **0.6656**、`yard_cap_024` raw **0.7995**
   ⇒ 真实 Scene A 仍可能不命中，属 Phase 11.9 数据工作。测试 **1781 passed / 1 skipped**（+31）。
   详见 `docs/PHASE11_8R_TEMPLATE_BOUNDARY_FIX_REPORT.md`。
+- Phase 11.9-A（**工作流已交付、数据待人工采集 ⇒ `waiting_for_manual_yard_capture`**）：建立"当前版本
+  真实庭院"数据体系，并先测清现有模板到底缺在哪里。**新增独立数据根
+  `dataset/raw/yard_live/<capture_session_id>/`**（历史 `raw/yard` 98 张**永不动**；
+  `benchmark_template_prefilter.collect_positives` 是非递归 `glob`，98 口径不受影响，而新模块
+  **显式**扫描该目录，不靠"恰好扫不到"隔离）；`CaptureSource` 扩展
+  **`capture_role`（candidate/holdout/diagnostic/unknown）+ `theme_or_event` + `yard_variant`**
+  （向后兼容：旧 `sources.jsonl` 仍可解析、旧数据**不**默认成 candidate/holdout；`capture_session_id` /
+  `capture_timestamp` 复用既有 `session_id` / `captured_at`，**不建重复元数据真相**）；新增
+  `src/vision/dataset/live_yard.py`（布局契约 + 按会话分流 + dHash 与 `template_dhash` **逐位等价** +
+  **跨集合 candidate↔holdout 泄漏审计**）；新增**安全采集工具** `tools/capture_yard_dataset.py`
+  （只截图：`allow_activation=False` + 前台门控，非前台/窗口缺失 ⇒ 退出码 `4`/`3` 且**不写文件**；
+  原客户区像素直存、不 resize 不裁 ROI；原子写 + `.tmp` 清理 + SHA 去重 + 不覆盖 + 路径限制）与
+  `tools/audit_yard_live.py`（**Production36 vs All61 双探针** + 缺口判定
+  `production-selection-gap` / `existing-library-gap` + 与历史 17 个 cap FN 的 dHash 近邻关系）；
+  `tools/raw_manifest.py` 新增 **`live` 分区**（历史 `count`/`entries` 语义逐字段不变）、
+  `tools/check_dataset.py` 允许 `raw/yard_live/`。⚠️ 本轮**未采集任何真实数据**（窗口不可用 ⇒
+  `window_not_found`，**不伪造**），按约定停在 `data_insufficient`。测试 **+35**。
+  详见 `docs/PHASE11_9A_CURRENT_YARD_DATASET_REFRESH_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

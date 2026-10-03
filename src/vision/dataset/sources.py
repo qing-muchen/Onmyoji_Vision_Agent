@@ -32,10 +32,16 @@ import numpy as np
 from src.utils.logger import get_logger
 
 __all__ = [
+    "CAPTURE_ROLE_CANDIDATE",
+    "CAPTURE_ROLE_DIAGNOSTIC",
+    "CAPTURE_ROLE_HOLDOUT",
+    "CAPTURE_ROLE_UNKNOWN",
+    "CAPTURE_ROLES",
     "CAPTURE_SOURCE_FIELDS",
     "CaptureSource",
     "SourceError",
     "SourceRegistry",
+    "TEMPLATE_ELIGIBLE_ROLES",
     "UNKNOWN_VALUE",
     "compute_sha256",
     "image_size",
@@ -47,6 +53,26 @@ logger = get_logger("vision.dataset.sources")
 
 #: 历史数据中"来源不明"字段的占位（显式未知，不允许编造）
 UNKNOWN_VALUE = "unknown"
+
+#: 采集角色（Phase 11.9-A）：一张 raw 在 **candidate / holdout / diagnostic** 中的身份。
+#:
+#: 关键约束：历史素材与任何"未显式标注"的新图一律为 :data:`CAPTURE_ROLE_UNKNOWN`，
+#: **不得**默认归入 ``candidate`` 或 ``holdout`` —— 否则会在模板选择阶段造成自匹配泄漏。
+CAPTURE_ROLE_UNKNOWN = "unknown"
+CAPTURE_ROLE_CANDIDATE = "candidate"
+CAPTURE_ROLE_HOLDOUT = "holdout"
+CAPTURE_ROLE_DIAGNOSTIC = "diagnostic"
+CAPTURE_ROLES: frozenset[str] = frozenset(
+    {
+        CAPTURE_ROLE_CANDIDATE,
+        CAPTURE_ROLE_DIAGNOSTIC,
+        CAPTURE_ROLE_HOLDOUT,
+        CAPTURE_ROLE_UNKNOWN,
+    }
+)
+
+#: 仅"可用于模板生成 / 模板选择"的角色（holdout / diagnostic / unknown **不得**入选）。
+TEMPLATE_ELIGIBLE_ROLES: frozenset[str] = frozenset({CAPTURE_ROLE_CANDIDATE})
 
 #: 采集来源允许的字段
 CAPTURE_SOURCE_FIELDS: frozenset[str] = frozenset(
@@ -67,6 +93,9 @@ CAPTURE_SOURCE_FIELDS: frozenset[str] = frozenset(
         "source_sha256",
         "origin",
         "note",
+        "capture_role",
+        "theme_or_event",
+        "yard_variant",
     }
 )
 
@@ -167,6 +196,10 @@ class CaptureSource:
         source_sha256: 原图 SHA256。
         origin: 来源说明（``legacy-import`` / ``live-capture`` …）。
         note: 备注。
+        capture_role: 采集角色（``candidate`` / ``holdout`` / ``diagnostic`` / ``unknown``）。
+            历史素材与未标注新图一律 ``unknown``（**不**默认成 candidate/holdout）。
+        theme_or_event: 主题 / 活动（无法可靠识别时 ``unknown``，不猜）。
+        yard_variant: 庭院变体（无法可靠识别时 ``unknown``，不猜）。
     """
 
     source_id: str
@@ -185,6 +218,9 @@ class CaptureSource:
     source_sha256: str = ""
     origin: str = UNKNOWN_VALUE
     note: str = ""
+    capture_role: str = CAPTURE_ROLE_UNKNOWN
+    theme_or_event: str = UNKNOWN_VALUE
+    yard_variant: str = UNKNOWN_VALUE
 
     def __post_init__(self) -> None:
         self.source_id = str(self.source_id or "").strip()
@@ -196,6 +232,9 @@ class CaptureSource:
         self.capture_id = _optional(self.capture_id)
         self.session_id = _optional(self.session_id)
         self.captured_at = _optional(self.captured_at)
+        self.capture_role = normalize_capture_role(self.capture_role)
+        self.theme_or_event = _text_or_unknown(self.theme_or_event)
+        self.yard_variant = _text_or_unknown(self.yard_variant)
 
     # ---- 只读视图 -----------------------------------------------------------
 
@@ -225,6 +264,31 @@ class CaptureSource:
         if self.capture_id:
             return "capture"
         return "source"
+
+    @property
+    def has_role(self) -> bool:
+        """是否已显式确定采集角色（历史素材与未标注新图为 ``False``）。"""
+        return self.capture_role != CAPTURE_ROLE_UNKNOWN
+
+    @property
+    def is_candidate(self) -> bool:
+        """是否属于 candidate 池（**唯一**可用于模板生成 / 模板选择的角色）。"""
+        return self.capture_role == CAPTURE_ROLE_CANDIDATE
+
+    @property
+    def is_holdout(self) -> bool:
+        """是否属于 holdout 池（禁止参与模板生成 / 选择 / 调参）。"""
+        return self.capture_role == CAPTURE_ROLE_HOLDOUT
+
+    @property
+    def is_diagnostic(self) -> bool:
+        """是否属于 diagnostic 池（只用于定位问题，不选模板）。"""
+        return self.capture_role == CAPTURE_ROLE_DIAGNOSTIC
+
+    @property
+    def is_template_eligible(self) -> bool:
+        """是否允许进入模板生成 / 模板选择（仅 ``candidate``）。"""
+        return self.capture_role in TEMPLATE_ELIGIBLE_ROLES
 
     @classmethod
     def legacy(
@@ -280,6 +344,9 @@ class CaptureSource:
             "source_sha256": self.source_sha256,
             "origin": self.origin,
             "note": self.note,
+            "capture_role": self.capture_role,
+            "theme_or_event": self.theme_or_event,
+            "yard_variant": self.yard_variant,
         }
 
     @classmethod
@@ -309,6 +376,9 @@ class CaptureSource:
             source_sha256=str(data.get("source_sha256", "") or ""),
             origin=str(data.get("origin", UNKNOWN_VALUE) or UNKNOWN_VALUE),
             note=str(data.get("note", "") or ""),
+            capture_role=data.get("capture_role", CAPTURE_ROLE_UNKNOWN),
+            theme_or_event=data.get("theme_or_event", UNKNOWN_VALUE),
+            yard_variant=data.get("yard_variant", UNKNOWN_VALUE),
         )
 
     def describe(self) -> str:
@@ -316,6 +386,34 @@ class CaptureSource:
         session = self.session_id or "no-session"
         size = f"{self.client_width}x{self.client_height}" if self.client_width else "size-unknown"
         return f"CaptureSource({self.source_id} {self.relative_path} {session} {size})"
+
+
+def normalize_capture_role(value: Any) -> str:
+    """把任意输入归一为**合法**采集角色。
+
+    规则：空值 ⇒ :data:`CAPTURE_ROLE_UNKNOWN`；大小写与首尾空白被归一；
+    其余非法取值**报错**（不静默降级为 candidate/holdout）。
+
+    Args:
+        value: 原始取值。
+
+    Returns:
+        合法角色字符串。
+
+    Raises:
+        SourceError: 取值不在 :data:`CAPTURE_ROLES` 中。
+    """
+    text = str(value or "").strip().lower() or CAPTURE_ROLE_UNKNOWN
+    if text not in CAPTURE_ROLES:
+        allowed = ", ".join(sorted(CAPTURE_ROLES))
+        raise SourceError(f"capture_role 非法: {text!r}（允许: {allowed}）")
+    return text
+
+
+def _text_or_unknown(value: Any) -> str:
+    """把空值归一为 ``unknown``（显式未知），其余转去空白字符串。"""
+    text = str(value or "").strip()
+    return text or UNKNOWN_VALUE
 
 
 def _optional(value: Any) -> str | None:

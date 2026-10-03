@@ -76,6 +76,12 @@ ALLOWED_UNKNOWN_CATEGORIES: tuple[str, ...] = (
 )
 #: ``raw/`` 下允许的状态目录
 ALLOWED_RAW_STATES: tuple[str, ...] = STATE_GROUPS + (UNKNOWN_GROUP,)
+#: 当前版本庭院新采集数据的目录名（Phase 11.9-A）—— 允许存在，但**不计入**历史 raw 状态样本
+LIVE_RAW_ROOT = "yard_live"
+#: 新采集会话目录形态：``yard_live_<YYYYMMDD>_s<NN>``
+LIVE_SESSION_PATTERN = re.compile(r"^yard_live_\d{8}_s\d{2}$")
+#: 新采集帧文件名形态：``<session>_<NNN>.png``
+LIVE_FRAME_PATTERN = re.compile(r"^yard_live_\d{8}_s\d{2}_\d{3}\.png$")
 #: 允许的 features detector（相对 ``features/`` 的目录路径，可含一级分组）
 ALLOWED_FEATURE_DETECTORS: tuple[str, ...] = (
     "bottom_menu/yard",
@@ -123,6 +129,8 @@ class ValidationReport:
         state_samples: 各状态样本分组的合法图片数量（``分组名 -> 数量``）。
         legacy_state_samples: 旧扁平状态样本分组的图片数量。
         raw_samples: ``raw/<state>/`` 下的合法图片数量（``state -> 数量``）。
+        raw_live_samples: ``raw/yard_live/<session>/`` 下的合法图片数量（Phase 11.9-A
+            当前版本新采集；**不计入** ``raw_samples``）。
         feature_samples: 各 detector 的正/负样本数量（``detector -> {"positive": n, "negative": n}``）。
         skin_directories: 出现过的皮肤目录名集合。
         scene_directories: 出现过的场景目录相对路径集合。
@@ -138,6 +146,7 @@ class ValidationReport:
     state_samples: dict[str, int] = field(default_factory=dict)
     legacy_state_samples: dict[str, int] = field(default_factory=dict)
     raw_samples: dict[str, int] = field(default_factory=dict)
+    raw_live_samples: dict[str, int] = field(default_factory=dict)
     feature_samples: dict[str, dict[str, int]] = field(default_factory=dict)
     skin_directories: set[str] = field(default_factory=set)
     scene_directories: set[str] = field(default_factory=set)
@@ -487,6 +496,9 @@ def _validate_raw(root: Path, report: ValidationReport) -> None:
             if entry.name not in ALLOWED_NON_PNG_FILES:
                 report.warnings.append(f"{entry.as_posix()}: raw 根目录下的非样本条目（已忽略）")
             continue
+        if entry.name == LIVE_RAW_ROOT:
+            report.raw_live_samples = _validate_live_raw(entry, report)
+            continue
         if entry.name not in ALLOWED_RAW_STATES:
             report.invalid.append(
                 f"{entry.as_posix()}: 未知状态目录（允许: {', '.join(ALLOWED_RAW_STATES)}）"
@@ -513,6 +525,56 @@ def _validate_raw(root: Path, report: ValidationReport) -> None:
             report.raw_samples[entry.name] = _validate_sample_files(
                 entry, f"raw/{entry.name}", entry.name, report
             )
+
+
+def _validate_live_raw(root: Path, report: ValidationReport) -> dict[str, int]:
+    """校验 ``raw/yard_live/``（Phase 11.9-A：当前版本庭院新采集）。
+
+    结构：``raw/yard_live/<capture_session_id>/<capture_session_id>_<NNN>.png``。
+    该目录**不计入** ``raw_samples``（历史状态样本），单独记入 ``raw_live_samples``。
+    """
+    counts: dict[str, int] = {}
+    for session in sorted(root.iterdir()):
+        if not session.is_dir():
+            if session.name not in ALLOWED_NON_PNG_FILES:
+                report.warnings.append(
+                    f"{session.as_posix()}: raw/yard_live 下的非目录条目（已忽略）"
+                )
+            continue
+        if not LIVE_SESSION_PATTERN.match(session.name):
+            report.invalid.append(
+                f"{session.as_posix()}: 采集会话目录名非法（应为 yard_live_<YYYYMMDD>_s<NN>）"
+            )
+            continue
+        counts[session.name] = _validate_live_frames(session, report)
+    return counts
+
+
+def _validate_live_frames(session: Path, report: ValidationReport) -> int:
+    """校验单个采集会话目录内的帧（命名 + PNG 签名）。"""
+    total = 0
+    for path in sorted(session.iterdir()):
+        if not path.is_file():
+            report.invalid.append(f"{path.as_posix()}: 采集会话目录内不应出现子目录")
+            continue
+        if path.name in ALLOWED_NON_PNG_FILES:
+            continue
+        if path.name.endswith(".tmp"):
+            report.warnings.append(f"{path.as_posix()}: 发现未清理的临时文件（疑似异常中断）")
+            continue
+        if not LIVE_FRAME_PATTERN.match(path.name):
+            report.invalid.append(f"{path.as_posix()}: 帧文件名非法（应为 <session>_<NNN>.png）")
+            continue
+        try:
+            with path.open("rb") as handle:
+                if handle.read(len(PNG_SIGNATURE)) != PNG_SIGNATURE:
+                    report.invalid.append(f"{path.as_posix()}: 不是合法 PNG（文件头不匹配）")
+                    continue
+        except OSError as exc:
+            report.unresolved.append(f"{path.as_posix()}: 读取失败: {exc}")
+            continue
+        total += 1
+    return total
 
 
 def _validate_features(root: Path, report: ValidationReport) -> None:
@@ -622,6 +684,13 @@ def print_report(dataset_root: Path, report: ValidationReport) -> None:
         print("none")
     print()
     print("Raw:")
+    if report.raw_live_samples:
+        for session, live_count in report.raw_live_samples.items():
+            print(f"  yard_live/{session}: {live_count}")
+        print(
+            f"  yard_live total: {sum(report.raw_live_samples.values())} images"
+            " (current-version captures; not counted in raw states)"
+        )
     if report.raw_samples:
         for state, count in report.raw_samples.items():
             print(f"{state}: {count} images")

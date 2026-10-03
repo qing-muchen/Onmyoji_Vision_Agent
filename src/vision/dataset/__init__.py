@@ -6,6 +6,8 @@ src/vision/dataset/
 ├── annotations.py    ElementAnnotation / AnnotationStatus / ElementRegionKind / ElementVisibility
 │                     / CoordinateSpace / AnnotationStore（JSONL）+ 冲突检测与统计
 ├── sources.py        CaptureSource / SourceRegistry（source_id / session_id / SHA256 / 未知容忍）
+│                     + capture_role（candidate / holdout / diagnostic / unknown）
+├── live_yard.py      current-yard 新鲜数据（raw/yard_live）：会话布局、角色分流、跨集合泄漏审计
 └── splits.py         SplitPolicy / SplitPlan / group_sources / plan_splits / leakage_report
 ```
 
@@ -37,14 +39,39 @@ from src.vision.dataset.annotations import (
     local_now_iso,
 )
 from src.vision.dataset.sources import (
+    CAPTURE_ROLE_CANDIDATE,
+    CAPTURE_ROLE_DIAGNOSTIC,
+    CAPTURE_ROLE_HOLDOUT,
+    CAPTURE_ROLE_UNKNOWN,
+    CAPTURE_ROLES,
     CAPTURE_SOURCE_FIELDS,
+    TEMPLATE_ELIGIBLE_ROLES,
     UNKNOWN_VALUE,
     CaptureSource,
     SourceError,
     SourceRegistry,
     compute_sha256,
     image_size,
+    normalize_capture_role,
     source_id_for,
+)
+from src.vision.dataset.live_yard import (
+    LiveFrame,
+    LiveFrameError,
+    NearDuplicate,
+    audit_live_dataset,
+    difference_hash,
+    hamming_distance,
+    list_live_frames,
+    list_live_sessions,
+    live_root,
+    near_duplicate_pairs,
+    partition_by_role,
+    session_role_conflicts,
+    session_roles,
+)
+from src.vision.dataset.live_yard import (
+    leakage_report as live_leakage_report,
 )
 from src.vision.dataset.splits import (
     SplitError,
@@ -58,7 +85,13 @@ from src.vision.dataset.splits import (
 
 __all__ = [
     "ANNOTATION_FIELDS",
+    "CAPTURE_ROLE_CANDIDATE",
+    "CAPTURE_ROLE_DIAGNOSTIC",
+    "CAPTURE_ROLE_HOLDOUT",
+    "CAPTURE_ROLE_UNKNOWN",
+    "CAPTURE_ROLES",
     "CAPTURE_SOURCE_FIELDS",
+    "TEMPLATE_ELIGIBLE_ROLES",
     "UNKNOWN_VALUE",
     "AnnotationError",
     "AnnotationStatus",
@@ -68,6 +101,9 @@ __all__ = [
     "ElementAnnotation",
     "ElementRegionKind",
     "ElementVisibility",
+    "LiveFrame",
+    "LiveFrameError",
+    "NearDuplicate",
     "ReviewStatus",
     "SelfReviewDecision",
     "SourceError",
@@ -76,12 +112,24 @@ __all__ = [
     "SplitPlan",
     "SplitPolicy",
     "annotation_stats",
+    "audit_live_dataset",
     "compute_sha256",
+    "difference_hash",
     "group_sources",
+    "hamming_distance",
     "image_size",
     "leakage_report",
+    "list_live_frames",
+    "list_live_sessions",
+    "live_leakage_report",
+    "live_root",
     "local_now_iso",
+    "near_duplicate_pairs",
+    "normalize_capture_role",
+    "partition_by_role",
     "plan_splits",
+    "session_role_conflicts",
+    "session_roles",
     "source_id_for",
     "split_manifest",
 ]
