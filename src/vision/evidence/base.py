@@ -595,6 +595,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
                 confidence=best.confidence,
                 rect=offset_rect,
                 scale=best.scale,
+                fit_applied=best.fit_applied,
+                fit_ratio=best.fit_ratio,
             ),
             roi_rect,
         )

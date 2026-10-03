@@ -2223,6 +2223,22 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   迁移 2 次、**flaps 0**、失效 2 次。⚠️ **真实 yard 画面未覆盖**（游戏当前不在庭院 ⇒ `detections=0/60`）
   ⇒ `real_runtime_soak = run_but_scene_not_yard`，场景 A–F 未测试（需**人工**切到庭院后重跑）。
   测试 **1750 passed / 1 skipped**（+32）。详见 `docs/PHASE11_8_YARD_RUNTIME_SOAK_REPORT.md`。
+- Phase 11.8-R / R1（**已完成：真实运行期验收 + 1~2 px 边界缺陷修复**，`fix(vision): handle minor
+  template roi size mismatch`）：真实 Scene A 预检发现 `yard detections=0`，只读诊断定位到 **B-1 几何边界缺陷**
+  —— `roi_scale=0.75` 下 ROI 与模板**各自独立 `round` 取整**，模板比当前匹配图宽/高 1~2 px 时最正确的
+  pyramid 档位被 `TemplateMatcher.match()` 的"模板大于帧"检查**整档跳过**：实测同一内容仅差 1 px 就从
+  `0.9999/True` 崩到 `0.7444/False`（数据集受害者 `yard_cap_024.png` = 1703）。**修复（bounded fit-to-ROI）**：
+  `FIT_TOLERANCE_PX = 2`（**严格 2 px**；刻意**不用** `max(2px, 0.5%*width)` 这类相对容差，因为 1278 px 下
+  0.5% ≈ 6.4 px 会把真正的尺度不匹配静默 fit 掉）；溢出 ≤ 2 px 时用既有 `resize_image()` **等比**收紧到不超过
+  匹配图后再匹配（返回**新数组**，**绝不写回 pyramid 缓存**），> 2 px 仍按原逻辑 skip；`scale` 语义不变
+  （仍是配置的逻辑比例），新增可选字段 `fit_applied`/`fit_ratio`（带默认值，不破坏历史消费者），诊断走
+  `matcher.fit_count`（**不**进 Evidence metadata）。**回归零退化（与 11.7-C 基线逐项一致）**：TP **81/98**、
+  LOO **56/98**、FP **0/80**、负样本 raw max **0.7793**（距阈值 0.0707，未上升）、bbox 越界 0、
+  1704/1706 正常路径 `fit_applied=false` 且 conf 0.9999/1.0000 不变、`fit_count/frame = {0:88, 1:4, 2:1, 3:2, 4:3}`
+  （88/98 帧零 fit）、detect p50 25.87 → **26.22 ms**（+1.4%）；1703 合成边界从 `False/0.0000` →
+  **`True/0.9935`**。⚠️ **B-2（内容覆盖）未解决**：真实庭院帧最佳相似度仅 **0.6656**、`yard_cap_024` raw **0.7995**
+  ⇒ 真实 Scene A 仍可能不命中，属 Phase 11.9 数据工作。测试 **1781 passed / 1 skipped**（+31）。
+  详见 `docs/PHASE11_8R_TEMPLATE_BOUNDARY_FIX_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
