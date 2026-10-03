@@ -2295,6 +2295,19 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   上移 +0.008~+0.021。⇒ 结论：proposed36 **跨 session 稳健（不劣化）成立**，但**跨 session 召回
   增量未被证实**；建议进入 11.9-C 并保留 rollback，且不得声称"改善真实场景召回"。本阶段
   **未修改生产配置**。详见 `docs/PHASE11_9BR_BLIND_HOLDOUT_ACCEPTANCE_REPORT.md`。
+- Phase 11.9-C（**已完成：生产切换到 PROPOSED_36**）：只改 `configs/config.yaml` 的
+  `yard.template_include`（→ 11.9-B 冻结的 36 个 id；**+14/−7**），其余全部不变
+  （`threshold 0.85` / `roi_scale 0.75` / `thumb` / `top_k 4` / `max_templates 36` /
+  `action.enabled=false` / `backend=dry_run`）。切换前保存配置快照与 rollback id
+  （`TEMP/ova119c/config_before_119c.yaml` + `rollback_current36.json`，ids checksum `06b7c2a1…`）。
+  **切换后生产路径实测**：historical **TP 82/FN 16**、**LOO 58/40**、canonical80 **FP 0/TN 80**、
+  `recall@4 = 1.0`、`candidate_count_max 4`、**calls 20/frame**、**fallback 0**、bbox 越界 0 /
+  IoU 1.0；negative max **0.7793**（gap 0.0707）不变；**8 轮交替 latency p50 26.98→26.94 ms
+  （−0.1%）、p95 −10.9%**（4 轮时会读到 +6.6%，报告已说明波动）。loaded ids checksum 与 freeze
+  完全一致（`619bbc9d…`）；`cap_028` 已进入生产。⚠️ **唯一正确表述**：
+  **"s04 confirmed no regression, but was not discriminative for incremental recall."**
+  （增益来自 historical LOO 与 candidate 集合；**不得**说"blind 证明提升"）。
+  详见 `docs/PHASE11_9C_PRODUCTION_SWITCH_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

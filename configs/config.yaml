@@ -214,7 +214,19 @@ evidence:
       #   注意 Production12 的唯一独有命中（yard_cap_001）是 cap_001 的**自匹配**，LOO 下为 0。
       # 显式集合语义：**跳过** dedupe / per_source_limit / round_robin（自动选择策略会改变显式集合），
       #   配置校验强制这三者为关闭值（0/0/false）；selector 只允许字母/数字/下划线（禁止 ../ 越界）。
+      # ---- Phase 11.9-C：生产切换到 PROPOSED_36_FROZEN ----
+      # freeze_hash = 7851a45ebc5f9252c9bd4cca38c8063298bf87cef0341513b9aa8f92eabb00c5
+      # 依据：historical LOO 56→58、historical TP 81→82、s03 candidate 7/8→8/8、canonical80 FP=0、
+      #       calls/frame 20、fallback 0、bbox 越界 0、latency 交替测量 −2.0%。
+      # ⚠️ s04 blind holdout：current36 与 proposed36 均为 8/8 ⇒ 确认无退化，但对增量召回无区分度。
+      # rollback：TEMP/ova119c/rollback_current36.json + config_before_119c.yaml。
       template_include:
+        - bottom_menu_yard_cap_001
+        - bottom_menu_yard_cap_003
+        - bottom_menu_yard_cap_005
+        - bottom_menu_yard_cap_007
+        - bottom_menu_yard_cap_027
+        - bottom_menu_yard_cap_028
         - bottom_menu_yard_skin001_001
         - bottom_menu_yard_skin001_003
         - bottom_menu_yard_skin001_005
@@ -223,7 +235,6 @@ evidence:
         - bottom_menu_yard_skin002_005
         - bottom_menu_yard_skin003_001
         - bottom_menu_yard_skin003_003
-        - bottom_menu_yard_skin003_004
         - bottom_menu_yard_skin003_005
         - bottom_menu_yard_skin004_001
         - bottom_menu_yard_skin004_003
@@ -232,9 +243,7 @@ evidence:
         - bottom_menu_yard_skin005_005
         - bottom_menu_yard_skin006_001
         - bottom_menu_yard_skin006_003
-        - bottom_menu_yard_skin006_005
         - bottom_menu_yard_skin007_001
-        - bottom_menu_yard_skin007_003
         - bottom_menu_yard_skin008_001
         - bottom_menu_yard_skin008_003
         - bottom_menu_yard_skin008_005
@@ -248,9 +257,6 @@ evidence:
         - bottom_menu_yard_skin016_001
         - bottom_menu_yard_skin017_001
         - bottom_menu_yard_skin018_001
-        - bottom_menu_yard_cap_006
-        - bottom_menu_yard_cap_003
-        - bottom_menu_yard_cap_007
       # 显式集合 = 36 张；max_templates 仅作安全上限（小于集合数会被拒绝加载，不会静默截断）
       max_templates: 36
       dedupe_threshold: 0

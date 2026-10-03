@@ -37,8 +37,50 @@ CONFIG_PATH = ROOT / "configs" / "config.yaml"
 YARD_DIR = ROOT / "dataset" / "raw" / "yard"
 ANNOTATIONS = ROOT / "dataset" / "annotations" / "elements.jsonl"
 TEMPLATES_MODULE = ROOT / "src" / "vision" / "evidence" / "templates.py"
-EXPECTED_TP = 81
-EXPECTED_LOO_TP = 56
+#: Phase 11.9-B 冻结、Phase 11.9-C 上线的生产集合（PROPOSED_36_FROZEN）
+#: freeze_hash = 7851a45ebc5f9252c9bd4cca38c8063298bf87cef0341513b9aa8f92eabb00c5
+#: 顺序与 configs/config.yaml 的 ``template_include`` 完全一致。
+PRODUCTION_36_119C: tuple[str, ...] = (
+    "bottom_menu_yard_cap_001",
+    "bottom_menu_yard_cap_003",
+    "bottom_menu_yard_cap_005",
+    "bottom_menu_yard_cap_007",
+    "bottom_menu_yard_cap_027",
+    "bottom_menu_yard_cap_028",
+    "bottom_menu_yard_skin001_001",
+    "bottom_menu_yard_skin001_003",
+    "bottom_menu_yard_skin001_005",
+    "bottom_menu_yard_skin002_001",
+    "bottom_menu_yard_skin002_003",
+    "bottom_menu_yard_skin002_005",
+    "bottom_menu_yard_skin003_001",
+    "bottom_menu_yard_skin003_003",
+    "bottom_menu_yard_skin003_005",
+    "bottom_menu_yard_skin004_001",
+    "bottom_menu_yard_skin004_003",
+    "bottom_menu_yard_skin004_005",
+    "bottom_menu_yard_skin005_001",
+    "bottom_menu_yard_skin005_005",
+    "bottom_menu_yard_skin006_001",
+    "bottom_menu_yard_skin006_003",
+    "bottom_menu_yard_skin007_001",
+    "bottom_menu_yard_skin008_001",
+    "bottom_menu_yard_skin008_003",
+    "bottom_menu_yard_skin008_005",
+    "bottom_menu_yard_skin009_001",
+    "bottom_menu_yard_skin010_001",
+    "bottom_menu_yard_skin011_001",
+    "bottom_menu_yard_skin012_001",
+    "bottom_menu_yard_skin013_001",
+    "bottom_menu_yard_skin014_001",
+    "bottom_menu_yard_skin015_001",
+    "bottom_menu_yard_skin016_001",
+    "bottom_menu_yard_skin017_001",
+    "bottom_menu_yard_skin018_001",
+)
+#: 11.9-C 生产切换后的期望值（11.7-C 时期为 TP 81 / LOO 56）
+EXPECTED_TP = 82
+EXPECTED_LOO_TP = 58
 EXPECTED_TEMPLATES = 36
 
 
@@ -266,13 +308,13 @@ def test_production_yard_config(yard_config) -> None:  # noqa: ANN001
 
 
 def test_production_detector_loaded_templates(prod36) -> None:  # noqa: ANN001
-    """生产 detector 真实加载 36 张，并构造出 thumb 预筛。"""
+    """生产 detector 真实加载 36 张（= 11.9-C 冻结集合），并构造出 thumb 预筛。"""
     assert len(prod36.templates) == EXPECTED_TEMPLATES
     assert prod36.prefilter is not None
     assert prod36.prefilter.name == "thumb"
     assert prod36.prefilter_top_k == 4
     assert prod36.prefilter_enabled is True
-    assert [item.template_id for item in prod36.templates] == build_36_selectors()
+    assert [item.template_id for item in prod36.templates] == list(PRODUCTION_36_119C)
 
 
 def test_production_candidate_count_and_calls(prod36, config) -> None:  # noqa: ANN001

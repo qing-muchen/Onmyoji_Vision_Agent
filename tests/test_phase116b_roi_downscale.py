@@ -216,10 +216,19 @@ def test_downscale_preserves_hit_position(
 
 def test_decisions_agree_across_scales(yard_detector: BottomMenuYardDetector) -> None:
     """同一批正/负样本上，1.0 / 0.75 / 0.5 的检出判定一致（参考实现）。"""
-    positives = sorted(YARD_DIR.glob("*.png"))[:6]
+    # 只用**仍在生产集合内**的原图做参考样本：11.9-C 起 cap_006 已出生产，
+    # 它在该集合下已无同源模板覆盖，1.0/0.75 与 0.5 的判定会因"命中别的模板"而分歧 ——
+    # 那不是尺度问题，而是集合成员变化，会污染本测试的"尺度一致性"结论。
+    detector_config = load_config().evidence.detectors[bench.YARD_EVIDENCE]
+    production = {str(item) for item in detector_config.template_include}
+    positives = [
+        path
+        for path in sorted(YARD_DIR.glob("*.png"))
+        if f"bottom_menu_{path.stem}" in production
+    ][:6]
     negatives = sorted(EXPLORATION_DIR.glob("*.png"))[:4]
     if not positives:
-        pytest.skip("缺少 yard 原图")
+        pytest.skip("缺少仍在生产集合内的 yard 原图")
 
     detector = yard_detector
     matchers = {
