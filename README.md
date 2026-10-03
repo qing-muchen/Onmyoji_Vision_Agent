@@ -2264,6 +2264,24 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   可同时改善"新 live + 历史 17 个 cap FN"的候选全部来自库内 `cap_008/cap_026/cap_009`
   （只读模拟：live TP 12→16、历史 cap FN 0→3）。测试 **+40**。
   详见 `docs/PHASE11_9A_CURRENT_YARD_DATASET_REFRESH_REPORT.md`（**附录 C = 实测结果**）。
+- Phase 11.9-B（**已完成：candidate-only 模板集合重选 + 冻结 + 一次性 validation**）：新增
+  `tools/reselect_yard_templates.py`（只读；**不改生产配置**）。**数据边界**：选择只读
+  `historical98`（**source-aware LOO**）+ `s03 candidate`(8) + `canonical80`（仅安全约束），
+  `assert_selection_only()` 显式拒绝 `s02`/`s01`。**两阶段**：Stage 1 用低阈值探针的
+  template×sample 分数矩阵做**词典序贪心**（candidate 覆盖 → historical 覆盖，平手按
+  template_id ⇒ 确定性），Stage 2 用生产语义（`36 loaded → thumb Top-4 → threshold 0.85`，
+  `roi_scale 0.75`）复核，**最终指标一律取自 Stage 2**；1-for-1 swap search（proxy 先筛、
+  每轮 ≤6 个进 Stage 2）。**结果**：`current36` candidate **7/8**、hist 81/98、**LOO 56/98**、
+  FP 0 → `proposed36` candidate **8/8**、hist **82/98**、**LOO 58/98**、FP 0、calls 20/frame、
+  fallback 0、bbox 越界 0、negative max/p95 **不变**（0.7793/0.7250）；added
+  `cap_001/005/027/028`、removed `cap_006/skin003_004/skin006_005/skin007_003`（**未**硬编码
+  `cap_008/026/009`）。`freeze_hash = 7851a45e…`（含 61 库 id + 36 选中 id + 全部样本 SHA256），
+  冻结清单写 TEMP 的 `PROPOSED_36_FROZEN`，**未写入 configs**。**latency 方法学更正**：单侧顺序
+  测量会给出 +48% 虚假回归；交替测量（各 4 轮、744 样本）为 **p50 53.25→52.17 ms（−2.0%）**
+  ⇒ 无回归。**冻结后一次性 s02 validation**：TP **5/8**（与 current36 相同，**未改善**），
+  命中的 5 张全部由新模板 `cap_028` 命中（0.8555~0.9362）⇒ 训练侧达标但**跨会话收益未证实**，
+  需 **s04 blind holdout** 背书。测试 **+37**。详见
+  `docs/PHASE11_9B_YARD_TEMPLATE_RESELECTION_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
