@@ -110,28 +110,51 @@ def corpus(config):  # noqa: ANN001, ANN201
 # ---------------------------------------------------------------------------
 
 
-def test_prefilter_disabled_by_default(yard_config) -> None:  # noqa: ANN001
-    """生产配置未写新字段 ⇒ 默认 ``none`` / ``0``，且未启用。"""
-    assert yard_config.template_prefilter == "none"
-    assert yard_config.prefilter_top_k == 0
-    assert yard_config.prefilter_enabled is False
+def test_prefilter_disabled_by_default() -> None:
+    """**字段默认值**是关闭（``EvidenceDetectorConfig()``）。
 
+    注意：Phase 11.7-C 起 ``bottom_menu_yard`` 的生产配置**已显式启用**预筛；
+    本测试断言的是"默认关闭 ⇒ 其它 detector / 未配置场景行为不变"。
+    """
     default = EvidenceDetectorConfig()
-    assert default.template_prefilter == "none" and default.prefilter_top_k == 0
+    assert default.template_prefilter == "none"
+    assert default.prefilter_top_k == 0
+    assert default.prefilter_enabled is False
+    assert default.template_include == []
 
 
-def test_production_config_unchanged(yard_config, config) -> None:  # noqa: ANN001
-    """生产 yard 仍是 12 模板 / round_robin / roi_scale 0.75 / 阈值 0.85。"""
-    assert yard_config.max_templates == 12
-    assert yard_config.round_robin is True
+def test_production_config_and_rollback(yard_config, config) -> None:  # noqa: ANN001
+    """当前生产为"显式 36 张 + Top-4"；**rollback 配置**可复现旧 Production12。"""
+    # 当前生产（Phase 11.7-C）
+    assert yard_config.max_templates == yard_config.explicit_template_count == 36
+    assert yard_config.round_robin is False
     assert yard_config.roi_scale == 0.75
     assert yard_config.threshold == bench.PRODUCTION_THRESHOLD == 0.85
+    assert yard_config.template_prefilter == "thumb"
+    assert yard_config.prefilter_top_k == 4
 
-    detector = BottomMenuYardDetector.from_config(config.evidence)
+    # rollback：清空显式集合 + 恢复旧的抽样策略 + 关闭预筛
+    rollback = yard_config.model_copy(
+        update={
+            "template_include": [],
+            "max_templates": 12,
+            "round_robin": True,
+            "dedupe_threshold": 6,
+            "per_source_limit": 0,
+            "template_prefilter": "none",
+            "prefilter_top_k": 0,
+        }
+    )
+    detectors = dict(config.evidence.detectors)
+    detectors[YARD] = rollback
+    evidence = config.evidence.model_copy(update={"detectors": detectors})
+    detector = BottomMenuYardDetector.from_config(evidence)
+
     assert detector.prefilter_enabled is False
     assert detector.prefilter is None
     assert detector.prefilter_top_k == 0
     assert len(detector.templates) == 12
+    assert detector.templates[0].template_id == f"{YARD}_cap_001"
 
 
 def test_action_and_backend_safe(config) -> None:  # noqa: ANN001
@@ -162,22 +185,26 @@ def test_supported_prefilters_match_config_validation() -> None:
 
 
 def test_default_metadata_unchanged(config, skin_templates, frames) -> None:  # noqa: ANN001
-    """未启用预筛时，``metadata`` 与"显式 none"完全一致，且不含任何 prefilter 字段。"""
-    plain = BottomMenuYardDetector(YARD, config.evidence.detectors[YARD], skin_templates)
-    explicit_none = with_prefilter(
+    """未启用预筛时，``metadata`` 不含任何 prefilter 字段。
+
+    注意：Phase 11.7-C 起**生产配置已启用**预筛，因此这里显式构造"关闭预筛"的配置，
+    以保持本测试的原意（未启用时既有字段集不变）。
+    """
+    disabled = with_prefilter(
         config.evidence.detectors[YARD], skin_templates, algorithm="none", top_k=0
     )
+    assert disabled.prefilter is None
     for name, frame in frames:
-        first = plain.detect(frame)
-        second = explicit_none.detect(frame)
-        assert dict(first.metadata) == dict(second.metadata), name
-        assert first.detected == second.detected
-        assert not any("prefilter" in key for key in first.metadata), name
+        result = disabled.detect(frame)
+        assert not any("prefilter" in key for key in result.metadata), name
 
 
 def test_default_candidate_count_unchanged(config, skin_templates, frames, monkeypatch) -> None:  # noqa: ANN001
-    """未启用预筛时，每帧仍对**全部**模板调用精匹配。"""
-    detector = BottomMenuYardDetector(YARD, config.evidence.detectors[YARD], skin_templates)
+    """未启用预筛时，每帧仍对**全部**模板调用精匹配（生产已启用预筛 ⇒ 显式关闭后再验证）。"""
+    detector = with_prefilter(
+        config.evidence.detectors[YARD], skin_templates, algorithm="none", top_k=0
+    )
+    assert detector.prefilter is None
     calls = {"count": 0}
     original = detector._matcher.match  # noqa: SLF001
 

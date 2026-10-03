@@ -131,11 +131,16 @@ def test_production_config_only_yard_is_downscaled(yard_config, app_config) -> N
 
 
 def test_production_config_keeps_threshold_and_templates(yard_config) -> None:  # noqa: ANN001
-    """接入降采样不得顺带改动阈值、模板预算与 ROI。"""
+    """降采样接入不得顺带改动阈值与 ROI。
+
+    模板库规模此后由 Phase 11.7-C 显式声明为 36 张（显式集合），因此这里断言
+    "阈值 / ROI / 模板目录不变"，而不再断言旧的 12 张预算。
+    """
     assert yard_config.threshold == 0.85
-    assert yard_config.max_templates == 12
     assert yard_config.roi == (0.0, 0.8, 1.0, 1.0)
     assert yard_config.template_source == "dataset/features/bottom_menu/yard/positive"
+    assert yard_config.roi_scale == 0.75
+    assert yard_config.max_templates == yard_config.explicit_template_count == 36
 
 
 # ---------------------------------------------------------------------------
@@ -165,10 +170,16 @@ def test_identity_scale_matches_reference_implementation(yard_config, templates,
 def test_identity_scale_keeps_metadata_unchanged(yard_config, templates, frames) -> None:  # noqa: ANN001
     """``roi_scale = 1.0`` 时 ``metadata`` 不含 ``roi_scale`` 键（既有字段集不变）。"""
     detector = detector_with_scale(yard_config, templates, 1.0)
-    name, frame = frames[0]
-    result = detector.detect(frame)
-    assert "roi_scale" not in result.metadata, name
-    assert {"template_id", "raw_confidence", "roi", "template_count"} <= set(result.metadata)
+    for name, frame in frames:
+        result = detector.detect(frame)
+        if not result.detected:
+            continue
+        assert "roi_scale" not in result.metadata, name
+        assert {"template_id", "raw_confidence", "roi", "template_count"} <= set(
+            result.metadata
+        ), name
+        return
+    pytest.fail("该批图上应至少有一张可命中样本")
 
 
 def test_downscaled_metadata_records_scale(yard_config, templates, frames) -> None:  # noqa: ANN001

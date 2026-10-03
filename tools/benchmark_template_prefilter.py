@@ -77,6 +77,11 @@ NEGATIVE_DIRS: tuple[str, ...] = (
 HARD_NEGATIVE_DIRS: tuple[str, ...] = ("raw/unknown/friends", "raw/unknown/shop")
 #: 生产阈值（本阶段不得改动；判定一律用它）
 PRODUCTION_THRESHOLD = 0.85
+#: Phase 11.7-B 之前的 **Production12 基线**（固定值，不随当前生产配置漂移）：
+#: 12 张 = cap_001 + skin001-011（dedupe 6 + round_robin）。
+#: Phase 11.7-C 起生产已改为"显式 36 张 + Top-4"，但 A/B 对照必须继续引用同一份旧基线。
+LEGACY_PRODUCTION_TEMPLATES = 12
+LEGACY_PRODUCTION_DEDUPE = 6
 #: 诊断探针阈值（只读原始分数，不做判定）
 PROBE_THRESHOLD = 0.001
 #: 待测 Top-K
@@ -594,8 +599,9 @@ def run_analysis(
 
     # --- 模板集合 ---
     production_templates = load_templates(
-        config, limit=detector_config.max_templates, dedupe_threshold=detector_config.dedupe_threshold,
-        round_robin=bool(detector_config.round_robin), root=root,
+        config, limit=LEGACY_PRODUCTION_TEMPLATES,
+        dedupe_threshold=LEGACY_PRODUCTION_DEDUPE,
+        round_robin=True, root=root,
     )
     naive_templates = load_templates(
         config, limit=0, dedupe_threshold=0, round_robin=True, root=root, skin_only=True
@@ -970,8 +976,9 @@ def run_latency(
     threshold = float(detector_config.threshold)
 
     production_templates = load_templates(
-        config, limit=detector_config.max_templates, dedupe_threshold=detector_config.dedupe_threshold,
-        round_robin=bool(detector_config.round_robin), root=root,
+        config, limit=LEGACY_PRODUCTION_TEMPLATES,
+        dedupe_threshold=LEGACY_PRODUCTION_DEDUPE,
+        round_robin=True, root=root,
     )
     naive_templates = load_templates(
         config, limit=0, dedupe_threshold=0, round_robin=True, root=root, skin_only=True

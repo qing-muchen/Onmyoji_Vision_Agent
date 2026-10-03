@@ -702,6 +702,11 @@ class EvidenceDetectorConfig(StrictModel):
         prefilter_top_k: 每帧进入精匹配的候选数量（Phase 11.7-B）。``0``（默认）= 不预筛；
             ``>= 已加载模板数`` 等价全量匹配。**与 ``max_templates`` 严格分离**：
             ``max_templates`` 决定"模板库规模"，``prefilter_top_k`` 决定"每帧精匹配数量"。
+        template_include: **显式模板集合**（Phase 11.7-C）：stable template id 列表（文件名去扩展名）。
+            非空时**精确加载这些模板**并**跳过** ``dedupe_threshold`` / ``per_source_limit`` /
+            ``round_robin``（它们都是"自动选择"策略，会改变显式指定的集合）——因此这三者必须为
+            关闭值（``0`` / ``0`` / ``False``），否则配置校验直接报错。selector 只允许字母/数字/下划线，
+            不允许路径分隔符或 ``..``。空列表（默认）= 保持既有行为。
         dedupe_threshold: 模板去重的 dHash 汉明距离阈值（Phase 11.5，``0`` = 不去重）。
         per_source_limit: 每个来源（``cap`` / ``skinNNN``）最多保留多少张模板
             （Phase 11.5，``0`` = 不限制）。
@@ -725,6 +730,7 @@ class EvidenceDetectorConfig(StrictModel):
     template_prefilter: str = "none"
     prefilter_top_k: int = Field(default=0, ge=0)
     max_templates: int = Field(default=DEFAULT_EVIDENCE_MAX_TEMPLATES, ge=0)
+    template_include: list[str] = Field(default_factory=list)
     dedupe_threshold: int = Field(default=0, ge=0)
     per_source_limit: int = Field(default=0, ge=0)
     round_robin: bool = False
@@ -759,10 +765,58 @@ class EvidenceDetectorConfig(StrictModel):
             raise ValueError(f"template_prefilter 只支持 {allowed}，收到 {value!r}")
         return value
 
+    @field_validator("template_include")
+    @classmethod
+    def _validate_template_include(cls, value: list[str]) -> list[str]:
+        """校验显式 selector：只允许 stable template id 形态（字母/数字/下划线），且不重复。
+
+        这样既阻止 ``../`` 之类的越界路径，也阻止 "selector 指向模板目录之外的图片"。
+        """
+        for item in value:
+            if not isinstance(item, str) or not item:
+                raise ValueError(f"template_include selector 不能为空: {item!r}")
+            if not all(char.isalnum() or char == "_" for char in item):
+                raise ValueError(
+                    "template_include selector 非法（只允许字母/数字/下划线，"
+                    f"不允许路径分隔符或 '..'）: {item!r}"
+                )
+        if len(set(value)) != len(value):
+            raise ValueError(f"template_include 不允许重复 selector: {sorted(value)}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_template_include_mode(self) -> EvidenceDetectorConfig:
+        """显式集合模式下：自动选择策略必须关闭，且集合不得超过 ``max_templates``。"""
+        if not self.template_include:
+            return self
+        conflicts: list[str] = []
+        if self.dedupe_threshold:
+            conflicts.append(f"dedupe_threshold={self.dedupe_threshold}")
+        if self.per_source_limit:
+            conflicts.append(f"per_source_limit={self.per_source_limit}")
+        if self.round_robin:
+            conflicts.append("round_robin=True")
+        if conflicts:
+            raise ValueError(
+                "template_include（显式集合）要求关闭自动选择策略（否则集合会被静默改变），"
+                f"当前仍启用: {', '.join(conflicts)}"
+            )
+        if self.max_templates and self.max_templates < len(self.template_include):
+            raise ValueError(
+                f"template_include 有 {len(self.template_include)} 个 selector，"
+                f"超过 max_templates={self.max_templates}（会被静默截断，拒绝）"
+            )
+        return self
+
     @property
     def prefilter_enabled(self) -> bool:
         """预筛是否真的启用（算法非 ``none`` 且 ``prefilter_top_k > 0``）。"""
         return self.template_prefilter != "none" and self.prefilter_top_k > 0
+
+    @property
+    def explicit_template_count(self) -> int:
+        """显式模板集合声明的模板数（``0`` = 未使用显式集合）。"""
+        return len(self.template_include)
 
     def matcher_config(self) -> TemplateDetectorConfig:
         """构造供 :class:`~src.vision.detector.template.matcher.TemplateMatcher` 使用的配置。

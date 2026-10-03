@@ -76,13 +76,18 @@ def all_templates(config: AppConfig) -> tuple[TemplateInfo, ...]:
 
 
 def production_templates(config: AppConfig) -> tuple[TemplateInfo, ...]:
-    """当前生产配置实际加载的模板（12 张）。"""
-    detector_config = config.evidence.detectors[YARD]
+    """Phase 11.7-B 的 **Production12 基线**（12 张：cap_001 + skin001-011）。
+
+    注意：Phase 11.7-C 起**当前生产配置**已改为"显式 36 张 + Top-4 预筛"。
+    本函数刻意使用固定参数（12 / dedupe 6 / round_robin），使 11.7-B 报告里的
+    A/B 对照在配置演进后仍然可复现；"当前生产库"由
+    ``tools/verify_yard_production_prefilter.py`` 负责。
+    """
     return bench.load_templates(
         config,
-        limit=detector_config.max_templates,
-        dedupe_threshold=detector_config.dedupe_threshold,
-        round_robin=bool(detector_config.round_robin),
+        limit=bench.LEGACY_PRODUCTION_TEMPLATES,
+        dedupe_threshold=bench.LEGACY_PRODUCTION_DEDUPE,
+        round_robin=True,
     )
 
 

@@ -202,32 +202,67 @@ evidence:
       roi: [0.00, 0.80, 1.00, 1.00]
       templates: "dataset/features/bottom_menu/yard/positive"
       threshold: 0.85
-      # Phase 11.5 数据审计：模板只是"cap"一个来源，且原先只加载 8 张（恰为自匹配）⇒ 泛化 0。
-      # Phase 11.5-B 派生皮肤模板并实测（阈值 0.85 不变、负样本 80 张、留一法排除自匹配）：
-      #   模板目录现有 61 张（cap 28 + skin 33，覆盖 18/18 种皮肤，来源映射见
-      #   dataset/features/bottom_menu/yard/positive_sources.json）
-      #   稳健耗时基准（30 张 × 3 次取中位数）：单项 ≈ 17ms×模板数，整链 ≈ 单项 + 282ms
-      #   ⇒ 500ms 节拍内上限约 12 张；实测各级覆盖（LOO 泛化）：
-      #     16 张均匀抽样 → LOO 24/98，整链 554ms（超预算）
-      #     12 张轮转     → LOO 29/98，整链 ~486ms（节拍内）★ 采用
-      #     16 张轮转     → LOO 33/98，整链 ~554ms（超预算）
-      #     24 张轮转     → LOO 41/98，整链 ~684ms（需先做匹配耗时优化）
-      max_templates: 12
-      # 去掉近重复模板（dHash ≤ 6）：同一场景的连续帧不应重复占用模板配额
-      dedupe_threshold: 6
-      # 按来源**轮转**抽样：预算 12 ≥ 已加载来源数 12 ⇒ 每种皮肤保证至少 1 张进入 detector，
-      # 避免"整类皮肤被均匀抽样漏掉"（实测同样 16 张预算下轮转比均匀多 9 次 LOO 命中）
-      round_robin: true
-      # 每来源限量仍不启用（轮转已保证来源分散；限量会额外削减同一来源的多张代表）
+      # ---- Phase 11.7-C：显式 36 张模板集合 + Top-4 候选预筛（生产启用）----
+      # 模板目录现有 61 张（cap 28 + skin 33，覆盖 18/18 皮肤）。来源映射
+      #   dataset/features/bottom_menu/yard/positive_sources.json **只覆盖 33 张 skin**
+      #   （cap 模板无来源映射），因此 selector 使用 stable template id 而非 source_id。
+      # Phase 11.7-B 用 61 张全量分数表实测（98 正 + 80 canonical 负，阈值 0.85，LOO 排除同源）：
+      #   Production12（cap_001 + skin001-011）→ TP 41 / LOO 29 / FP 0
+      #   Skin33                               → TP 73 / LOO 50
+      #   Skin33 + cap{006,003,007} = 36 张 ★   → TP 81 / LOO 56 / FP 0
+      # cap 贪心（数据驱动）：cap_006 +5TP/+4LOO → cap_003 +2/+1 → cap_007 +1/+1 → 之后 LOO 增益 0。
+      #   注意 Production12 的唯一独有命中（yard_cap_001）是 cap_001 的**自匹配**，LOO 下为 0。
+      # 显式集合语义：**跳过** dedupe / per_source_limit / round_robin（自动选择策略会改变显式集合），
+      #   配置校验强制这三者为关闭值（0/0/false）；selector 只允许字母/数字/下划线（禁止 ../ 越界）。
+      template_include:
+        - bottom_menu_yard_skin001_001
+        - bottom_menu_yard_skin001_003
+        - bottom_menu_yard_skin001_005
+        - bottom_menu_yard_skin002_001
+        - bottom_menu_yard_skin002_003
+        - bottom_menu_yard_skin002_005
+        - bottom_menu_yard_skin003_001
+        - bottom_menu_yard_skin003_003
+        - bottom_menu_yard_skin003_004
+        - bottom_menu_yard_skin003_005
+        - bottom_menu_yard_skin004_001
+        - bottom_menu_yard_skin004_003
+        - bottom_menu_yard_skin004_005
+        - bottom_menu_yard_skin005_001
+        - bottom_menu_yard_skin005_005
+        - bottom_menu_yard_skin006_001
+        - bottom_menu_yard_skin006_003
+        - bottom_menu_yard_skin006_005
+        - bottom_menu_yard_skin007_001
+        - bottom_menu_yard_skin007_003
+        - bottom_menu_yard_skin008_001
+        - bottom_menu_yard_skin008_003
+        - bottom_menu_yard_skin008_005
+        - bottom_menu_yard_skin009_001
+        - bottom_menu_yard_skin010_001
+        - bottom_menu_yard_skin011_001
+        - bottom_menu_yard_skin012_001
+        - bottom_menu_yard_skin013_001
+        - bottom_menu_yard_skin014_001
+        - bottom_menu_yard_skin015_001
+        - bottom_menu_yard_skin016_001
+        - bottom_menu_yard_skin017_001
+        - bottom_menu_yard_skin018_001
+        - bottom_menu_yard_cap_006
+        - bottom_menu_yard_cap_003
+        - bottom_menu_yard_cap_007
+      # 显式集合 = 36 张；max_templates 仅作安全上限（小于集合数会被拒绝加载，不会静默截断）
+      max_templates: 36
+      dedupe_threshold: 0
       per_source_limit: 0
-      # Phase 11.6-C：ROI 降采样比例（1.0 = 不降采样，保持既有行为）。
-      #   生产配置实测（tools/benchmark_roi_downscale.py --mode production --repeat 3，
-      #   98 正 + 41 负；阈值 0.85 与 12 张模板均未改动）：
-      #     1.00 → 单项 p50 151.2ms，判定 41 TP / 57 FN / 0 FP / 41 TN
-      #     0.75 → 单项 p50  83.0ms（0.549×），判定与 1.0 **完全相同**（逐图 0 翻转），
-      #            命中框越界 0（bbox 已 clamp 回 ROI）
-      #     0.50 → 单项 p50  22.3ms（0.148×），同样 0 翻转（本阶段未接入）
-      #   ⇒ 首次只接入 0.75；其余 detector 保持默认 1.0（未验证，勿批量开启）。
+      round_robin: false
+      # ---- Phase 11.7-B/C：模板候选预筛（只减少每帧进入精匹配的模板数）----
+      # 36 张 naive ≈ 256ms → thumb Top-4 p50 29.9ms（matchTemplate 180 → 20 次/帧，−89%）；
+      # candidate recall@4 = 1.0、判定 0 翻转、bbox IoU 1.0 / 越界 0；只有预筛自身故障才回退全量。
+      # ``none`` / ``0`` 表示关闭预筛（可用于"只换模板库"的诊断对照）。
+      template_prefilter: thumb
+      prefilter_top_k: 4
+      # Phase 11.6-C：ROI 降采样比例（1.0 = 不降采样）。0.75 与 1.0 判定逐图一致、bbox 越界 0。
       roi_scale: 0.75
     bottom_menu_exploration:
       enabled: true

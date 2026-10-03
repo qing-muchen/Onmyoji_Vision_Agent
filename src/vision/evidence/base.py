@@ -307,6 +307,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
                     dedupe_threshold=int(getattr(detector_config, "dedupe_threshold", 0) or 0),
                     per_source_limit=int(getattr(detector_config, "per_source_limit", 0) or 0),
                     round_robin=bool(getattr(detector_config, "round_robin", False)),
+                    # Phase 11.7-C：显式模板集合（默认空 ⇒ 完全保持既有加载行为）
+                    include=tuple(getattr(detector_config, "template_include", ()) or ()) or None,
                     root=root,
                 )
             )

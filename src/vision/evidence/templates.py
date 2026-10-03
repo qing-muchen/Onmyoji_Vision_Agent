@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import cv2
@@ -179,6 +180,58 @@ def limit_per_source(templates: list[TemplateInfo], *, limit: int) -> list[Templ
     return kept
 
 
+def _select_explicit_templates(
+    templates: list[TemplateInfo],
+    include: Sequence[str],
+    *,
+    detector_name: str,
+    limit: int,
+) -> list[TemplateInfo]:
+    """按**显式 template id 列表**精确选模板（Phase 11.7-C）。
+
+    显式集合的语义是"我就要这些"：因此**跳过去重、每来源限量与抽样**（它们都是"自动选择"
+    策略，会改变用户明确指定的集合），只保留 ``limit`` 作为**安全上限**。
+
+    Args:
+        templates: 目录扫描得到的全部模板（顺序为文件名排序）。
+        include: 显式 selector（stable template id，即文件名去扩展名）。
+        detector_name: detector 名（用于错误信息）。
+        limit: 安全上限（``<=0`` 表示不限）。
+
+    Returns:
+        按 ``include`` 顺序排列的模板列表。
+
+    Raises:
+        EvidenceTemplateLoadError: selector 重复、指向不存在的模板、目录存在重复 template id、
+            或显式集合超过 ``limit``（**拒绝静默截断**）。
+    """
+    if len(set(include)) != len(include):
+        duplicated = sorted({key for key in include if list(include).count(key) > 1})
+        raise EvidenceTemplateLoadError(f"template_include 存在重复 selector: {duplicated}")
+
+    by_id: dict[str, TemplateInfo] = {}
+    for item in templates:
+        if item.template_id in by_id:
+            raise EvidenceTemplateLoadError(
+                f"模板目录存在重复 template_id: {item.template_id!r}（无法唯一定位）"
+            )
+        by_id[item.template_id] = item
+
+    missing = [key for key in include if key not in by_id]
+    if missing:
+        raise EvidenceTemplateLoadError(
+            f"detector {detector_name} 的 template_include 指向不存在的模板: {missing}"
+        )
+
+    selected = [by_id[key] for key in include]
+    if limit > 0 and len(selected) > limit:
+        raise EvidenceTemplateLoadError(
+            f"detector {detector_name} 的显式模板集合 {len(selected)} 张"
+            f"超过 max_templates={limit}（拒绝静默截断，请显式修正配置）"
+        )
+    return selected
+
+
 def load_feature_templates(
     directory: str | Path,
     detector_name: str,
@@ -187,6 +240,7 @@ def load_feature_templates(
     dedupe_threshold: int = 0,
     per_source_limit: int = 0,
     round_robin: bool = False,
+    include: Sequence[str] | None = None,
     root: Path | None = None,
 ) -> list[TemplateInfo]:
     """加载证据模板目录（``dataset/features/<detector>/positive/``）。
@@ -201,6 +255,11 @@ def load_feature_templates(
             最多保留这么多张，让覆盖尽量分散到不同皮肤；``0``（默认）不过滤。
         round_robin: Phase 11.5-B —— ``True`` 时用**按来源轮转**代替均匀抽样，
             保证"预算 ≥ 来源数 ⇒ 每个来源至少 1 张"（避免整类皮肤被抽样漏掉）。
+        include: Phase 11.7-C —— **显式模板集合**（stable template id 列表）。非空时
+            **跳过**去重 / 每来源限量 / 抽样（这些"自动选择"策略会改变显式指定的集合），
+            只保留 ``limit`` 作为安全上限；任何 selector 无法解析、重复、或集合超过
+            ``limit`` 都会**直接报错**，绝不静默加载"差不多"的数量。
+            空 / ``None``（默认）= 完全保持既有行为。
         root: 解析相对路径的基准目录；省略时使用项目根。
 
     Returns:
@@ -250,6 +309,21 @@ def load_feature_templates(
                 image=image,
             )
         )
+
+    if include:
+        # Phase 11.7-C：显式集合 —— 跳过 dedupe / per_source_limit / 抽样，
+        # 保证"配置声明的集合 = 实际加载的集合"（可复现、可审计）
+        selected = _select_explicit_templates(
+            templates, include, detector_name=detector_name, limit=limit
+        )
+        logger.info(
+            "证据模板加载完成（显式集合）：detector=%s, 可用=%d, 使用=%d（dir=%s）",
+            detector_name,
+            len(templates),
+            len(selected),
+            base,
+        )
+        return selected
 
     deduped = dedupe_templates(templates, threshold=dedupe_threshold)
     limited = limit_per_source(deduped, limit=per_source_limit)

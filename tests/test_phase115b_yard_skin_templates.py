@@ -237,39 +237,55 @@ def live_yard_config():
     return load_config(environ={}).evidence.detectors["bottom_menu_yard"]
 
 
-def test_live_config_uses_budgeted_templates_and_round_robin() -> None:
-    """接入后的真实配置：12 张 + 轮转；阈值 / ROI / 证据集合保持不变。"""
+def test_live_config_uses_explicit_template_set_and_prefilter() -> None:
+    """接入后的真实配置（Phase 11.7-C）：显式 36 张 + Top-4 预筛；阈值 / ROI / 证据集合不变。"""
     config = live_yard_config()
 
-    assert config.max_templates == 12
-    assert config.round_robin is True
-    assert config.dedupe_threshold == 6
+    assert config.explicit_template_count == 36
+    assert config.max_templates == 36
+    # 显式集合模式下必须关闭自动选择策略（由配置校验强制）
+    assert config.round_robin is False
+    assert config.dedupe_threshold == 0
     assert config.per_source_limit == 0
+    # Phase 11.7-B/C：候选预筛（只减少每帧精匹配数，不改判定语义）
+    assert config.template_prefilter == "thumb"
+    assert config.prefilter_top_k == 4
+    assert config.prefilter_enabled is True
     assert config.threshold == pytest.approx(0.85)  # **未降低阈值**
     assert tuple(config.roi) == (0.0, 0.8, 1.0, 1.0)  # ROI 未改
+    assert config.roi_scale == pytest.approx(0.75)  # Phase 11.6-C 起
     assert config.text_targets == []  # 未引入第二证据 / 新 detector
 
 
 def test_live_config_respects_the_500ms_cycle_budget() -> None:
-    """确定性预算断言：预测整链耗时必须落在 500ms 节拍内（防止日后盲目调大模板数）。"""
+    """确定性预算断言：预测整链耗时必须落在 500ms 节拍内（防止日后盲目调大匹配规模）。
+
+    Phase 11.7-C 起，**每帧实际精匹配的模板数**由 ``prefilter_top_k`` 决定（而不是模板库
+    规模 ``max_templates``），因此预算模型使用前者；同时对照"无预筛"情形仍会超预算。
+    """
     config = live_yard_config()
-    predicted_ms = CHAIN_BASE_MS + CHAIN_PER_TEMPLATE_MS * config.max_templates
+    per_frame = config.prefilter_top_k if config.prefilter_enabled else config.max_templates
+    predicted_ms = CHAIN_BASE_MS + CHAIN_PER_TEMPLATE_MS * per_frame
 
     assert predicted_ms <= CYCLE_BUDGET_MS, (
         f"预测整链 {predicted_ms:.0f}ms 超出 {CYCLE_BUDGET_MS:.0f}ms 节拍预算；"
-        "若确实要扩模板，必须先做匹配耗时优化（Phase 11.6）"
+        "若确实要扩每帧精匹配数，必须先做匹配耗时优化（Phase 11.6）"
     )
+    naive_predicted_ms = CHAIN_BASE_MS + CHAIN_PER_TEMPLATE_MS * config.max_templates
+    assert naive_predicted_ms > CYCLE_BUDGET_MS, "36 张 naive 正是本阶段用预筛解决的超预算场景"
 
 
 def test_live_detector_loads_exactly_max_templates_and_spreads_sources() -> None:
-    """实际加载模板数 = max_templates，且轮转让 12 张来自 12 个不同来源。"""
+    """实际加载模板数 = max_templates = 显式集合大小，且覆盖全部 18 种皮肤。"""
     from src.vision.evidence.detectors.bottom_menu import BottomMenuYardDetector
 
+    config = load_config(environ={}).evidence.detectors["bottom_menu_yard"]
     detector = BottomMenuYardDetector.from_config(load_config(environ={}).evidence)
 
-    assert len(detector.templates) == 12
-    sources = [item.skin for item in detector.templates]
-    assert len(set(sources)) == 12  # 每来源 1 张（轮转）
+    assert len(detector.templates) == config.max_templates == config.explicit_template_count == 36
+    skins = [item.skin for item in detector.templates]
+    assert len({skin for skin in skins if skin.startswith("skin")}) == 18  # 18/18 皮肤
+    assert len({skin for skin in skins if not skin.startswith("skin")}) == 1  # cap 来源
 
 
 def test_live_templates_have_source_manifest() -> None:

@@ -2190,9 +2190,25 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   操作数 **180 → 20 次/帧（−89%）**、bbox IoU 1.0 / 中心误差 0 / 越界 0、
   负样本安全边际与 33 张时逐位相同（max 0.7793）。**yard 本阶段仍未启用**新配置。
   测试 **1680 passed / 1 skipped**（+36）。详见 `docs/PHASE11_7B_TEMPLATE_PREFILTER_PRODUCTION_HARDENING_REPORT.md`。
-- 后续（未执行）：Phase 11.7-C 正式启用 —— 先补"精确加载 36 张"的策略（现有多重回抽样无法表达
-  "33 skin + 指定 3 cap"），再按推荐配置开启 `max_templates: 36 / template_prefilter: thumb / prefilter_top_k: 4`；
-  评估 ROI 缓存（11.6-A）与 `roi_scale = 0.5`；
+- Phase 11.7-C（**已完成：精确模板集合 + yard 生产启用**，`feat(vision): enable yard template prefilter
+  in production`）：新增**显式模板集合**能力 `evidence.detectors.<name>.template_include`（stable template id
+  列表，**默认空 = 旧行为不变**）；非空时**按声明顺序精确加载**并**跳过** dedupe / per_source_limit /
+  round_robin（配置校验强制这三者为关闭值），任何 selector 无法解析 / 重复 / 集合超过 `max_templates`
+  都**直接报错**（绝不静默加载 35 或 37 张）。**`bottom_menu_yard` 正式启用**：
+  `template_include` = **36 张**（Skin33 + `cap_006/003/007`）+ `max_templates: 36` + `round_robin: false`
+  + `dedupe_threshold: 0` + `template_prefilter: thumb` + `prefilter_top_k: 4`；`threshold 0.85` /
+  `roi_scale 0.75` **未变**。**生产路径实测**（`tools/verify_yard_production_prefilter.py`，走
+  `BottomMenuYardDetector.from_config` + `detect()`）：加载 **36 张**、每帧候选 **4**、
+  `matchTemplate` **60 → 20 次/帧**，**TP 41 → 81 / LOO 29 → 56 / FP 0 / TN 80**、
+  candidate recall@4 **1.0**、bbox 越界 **0** 且选中模板差异 **0**、fallback **0**、
+  `detect()` p50 **45.1ms**（p95 53.6ms，整链推算 ≈327ms）；
+  唯一退化是 `yard_cap_001` 的自匹配命中（净 **+40**）。**rollback 实测可用**：
+  清空 `template_include` + `max_templates: 12` + `round_robin: true` + `dedupe_threshold: 6`
+  + `prefilter: none` ⇒ 12 张 / TP 41 / calls 60 / metadata 无预筛字段。
+  测试 **1718 passed / 1 skipped**（+38）。详见 `docs/PHASE11_7C_YARD_PREFILTER_PRODUCTION_REPORT.md`。
+- 后续（未执行）：跨分辨率 / 多 DPI 真实数据验证（Phase 11.8，不用合成缩放冒充）；
+  把"模板集合重新选择流程"（贪心覆盖 + LOO 饱和）产品化；评估 `roi_scale = 0.5` 与 ROI 缓存（11.6-A）；
+  其它 detector 的 prefilter 评估；
   **由独立审核者**复核 8 条草稿
   （`review_pack/` → `promote --approve`）；目视核查 `battle_reward` 并把试点扩到 10–20 张；
   补 `battle_auto_button` 点击热区候选；补采（跨分辨率 / 多 DPI / 新活动皮肤 / 会话登记）；
