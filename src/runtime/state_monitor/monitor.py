@@ -93,6 +93,10 @@ __all__ = ["StateMonitor"]
 
 logger = get_logger("runtime.state_monitor.monitor")
 
+#: Phase 11.8：yard 观测目标（证据名）。仅用于**读取**已存在的证据 / 画像，
+#: 不代表 Runtime 参与视觉判定（判定仍完全由 vision 层完成）。
+YARD_EVIDENCE_NAME: str = "bottom_menu_yard"
+
 
 class StateMonitor:
     """按固定周期采集帧、判定状态、稳定化并记录变化的监控器。
@@ -140,6 +144,9 @@ class StateMonitor:
         on_cycle: Callable[[CycleSchedule], None] | None = None,
         vision_bridge: Any | None = None,
         task_bridge: Any | None = None,
+        yard_metrics: bool = False,
+        action_enabled: bool | None = None,
+        action_backend: str | None = None,
     ) -> None:
         """（Phase 7.3 / 7.5 新增参数见末尾说明。）
 
@@ -179,6 +186,16 @@ class StateMonitor:
                 **默认 ``None`` = 完全不接线**（行为与此前一致）。编排桥内部持有
                 ``TaskEngine`` 与任务清单，本层**不**直接依赖 ``src.task`` / ``src.action``；
                 它同样不调用 ``ActionDispatcher``、不产生任何输入。
+            yard_metrics: **是否采集 yard 运行期观测**（Phase 11.8；默认 ``False`` = 零额外开销）。
+
+                开启后每轮额外记录：evidence ``profile`` 里的 yard 单项耗时、yard 证据
+                ``metadata`` 里的预筛候选数 / 回退状态 / 回退原因、视觉快照状态与累计失效、
+                活动任务 id、以及动作层安全配置（``action_enabled`` / ``action_backend``）。
+                全部为标量与短字符串，**不含图像、候选列表或模板列表**；只在
+                :class:`~src.runtime.state_monitor.metrics.CycleMetrics` 上追加字段，
+                不改变任何判定。
+            action_enabled / action_backend: 动作层安全快照（仅用于观测记录；
+                本层**不**接触 ``ActionDispatcher`` 或输入后端）。
         """
         # 渐进迁移（Phase 5）：第一个位置参数既可以是证据流水线（推荐），也可以是状态分类器
         # （Phase 3.0 旧行为）；显式传入的 ``processor`` 优先级最高。
@@ -222,6 +239,11 @@ class StateMonitor:
         self._on_cycle = on_cycle
         self._vision_bridge = vision_bridge
         self._task_bridge = task_bridge
+        # Phase 11.8：yard 运行期观测（默认关闭 ⇒ 零额外开销，且指标输出与既有版本一致）
+        self._yard_metrics = bool(yard_metrics)
+        self._action_enabled = action_enabled
+        self._action_backend = action_backend
+        self._last_detect_ms: float | None = None
         self._events: list[StateEvent] = []
         self._current_state: StateName | None = None
         self._last_result: StateResult | None = None
@@ -256,6 +278,8 @@ class StateMonitor:
         on_event: Callable[[StateEvent], None] | None = None,
         on_stable: Callable[[StableStateResult], None] | None = None,
         on_cycle: Callable[[CycleSchedule], None] | None = None,
+        vision_bridge: Any | None = None,
+        task_bridge: Any | None = None,
     ) -> StateMonitor:
         """按应用配置装配监控器。
 
@@ -319,6 +343,13 @@ class StateMonitor:
             on_event=on_event,
             on_stable=on_stable,
             on_cycle=on_cycle,
+            # Phase 11.8：可选接线（省略 = 完全不接线，行为与此前一致）
+            vision_bridge=vision_bridge,
+            task_bridge=task_bridge,
+            # Phase 11.8：yard 观测开关 + 动作层安全快照（仅用于记录，不改变任何行为）
+            yard_metrics=bool(config.runtime.state_monitor.yard_metrics),
+            action_enabled=bool(config.action.enabled),
+            action_backend=str(config.action.backend),
         )
 
     @property
@@ -489,8 +520,11 @@ class StateMonitor:
             frame_ms: 取帧耗时（由 :meth:`run` 传入；**仅**用于耗时画像，默认 ``0.0``）。
         """
         judge_started = time.perf_counter()
-        result, detect_ms, state_ms = self._classify(frame, profile=self._timing_enabled)
+        result, detect_ms, state_ms = self._classify(
+            frame, profile=self._timing_enabled or self._yard_metrics
+        )
         judge_ms = (time.perf_counter() - judge_started) * 1000.0
+        self._last_detect_ms = detect_ms
         self._last_result = result
         self._classified += 1
 
@@ -591,7 +625,14 @@ class StateMonitor:
         try:
             if self._processor is not None:
                 started = time.perf_counter()
-                evidence = self._processor.detect(frame)
+                # Phase 11.8：``profile`` 同时驱动逐 detector 耗时采集（供 yard 观测使用）。
+                # 仅在**需要画像时**才传该关键字参数 —— 保持 ``detect(frame)`` 这一既有契约
+                # 对鸭子类型的 processor 实现（例如测试替身）依然成立。
+                evidence = (
+                    self._processor.detect(frame, profile=True)
+                    if profile
+                    else self._processor.detect(frame)
+                )
                 if profile:
                     detect_ms = (time.perf_counter() - started) * 1000.0
                     started = time.perf_counter()
@@ -684,9 +725,86 @@ class StateMonitor:
                 runtime_state=self._lifecycle.state.value,
                 recovery_count=self._recovery.count,
                 last_recovery_reason=self._recovery.last_reason,
+                # Phase 11.8：yard 运行期观测（未开启时为空 dict ⇒ 字段保持 None）
+                **self._yard_observation(),
             ),
             overrun_ms=schedule.overrun_ms,
         )
+
+    def _yard_observation(self) -> dict[str, Any]:
+        """采集本轮 yard 运行期观测（Phase 11.8；未开启时返回空字典）。
+
+        数据**全部来自 Runtime 已持有的对象**，不跨层 import，也不访问 detector 的私有属性：
+
+        * yard 单项耗时 → ``processor.registry.last_profile``（``profile=True`` 的既有产物）；
+        * 预筛候选 / 回退 → yard 证据的 ``metadata``（vision 层在启用预筛时写入）；
+        * 快照状态 / 累计失效 → ``vision_bridge.stats``；
+        * 活动任务 → ``task_bridge.active_task_id``；
+        * 安全确认 → 装配期记录的 action 配置。
+
+        取不到的项一律留空（``None``），不猜测、不伪造。
+        """
+        if not self._yard_metrics:
+            return {}
+        observation: dict[str, Any] = {
+            "frame_id": self._cycles,
+            "vision_ms": self._last_detect_ms,
+            "action_enabled": self._action_enabled,
+            "action_backend": self._action_backend,
+        }
+
+        profile = self._profile_of(YARD_EVIDENCE_NAME)
+        if profile is not None:
+            observation["yard_ms"] = profile.elapsed_ms
+            observation["yard_total_templates"] = profile.templates or None
+        evidence = self._evidence_of(YARD_EVIDENCE_NAME)
+        if evidence is not None:
+            observation["yard_detected"] = bool(getattr(evidence, "detected", False))
+            observation["yard_confidence"] = float(getattr(evidence, "confidence", 0.0) or 0.0)
+            metadata = dict(getattr(evidence, "metadata", None) or {})
+            observation["yard_template_id"] = metadata.get("template_id")
+            if metadata.get("template_prefilter") is not None:
+                observation["yard_prefilter"] = metadata.get("template_prefilter")
+                observation["yard_top_k"] = metadata.get("prefilter_top_k")
+                observation["yard_candidates"] = metadata.get("prefilter_candidate_count")
+                observation["yard_prefilter_ms"] = metadata.get("prefilter_ms")
+                observation["yard_fallback"] = bool(metadata.get("prefilter_fallback", False))
+                observation["yard_fallback_reason"] = metadata.get("prefilter_fallback_reason")
+                total = metadata.get("prefilter_total_templates")
+                if total is not None:
+                    observation["yard_total_templates"] = total
+                candidates = observation.get("yard_candidates")
+                scales = len(profile.scales) if profile is not None else 0
+                if isinstance(candidates, int) and scales:
+                    observation["yard_match_calls"] = candidates * scales
+
+        bridge = self._vision_bridge
+        stats = getattr(bridge, "stats", None) if bridge is not None else None
+        if stats is not None:
+            observation["snapshot_status"] = getattr(stats, "last_reason", "") or None
+            observation["snapshot_invalidated"] = getattr(stats, "invalidated", None)
+
+        task_bridge = self._task_bridge
+        if task_bridge is not None:
+            observation["task_active"] = getattr(task_bridge, "active_task_id", None)
+        return observation
+
+    def _evidence_of(self, name: str) -> Any | None:
+        """本轮证据里按名查找（只读；未采集时为 ``None``）。"""
+        for item in self._last_evidences or ():
+            if getattr(item, "name", None) == name:
+                return item
+        return None
+
+    def _profile_of(self, name: str) -> Any | None:
+        """最近一次 evidence profile 里按名查找（仅在采集过 ``profile`` 时有值）。"""
+        registry = self._processor.registry if self._processor is not None else None
+        if registry is None:
+            return None
+        for item in getattr(registry, "last_profile", None) or ():
+            if getattr(item, "name", None) == name:
+                return item
+        return None
 
     def _source_skip_reason(self) -> str | None:
         """本轮跳过原因（来自实现了 :class:`StatusAwareSource` 的帧来源）。"""

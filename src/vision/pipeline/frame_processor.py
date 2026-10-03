@@ -166,16 +166,18 @@ class EvidenceFrameProcessor:
         """证据驱动状态分类器。"""
         return self._classifier
 
-    def detect(self, frame: Frame) -> list[EvidenceResult]:
+    def detect(self, frame: Frame, *, profile: bool = False) -> list[EvidenceResult]:
         """检测一帧的全部证据（含未命中项，顺序与注册顺序一致）。
 
         Args:
             frame: 待检测的帧。
+            profile: 是否采集逐 detector 耗时画像（Phase 5.1，默认 ``False`` =
+                零额外开销）；采集结果写入 ``registry.last_profile``。
 
         Returns:
             证据结果列表。
         """
-        return self._registry.detect_all(frame)
+        return self._registry.detect_all(frame, profile=profile)
 
     def process(self, frame: Frame, *, profile: bool = False) -> StateResult:
         """判定一帧的状态（``Frame → [EvidenceResult] → StateResult``）。

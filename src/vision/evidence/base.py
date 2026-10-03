@@ -762,6 +762,9 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
                 reason="no template matched and no target text found",
                 template_count=len(self._templates),
                 ocr_available=self.ocr_available,
+                # Phase 11.8：未命中时同样记录预筛诊断（仅在启用预筛时才有字段），
+                # 使运行期观测在"没有命中"的轮次也能看到候选数与回退状态。
+                **self._prefilter_diagnostics(),
             )
 
         if match is not None:
@@ -853,6 +856,33 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             group=self._group,
         )
 
+    def _prefilter_diagnostics(self) -> dict[str, object]:
+        """预筛诊断字段（Phase 11.7-B / 11.8）。
+
+        仅在**启用预筛**时返回非空字典：默认配置（``template_prefilter="none"`` 或
+        ``prefilter_top_k<=0``）下返回 ``{}``，保证既有 ``metadata`` 逐字段不变。
+        只记录计数、状态与耗时，**不含**候选列表或模板列表。
+
+        Returns:
+            可直接 ``update`` 进 ``metadata`` 的字典。
+        """
+        if self._last_prefilter is None:
+            return {}
+        payload: dict[str, object] = {
+            "template_prefilter": self._last_prefilter["algorithm"],
+            "prefilter_top_k": self._last_prefilter["top_k"],
+            "prefilter_candidate_count": self._last_prefilter["candidate_count"],
+            "prefilter_total_templates": self._last_prefilter["total_templates"],
+        }
+        if self._last_prefilter["fallback"]:
+            payload["prefilter_fallback"] = True
+            payload["prefilter_fallback_reason"] = self._last_prefilter["reason"]
+        roi_ms = self._last_prefilter.get("roi_feature_ms")
+        ranking_ms = self._last_prefilter.get("ranking_ms")
+        if roi_ms is not None or ranking_ms is not None:
+            payload["prefilter_ms"] = round(float(roi_ms or 0.0) + float(ranking_ms or 0.0), 4)
+        return payload
+
     def template_metadata(self, match: TemplateMatch) -> dict:
         """构造模板命中证据的附加信息。
 
@@ -876,16 +906,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             # Phase 11.6-C：记录该命中是在**降采样**的 ROI 上算出的。
             # 只在降采样时写入，保证 roi_scale = 1.0 时 metadata 与既有版本逐字段一致。
             metadata["roi_scale"] = self.roi_scale
-        if self._last_prefilter is not None:
-            # Phase 11.7-B：仅在**预筛启用**时写入观测字段（默认关闭 ⇒ metadata 不变）。
-            # 只记录计数与状态，不把完整候选列表塞进每条正式证据。
-            metadata["template_prefilter"] = self._last_prefilter["algorithm"]
-            metadata["prefilter_top_k"] = self._last_prefilter["top_k"]
-            metadata["prefilter_candidate_count"] = self._last_prefilter["candidate_count"]
-            metadata["prefilter_total_templates"] = self._last_prefilter["total_templates"]
-            if self._last_prefilter["fallback"]:
-                metadata["prefilter_fallback"] = True
-                metadata["prefilter_fallback_reason"] = self._last_prefilter["reason"]
+        metadata.update(self._prefilter_diagnostics())
         if self.template_shortfall_factor < 1.0:
             metadata["insufficient_templates"] = True
             metadata["shortfall_factor"] = self.template_shortfall_factor

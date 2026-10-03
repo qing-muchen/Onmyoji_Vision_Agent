@@ -2206,7 +2206,26 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   清空 `template_include` + `max_templates: 12` + `round_robin: true` + `dedupe_threshold: 6`
   + `prefilter: none` ⇒ 12 张 / TP 41 / calls 60 / metadata 无预筛字段。
   测试 **1718 passed / 1 skipped**（+38）。详见 `docs/PHASE11_7C_YARD_PREFILTER_PRODUCTION_REPORT.md`。
-- 后续（未执行）：跨分辨率 / 多 DPI 真实数据验证（Phase 11.8，不用合成缩放冒充）；
+- Phase 11.8（**已完成：yard 运行期 soak 验证与视觉可观测性**，`feat(runtime): add yard runtime soak
+  observability`）：① **Runtime 可观测性审查**（逐项回答"每轮已记录什么"，复用既有 `CycleMetrics` /
+  `CycleTiming` / `DetectorProfile` / `VisionBridgeStats`，**不建第二套 Telemetry**）；
+  ② **新增 19 个逐轮观测字段**（`frame_id` / `vision_ms` / `yard_ms` / `yard_detected` /
+  `yard_candidates` / `yard_match_calls` / `yard_prefilter_ms` / `yard_fallback(+reason)` /
+  `snapshot_status` / `snapshot_invalidated` / `action_enabled` / `action_backend` …），
+  由新开关 `runtime.state_monitor.yard_metrics`（**默认 false**）驱动，**默认关闭时输出逐字节不变**；
+  只记标量、单轮 JSON < 2KB、逐轮记录**有界**（`max_records=20000` FIFO）；数据全部来自 Runtime
+  已持有的对象（无跨层 import、无私有属性）；③ 新增 `tools/run_runtime_soak.py`（`--mode real|replay`、
+  `--duration`、`--max-cycles`、summary JSON 写 TEMP；**不激活窗口、不发送键鼠**、窗口不可用即报
+  `not_run`）；④ 新增离线 `ReplayFrameSource`（可复现、支持注入 capture 失败，标注 `offline_replay`）。
+  **实测**：真实窗口 `阴阳师-桌面版`（1704×960，前台）跑 **60 轮 / 30s** ⇒ cycle p50 **297ms**、
+  **p99 375ms**、**deadline miss 0**、`candidates={4:60}`、`matchTemplate={20:60}`、**fallback 0**、
+  snapshot `processed=59`、安全 `real_input=false`；replay 24 轮（注入 2 次 capture 失败）⇒
+  迁移 2 次、**flaps 0**、失效 2 次。⚠️ **真实 yard 画面未覆盖**（游戏当前不在庭院 ⇒ `detections=0/60`）
+  ⇒ `real_runtime_soak = run_but_scene_not_yard`，场景 A–F 未测试（需**人工**切到庭院后重跑）。
+  测试 **1750 passed / 1 skipped**（+32）。详见 `docs/PHASE11_8_YARD_RUNTIME_SOAK_REPORT.md`。
+- 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
+  30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
+  `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
   把"模板集合重新选择流程"（贪心覆盖 + LOO 饱和）产品化；评估 `roi_scale = 0.5` 与 ROI 缓存（11.6-A）；
   其它 detector 的 prefilter 评估；
   **由独立审核者**复核 8 条草稿

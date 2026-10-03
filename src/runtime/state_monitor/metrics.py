@@ -129,10 +129,53 @@ class CycleMetrics:
     runtime_state: str | None = None
     recovery_count: int = 0
     last_recovery_reason: str | None = None
+    # ---- Phase 11.8：yard 运行期观测（仅当 ``runtime.state_monitor.yard_metrics=True``）----
+    #: 帧号（= Runtime 轮次，与视觉快照桥的 ``frame_id`` 同口径）
+    frame_id: int | None = None
+    #: 证据检测耗时（= :class:`~src.runtime.state_monitor.timing.CycleTiming` 的 ``detect_ms``）
+    vision_ms: float | None = None
+    #: yard detector 单项耗时（来自 evidence registry 的 ``profile``）
+    yard_ms: float | None = None
+    #: yard 证据是否命中
+    yard_detected: bool | None = None
+    #: yard 证据置信度
+    yard_confidence: float | None = None
+    #: 命中的模板 id（未命中为 ``None``）
+    yard_template_id: str | None = None
+    #: 预筛算法名（``None`` = 未启用预筛）
+    yard_prefilter: str | None = None
+    #: 每帧精匹配候选上限（``None`` = 未启用预筛）
+    yard_top_k: int | None = None
+    #: 本帧实际候选数
+    yard_candidates: int | None = None
+    #: 已加载模板总数
+    yard_total_templates: int | None = None
+    #: 本帧 ``matchTemplate`` 调用数（= 候选数 × 档位数）
+    yard_match_calls: int | None = None
+    #: 预筛自身耗时（ROI 特征 + 排序）
+    yard_prefilter_ms: float | None = None
+    #: 是否发生预筛回退（回退到全量匹配）
+    yard_fallback: bool | None = None
+    #: 预筛回退原因（诊断）
+    yard_fallback_reason: str | None = None
+    #: 视觉快照状态（``processed`` / ``no_frame`` / ``window_unavailable`` / ``adapter_error`` …）
+    snapshot_status: str | None = None
+    #: 累计快照主动失效次数（Phase 11.0 语义）
+    snapshot_invalidated: int | None = None
+    #: 当前活动任务 id（``None`` = 无活动任务）
+    task_active: str | None = None
+    #: 动作层是否启用（安全确认；Phase 11.8 恒为 ``False``）
+    action_enabled: bool | None = None
+    #: 动作后端名（安全确认；Phase 11.8 恒为 ``dry_run``）
+    action_backend: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """返回可 JSON 序列化的字典（枚举转字符串，不含图像与用户数据）。"""
-        return {
+        """返回可 JSON 序列化的字典（枚举转字符串，不含图像与用户数据）。
+
+        Phase 11.8 的观测字段**仅在采集到时**追加：未开启 ``yard_metrics`` 时输出与
+        既有版本**逐字节一致**（避免给旧消费者与长跑日志带来无谓膨胀）。
+        """
+        payload: dict[str, object] = {
             "cycle_id": self.cycle_id,
             "timestamp": self.timestamp,
             "state": self.state.value if self.state is not None else None,
@@ -156,6 +199,40 @@ class CycleMetrics:
             "recovery_count": self.recovery_count,
             "last_recovery_reason": self.last_recovery_reason,
         }
+        for key, value in self._observability_items():
+            if value is not None:
+                payload[key] = value
+        return payload
+
+    def _observability_items(self) -> tuple[tuple[str, object], ...]:
+        """Phase 11.8 观测字段（键值对，按固定顺序；``None`` 表示未采集）。"""
+        return (
+            ("frame_id", self.frame_id),
+            ("vision_ms", None if self.vision_ms is None else round(self.vision_ms, 3)),
+            ("yard_ms", None if self.yard_ms is None else round(self.yard_ms, 3)),
+            ("yard_detected", self.yard_detected),
+            (
+                "yard_confidence",
+                None if self.yard_confidence is None else round(self.yard_confidence, 6),
+            ),
+            ("yard_template_id", self.yard_template_id),
+            ("yard_prefilter", self.yard_prefilter),
+            ("yard_top_k", self.yard_top_k),
+            ("yard_candidates", self.yard_candidates),
+            ("yard_total_templates", self.yard_total_templates),
+            ("yard_match_calls", self.yard_match_calls),
+            (
+                "yard_prefilter_ms",
+                None if self.yard_prefilter_ms is None else round(self.yard_prefilter_ms, 4),
+            ),
+            ("yard_fallback", self.yard_fallback),
+            ("yard_fallback_reason", self.yard_fallback_reason),
+            ("snapshot_status", self.snapshot_status),
+            ("snapshot_invalidated", self.snapshot_invalidated),
+            ("task_active", self.task_active),
+            ("action_enabled", self.action_enabled),
+            ("action_backend", self.action_backend),
+        )
 
     def describe(self) -> str:
         """返回可读描述（单行，便于逐轮打印）。"""

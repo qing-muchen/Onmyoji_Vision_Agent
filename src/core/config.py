@@ -1128,6 +1128,13 @@ class RuntimeStateMonitorConfig(StrictModel):
     check_foreground: bool = True
     metrics_path: str = DEFAULT_RUNTIME_METRICS_PATH
     save_metrics: bool = False
+    #: 是否采集 **yard 运行期观测**（Phase 11.8）：默认 ``False`` = 零额外开销。
+    #:
+    #: 开启后每轮额外记录 yard detector 的单项耗时（来自 evidence registry 的
+    #: ``profile``）、预筛候选数 / 回退状态（来自证据 ``metadata``）、快照状态与
+    #: 安全配置；全部为标量与短字符串，**不含图像、候选列表或模板列表**。
+    #: 该开关只影响"记录什么"，不改变任何判定。
+    yard_metrics: bool = False
 
     @field_validator("history_path")
     @classmethod
