@@ -212,7 +212,9 @@ def verify_manifest(path: Path = DEFAULT_MANIFEST, *, dataset: Path = DATASET) -
     live_expected = payload.get("live", {}).get("entries", [])
     live = _compare(live_expected, collect_live_entries(dataset))
     ok = not (historical["missing"] or historical["added"] or historical["changed"])
-    live_ok = not (live["missing"] or live["added"] or live["changed"])
+    # live 分区的 ``added`` 是**正常**的新采集结果（本阶段的主要产出），只有
+    # ``missing`` / ``changed`` 才说明新数据被删改。
+    live_ok = not (live["missing"] or live["changed"])
     return {
         "ok": bool(ok and live_ok),
         "manifest": str(path.relative_to(ROOT)) if ROOT in path.parents else str(path),

@@ -80,6 +80,8 @@ EXIT_USAGE = 2
 EXIT_WINDOW_UNAVAILABLE = 3
 EXIT_NOT_FOREGROUND = 4
 EXIT_SAVE_FAILED = 5
+#: 等到前台后额外稳定时间（秒）：刚切回窗口时画面可能还在过渡
+FOREGROUND_SETTLE_S = 1.5
 
 
 class CaptureError(RuntimeError):
@@ -215,6 +217,47 @@ def open_source(config: AppConfig) -> WindowFrameSource:
     return WindowFrameSource.from_config(config, allow_activation=False, guard_enabled=True)
 
 
+def wait_for_foreground(
+    source: WindowFrameSource,
+    *,
+    timeout_s: float,
+    interval_s: float = 1.0,
+    settle_s: float = FOREGROUND_SETTLE_S,
+    sleeper: Any = time.sleep,
+    clock: Any = time.monotonic,
+) -> bool:
+    """**只读**轮询等待目标窗口成为前台（不激活、不抢占，超时即放弃）。
+
+    用途：用户把游戏切到前台需要时间，而"发消息给操作者"本身会让游戏失去前台。
+    因此采集前允许一段**用户自定**的等待窗口：一旦目标窗口成为前台，再额外等待
+    ``settle_s`` 秒（让用户把画面调整到目标状态并稳定下来）后继续；否则超时返回
+    ``False``（调用方据此以 ``not_foreground`` 中止，且不写任何文件）。
+
+    Args:
+        source: 已 ``start()`` 的帧来源（窗口已绑定）。
+        timeout_s: 最长等待秒数；``<= 0`` 表示不等待（立即判定一次）。
+        interval_s: 轮询间隔（秒）。
+        settle_s: 检测到前台后额外稳定时间（秒）。
+        sleeper: 等待函数（测试可注入）。
+        clock: 单调时钟。
+
+    Returns:
+        目标窗口当前是否为前台（``timeout_s <= 0`` 时直接返回其当前状态）。
+    """
+    if source.binding.is_foreground():
+        sleeper(settle_s)
+        return True
+    if timeout_s <= 0:
+        return False
+    deadline = float(clock()) + float(timeout_s)
+    while float(clock()) <= deadline:
+        sleeper(interval_s)
+        if source.binding.is_foreground():
+            sleeper(settle_s)
+            return True
+    return False
+
+
 def probe(source: WindowFrameSource) -> tuple[Frame | None, str, str]:
     """取一帧并给出结论。
 
@@ -251,6 +294,9 @@ def capture_session(
     dry_run: bool = False,
     sleeper: Any = time.sleep,
     source_factory: Any = None,
+    wait_foreground_s: float = 0.0,
+    settle_s: float = FOREGROUND_SETTLE_S,
+    clock: Any = time.monotonic,
 ) -> dict[str, Any]:
     """执行一个采集会话（**不激活窗口、不发送任何输入**）。
 
@@ -269,6 +315,7 @@ def capture_session(
         dry_run: ``True`` 时只探测窗口与状态，不落盘、不登记。
         sleeper: 间隔函数（测试可注入）。
         source_factory: 帧来源工厂（默认 :func:`open_source`；测试注入替身，**不改变**生产安全参数）。
+        wait_foreground_s: 采集前等待目标窗口成为前台的最长秒数（``0`` = 不等待）。
 
     Returns:
         结果字典（``status`` / ``saved`` / ``duplicates`` / ``probe`` …）。
@@ -304,6 +351,23 @@ def capture_session(
     source = (source_factory or open_source)(config)
     source.start()
     try:
+        if wait_foreground_s > 0:
+            result["waited_foreground_s"] = float(wait_foreground_s)
+            ready = wait_for_foreground(
+                source,
+                timeout_s=float(wait_foreground_s),
+                interval_s=0.5,
+                settle_s=float(settle_s),
+                sleeper=sleeper,
+                clock=clock,
+            )
+            result["foreground_ready"] = bool(ready)
+            if not ready:
+                raise AbortCapture(
+                    EXIT_NOT_FOREGROUND,
+                    "not_foreground",
+                    f"等待 {wait_foreground_s:.0f}s 后目标窗口仍不在前台（不抢占焦点）",
+                )
         for index in range(int(count)):
             if index > 0:
                 sleeper(max(interval_ms, MIN_CAPTURE_INTERVAL_MS) / 1000.0)
@@ -389,6 +453,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--note", default="", help="备注")
     parser.add_argument("--sources", default=str(DEFAULT_SOURCES), help="来源登记表路径")
     parser.add_argument("--dataset", default=str(DATASET), help="数据根目录")
+    parser.add_argument(
+        "--wait-foreground",
+        type=float,
+        default=0.0,
+        help="采集前等待目标窗口成为前台的最长秒数（0 = 不等待；只检查，不抢占）",
+    )
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=FOREGROUND_SETTLE_S,
+        help="检测到前台后再等多久才抓拍（留给用户把画面调整到目标状态）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只探测窗口与前台状态，不落盘")
     parser.add_argument("--quiet", action="store_true", help="输出紧凑 JSON")
     return parser
@@ -417,6 +493,8 @@ def main(argv: list[str] | None = None) -> int:
             sources_path=Path(args.sources),
             dataset=Path(args.dataset),
             dry_run=bool(args.dry_run),
+            wait_foreground_s=float(args.wait_foreground or 0.0),
+            settle_s=float(args.settle_seconds),
         )
     except AbortCapture as abort:
         print(json.dumps({"status": abort.status, "message": abort.message}, ensure_ascii=False))

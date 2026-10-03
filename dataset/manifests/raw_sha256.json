@@ -1251,5 +1251,164 @@
       "height": 960
     }
   ],
+  "live": {
+    "root": "raw/yard_live",
+    "count": 21,
+    "sessions": {
+      "yard_live_20261003_s01": 5,
+      "yard_live_20261003_s02": 8,
+      "yard_live_20261003_s03": 8
+    },
+    "entries": [
+      {
+        "path": "raw/yard_live/yard_live_20261003_s01/yard_live_20261003_s01_001.png",
+        "sha256": "80c5e2fbfd1e2c83085fdf063a97a58372e167bdb9b1badb573ef1474d19f7ff",
+        "bytes": 2459991,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s01/yard_live_20261003_s01_002.png",
+        "sha256": "8a8bf40848946b702496a1b66a6561a84d808b0c1352244eb801386bbb3ba4de",
+        "bytes": 2297866,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s01/yard_live_20261003_s01_003.png",
+        "sha256": "19201a44a9f0b9cb530670fd7c6a6c0d52d64ed0fd36de1384a468a21f1e0f30",
+        "bytes": 2419229,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s01/yard_live_20261003_s01_004.png",
+        "sha256": "baa34fca143be56cf66f412800a3a06dce87dff2867a083c92c5fa97c23d3b69",
+        "bytes": 2337555,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s01/yard_live_20261003_s01_005.png",
+        "sha256": "04a9c721a86b4fe324e42fbd82c43b56825eebd9860cc53acc70ce94bd4ee6a1",
+        "bytes": 2259884,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_001.png",
+        "sha256": "85a9868f138ebf1db402f4281cd1b07527f0a33e64872a4fda146573b727e0af",
+        "bytes": 2323818,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_002.png",
+        "sha256": "ec415b80fc48be31f8d6c613fa177bcc37d816acb435b955a3cd4ec77195761a",
+        "bytes": 2283051,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_003.png",
+        "sha256": "c8c4eb9271b52a959a812cf61eb51b4647379692d66445251a1053697a00b06d",
+        "bytes": 2087282,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_004.png",
+        "sha256": "bb7568630249aa94b5722cb6dbb10807a091e5ba805047f6e6e06158ea23a61e",
+        "bytes": 2128015,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_005.png",
+        "sha256": "d1fe65afeb84d4a1465c0b8773b86238ab06e2104c6a8f1155c8c0aef5397a7e",
+        "bytes": 2270203,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_006.png",
+        "sha256": "b559b0b58f6484971e35f8b1368e54a26c0b8923cf364e781319502ad54b9547",
+        "bytes": 2271014,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_007.png",
+        "sha256": "23beb00784198e320b23f6985eb64e284054aef91b2a3198c4dce1ff0be1b5bf",
+        "bytes": 2251795,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s02/yard_live_20261003_s02_008.png",
+        "sha256": "bf1bdfcc83fbc0e787e594e5b484e14003471f2dab17cc68eb1f6cef845ca489",
+        "bytes": 2084820,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_001.png",
+        "sha256": "dad359500499bb35818b8d03b6555b32bce6413566e21c7f53bb9fd763298f3e",
+        "bytes": 2283786,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_002.png",
+        "sha256": "97edd6cb66ad48dc932e6509c4d629ef41f932445792c1dc93d9dd649e2a5543",
+        "bytes": 2292423,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_003.png",
+        "sha256": "84d95d876ff70de8a384149fc2eded2da18722ca0f51298dd6861d1744097d7e",
+        "bytes": 2288423,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_004.png",
+        "sha256": "d240d48e888c5e7c21db3c78b43dd59d81b503a5697ecd7c04fe283a4cf8b58f",
+        "bytes": 2245709,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_005.png",
+        "sha256": "7949ae485a6bfaea4939bf358cb763bcc0c2c8687f4f1a7a804920cde38b7024",
+        "bytes": 2321585,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_006.png",
+        "sha256": "16e256d771a6416b36d469bb66916f50f041cd52a1ee5f34e2fb90e1299a775a",
+        "bytes": 2289255,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_007.png",
+        "sha256": "b6ef514eddbfecfa320ee362d102e9b09bf60dc8ab6bfad1d4994e8a70b0fea3",
+        "bytes": 2315047,
+        "width": 1704,
+        "height": 960
+      },
+      {
+        "path": "raw/yard_live/yard_live_20261003_s03/yard_live_20261003_s03_008.png",
+        "sha256": "e3044d930c09ce612cb38bc75fedec68aa57ef4be7a3f0fd0501e90cd61d6a2d",
+        "bytes": 2258499,
+        "width": 1704,
+        "height": 960
+      }
+    ],
+    "note": "当前版本庭院新采集（Phase 11.9-A）；不并入历史 178 张计数"
+  },
   "note": "原始图片为唯一真源；任何条目变化都说明 raw/ 被改动或补齐"
 }

@@ -93,6 +93,10 @@ IMAGE_SUFFIXES: frozenset[str] = frozenset({".png"})
 NEAR_DUPLICATE_THRESHOLD = 6
 #: 连续采样时的最小间隔（毫秒）：低于此值几乎必然产生近重复帧，没有独立视觉价值
 MIN_CAPTURE_INTERVAL_MS = 300
+#: 跨会话 dHash ≤ 该值：记为"自然视觉相似"风险提示（**不**视为数据泄漏）
+CROSS_SESSION_VISUAL_OVERLAP_THRESHOLD = 6
+#: 跨会话采集时间差 ≤ 该秒数：疑似"同一次连续采样被人为拆到两个集合"（硬失败）
+ADJACENT_CAPTURE_WINDOW_S = 30.0
 #: dHash 网格边长（9x8 差分 ⇒ 8x8 bit ⇒ 16 个十六进制字符）
 DHASH_SIZE = 8
 
@@ -272,6 +276,7 @@ class LiveFrame:
         sha256: 原图 SHA256。
         width / height: 客户区像素尺寸（**不 resize、不裁 ROI**）。
         dhash: dHash 十六进制串。
+        captured_at: 采集时间（来自 source 登记；未知为 ``None``）。
     """
 
     relative_path: str
@@ -283,6 +288,7 @@ class LiveFrame:
     width: int
     height: int
     dhash: str
+    captured_at: str | None = None
 
     @property
     def is_candidate(self) -> bool:
@@ -316,6 +322,7 @@ class LiveFrame:
             "width": self.width,
             "height": self.height,
             "dhash": self.dhash,
+            "captured_at": self.captured_at,
         }
 
 
@@ -438,6 +445,7 @@ def read_live_frame(
         width=int(width),
         height=int(height),
         dhash=difference_hash(image),
+        captured_at=(record.captured_at if record is not None else None),
     )
 
 
@@ -558,31 +566,154 @@ def near_duplicate_pairs(
     return tuple(sorted(pairs, key=lambda pair: (pair.distance, pair.left, pair.right)))
 
 
+def _parse_iso(text: str | None) -> datetime | None:
+    """解析 ISO 时间戳（失败返回 ``None``）。"""
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(str(text))
+    except ValueError:
+        return None
+
+
 def leakage_report(
     frames: Iterable[LiveFrame],
     *,
-    threshold: int = NEAR_DUPLICATE_THRESHOLD,
+    threshold: int = CROSS_SESSION_VISUAL_OVERLAP_THRESHOLD,
 ) -> dict[str, Any]:
-    """candidate ↔ holdout 近重复泄漏报告（**自匹配**防线的核心检查）。
+    """数据独立性审计（Phase 11.9-A **三级规则**）。
+
+    刻意区分两件本质不同的事：
+
+    * **硬失败 `source_leakage`**：SHA256 完全相同、同一会话同时承担两个角色、
+      或跨集合帧的采集时间差 ≤ :data:`ADJACENT_CAPTURE_WINDOW_S`
+      （疑似"同一次连续采样被人为拆到两个集合"）；
+    * **风险提示 `natural_visual_overlap`**：来自**真正独立会话**、SHA 不同、
+      时间上非相邻的真实帧，仅因"同一个庭院画面本身就相似"而 dHash ≤ 阈值 ——
+      只记录、标记，**不删除、不自动要求重采**。
+
+    庭院场景面积有限、detector 又依赖较固定的底部功能栏，因此跨会话出现较低 dHash
+    距离属于**自然现象**；dHash 在这里用于"近重复风险审计"，不是数据独立性的唯一判据。
 
     Args:
         frames: 帧记录。
-        threshold: 最大汉明距离。
+        threshold: 视觉相似提示阈值（dHash 汉明距离）。
 
     Returns:
-        报告字典（``pairs`` / ``within_candidate`` / ``within_holdout`` / ``cross`` 等）。
+        报告字典（``source_leakage`` / ``hard_failures`` / ``possible_visual_overlap`` /
+        ``cross_session_dhash_min`` …）。
     """
-    items = tuple(frames)
+    items = sorted(frames, key=lambda frame: frame.relative_path)
     pairs = near_duplicate_pairs(items, threshold=threshold)
     cross = tuple(pair for pair in pairs if pair.cross_collection)
+    cross_min = min((pair.distance for pair in cross), default=None)
+
+    # ---- 硬失败 1：SHA256 完全相同 -------------------------------------------------
+    by_sha: dict[str, list[LiveFrame]] = {}
+    for frame in items:
+        by_sha.setdefault(frame.sha256, []).append(frame)
+    exact_groups = {
+        digest: [frame.relative_path for frame in group]
+        for digest, group in by_sha.items()
+        if len(group) > 1
+    }
+    exact_cross = {
+        digest: paths
+        for digest, paths in exact_groups.items()
+        if len({frame.role for frame in by_sha[digest]}) > 1
+    }
+
+    # ---- 硬失败 2：同一会话承担两个角色 --------------------------------------------
+    session_roles: dict[str, set[str]] = {}
+    for frame in items:
+        session_roles.setdefault(frame.session_id, set()).add(frame.role)
+    session_conflicts = {
+        session: sorted(roles) for session, roles in session_roles.items() if len(roles) > 1
+    }
+    # 硬失败 2b：同一帧身份（source_id）出现在两个集合
+    role_by_source: dict[str, set[str]] = {}
+    for frame in items:
+        role_by_source.setdefault(frame.source_id, set()).add(frame.role)
+    frame_conflicts = {
+        source_id: sorted(roles)
+        for source_id, roles in role_by_source.items()
+        if len(roles) > 1
+    }
+
+    # ---- 硬失败 3：跨集合但采集时间几乎相接（疑似同一次连续采样被拆分）-------------
+    adjacent: list[dict[str, Any]] = []
+    for index, first in enumerate(items):
+        for second in items[index + 1 :]:
+            if first.role == second.role:
+                continue
+            left = _parse_iso(first.captured_at)
+            right = _parse_iso(second.captured_at)
+            if left is None or right is None:
+                continue
+            delta = abs((left - right).total_seconds())
+            if delta <= ADJACENT_CAPTURE_WINDOW_S:
+                adjacent.append(
+                    {
+                        "left": first.relative_path,
+                        "right": second.relative_path,
+                        "left_role": first.role,
+                        "right_role": second.role,
+                        "delta_seconds": round(delta, 1),
+                    }
+                )
+
+    hard_failures: list[str] = []
+    if exact_cross:
+        hard_failures.append(f"SHA256 相同且跨集合: {sorted(exact_cross)}")
+    if session_conflicts:
+        hard_failures.append(f"同一会话多角色: {sorted(session_conflicts)}")
+    if frame_conflicts:
+        hard_failures.append(f"同一帧身份跨集合: {sorted(frame_conflicts)}")
+    if adjacent:
+        hard_failures.append(
+            f"跨集合采集时间差 <= {ADJACENT_CAPTURE_WINDOW_S}s（疑似连续采样被拆分）: "
+            f"{len(adjacent)} 对"
+        )
+
     return {
         "threshold": int(threshold),
+        "adjacent_window_s": ADJACENT_CAPTURE_WINDOW_S,
         "pairs_total": len(pairs),
-        "within_candidate": sum(1 for pair in pairs if pair.left_role == pair.right_role == CAPTURE_ROLE_CANDIDATE),
-        "within_holdout": sum(1 for pair in pairs if pair.left_role == pair.right_role == CAPTURE_ROLE_HOLDOUT),
+        "within_candidate": sum(
+            1 for pair in pairs if pair.left_role == pair.right_role == CAPTURE_ROLE_CANDIDATE
+        ),
+        "within_holdout": sum(
+            1 for pair in pairs if pair.left_role == pair.right_role == CAPTURE_ROLE_HOLDOUT
+        ),
         "cross_collection": len(cross),
+        "cross_collection_pairs": [pair.to_dict() for pair in cross],
+        "cross_session_dhash_min": cross_min,
+        "possible_visual_overlap": bool(cross),
+        "possible_visual_overlap_pairs": [pair.to_dict() for pair in cross],
+        "exact_duplicate_groups": exact_groups,
+        "exact_duplicate_count": len(exact_groups),
+        "exact_duplicate_cross_collection": exact_cross,
+        "session_role_conflicts": session_conflicts,
+        "frame_role_conflicts": frame_conflicts,
+        "adjacent_capture_pairs": adjacent,
+        "source_leakage": bool(hard_failures),
+        "hard_failures": hard_failures,
+        "hard_failure_kinds": sorted(
+            {
+                kind
+                for kind, present in (
+                    ("exact_duplicate_cross_collection", bool(exact_cross)),
+                    ("session_role_conflict", bool(session_conflicts)),
+                    ("frame_role_conflict", bool(frame_conflicts)),
+                    ("adjacent_capture_split", bool(adjacent)),
+                )
+                if present
+            }
+        ),
+        "natural_visual_similarity": bool(cross) and not hard_failures,
+        # 兼容旧字段名（语义已收敛为"存在跨集合近重复对"）
         "cross_pairs": [pair.to_dict() for pair in cross],
-        "possible_leakage": bool(cross),
+        "possible_leakage": bool(cross) and bool(hard_failures),
         "pairs": [pair.to_dict() for pair in pairs],
     }
 
@@ -649,14 +780,11 @@ def audit_live_dataset(
     if not frames:
         status = "empty"
         reasons.append("raw/yard_live 尚无样本（等待人工采集）")
-    elif conflicts:
-        status = "role_conflict"
-        reasons.append(f"同一会话出现多个角色: {list(conflicts)}")
-    elif leak["possible_leakage"]:
-        status = "leakage_detected"
-        reasons.append(
-            f"candidate ↔ holdout 存在 {leak['cross_collection']} 对近重复（阈值 {leak['threshold']}）"
-        )
+    elif leak["source_leakage"] or conflicts:
+        status = "source_leakage"
+        reasons.extend(leak["hard_failures"])
+        if conflicts:
+            reasons.append(f"（登记表级）同一会话多角色: {list(conflicts)}")
     elif len(sessions) < 2 or not candidate_sessions or not holdout_sessions:
         status = "insufficient_sessions"
         reasons.append(
@@ -665,6 +793,12 @@ def audit_live_dataset(
         )
     else:
         status = "ok"
+        if leak["possible_visual_overlap"]:
+            reasons.append(
+                "提示（**非失败**）：candidate↔holdout 有 "
+                f"{leak['cross_collection']} 对 dHash <= {leak['threshold']}；庭院画面本身有限，"
+                "属 natural_visual_similarity，已记录为 possible_visual_overlap（不删除、不重采）"
+            )
 
     return {
         "root": LIVE_ROOT,
@@ -684,6 +818,18 @@ def audit_live_dataset(
         "near_duplicate_within_candidate": leak["within_candidate"],
         "near_duplicate_within_holdout": leak["within_holdout"],
         "cross_collection_pairs": leak["cross_collection"],
+        # ---- Phase 11.9-A 三级规则的显式区分 -------------------------------------
+        "exact_duplicate_count": leak["exact_duplicate_count"],
+        "exact_duplicate_groups": leak["exact_duplicate_groups"],
+        "exact_duplicate_cross_collection": leak["exact_duplicate_cross_collection"],
+        "cross_session_near_duplicate_count": leak["cross_collection"],
+        "cross_session_dhash_min": leak["cross_session_dhash_min"],
+        "possible_visual_overlap": leak["possible_visual_overlap"],
+        "possible_visual_overlap_pairs": leak["possible_visual_overlap_pairs"],
+        "source_leakage": leak["source_leakage"],
+        "hard_failures": leak["hard_failures"],
+        "hard_failure_kinds": leak["hard_failure_kinds"],
+        "natural_visual_similarity": leak["natural_visual_similarity"],
         "possible_leakage": leak["possible_leakage"],
         "leakage": leak,
         "frames": [frame.to_dict() for frame in frames],

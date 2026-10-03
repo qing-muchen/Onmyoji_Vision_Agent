@@ -56,6 +56,8 @@ DEFAULT_OUT = Path(tempfile.gettempdir()) / "ova119a" / "yard_live_audit.json"
 YARD_NAME = "bottom_menu_yard"
 HISTORICAL_YARD = "raw/yard"
 PRODUCTION_THRESHOLD = 0.85
+#: 低阈值探针：只为取"真实最高分 / 最接近模板"，不参与任何生产判定
+PROBE_THRESHOLD = 0.001
 CAP_FN_PREFIX = "yard_cap_"
 
 
@@ -81,39 +83,73 @@ def frame_of(path: Path) -> Frame | None:
     )
 
 
-def build_processors(config: AppConfig) -> tuple[EvidenceFrameProcessor, EvidenceFrameProcessor]:
-    """构造生产处理器与 All61 诊断处理器。
+def build_config(config: AppConfig, *, all61: bool = False, threshold: float | None = None) -> AppConfig:
+    """派生一份探测用配置（**不改动传入配置**）。
+
+    Args:
+        config: 应用配置。
+        all61: 是否把 yard 的模板集合换成"现有模板库全部模板"并关闭预筛。
+        threshold: 是否覆盖阈值（低阈值探针用于取"真实最高分"，不受 0.85 截断）。
+
+    Returns:
+        派生配置（无改动时原样返回）。
+    """
+    updates: dict[str, Any] = {}
+    if all61:
+        yard_config = config.evidence.detectors[YARD_NAME]
+        template_dir = Path(yard_config.templates)
+        if not template_dir.is_absolute():
+            template_dir = ROOT / template_dir
+        all_ids = tuple(sorted(path.stem for path in template_dir.glob("*.png")))
+        updates.update(
+            {
+                "template_include": list(all_ids),
+                "max_templates": len(all_ids),
+                "template_prefilter": None,
+                "prefilter_top_k": 0,
+            }
+        )
+    if threshold is not None:
+        updates["threshold"] = float(threshold)
+    if not updates:
+        return config
+    detectors = dict(config.evidence.detectors)
+    detectors[YARD_NAME] = config.evidence.detectors[YARD_NAME].model_copy(update=updates)
+    return config.model_copy(
+        update={"evidence": config.evidence.model_copy(update={"detectors": detectors})}
+    )
+
+
+def build_variants(config: AppConfig) -> dict[str, tuple[Any, Any]]:
+    """构造两组探测器：``(生产口径, 低阈值探针)``。
+
+    生产口径用于回答"生产配置下到底检出没有"（``threshold`` 保持 0.85，模板集合不变）；
+    低阈值探针用于回答"最高相似度到底是多少、最接近哪个模板"——否则低于阈值的
+    真实最高分会被截断成 0，无法支撑缺口判定。
 
     Args:
         config: 应用配置。
 
     Returns:
-        ``(production, all61)`` 处理器。
+        ``{"production36": (detector, probe), "all61": (detector, probe)}``。
     """
-    production = EvidenceFrameProcessor.from_config(
-        config, transition_classifier=build_transition_probe(config)
-    )
-    yard_config = config.evidence.detectors[YARD_NAME]
-    template_dir = Path(yard_config.templates)
-    if not template_dir.is_absolute():
-        template_dir = ROOT / template_dir
-    all_ids = tuple(sorted(path.stem for path in template_dir.glob("*.png")))
-    detectors = dict(config.evidence.detectors)
-    detectors[YARD_NAME] = yard_config.model_copy(
-        update={
-            "template_include": list(all_ids),
-            "max_templates": len(all_ids),
-            "template_prefilter": None,
-            "prefilter_top_k": 0,
-        }
-    )
-    diagnostic_config = config.model_copy(
-        update={"evidence": config.evidence.model_copy(update={"detectors": detectors})}
-    )
-    diagnostic = EvidenceFrameProcessor.from_config(
-        diagnostic_config, transition_classifier=build_transition_probe(diagnostic_config)
-    )
-    return production, diagnostic
+    variants: dict[str, tuple[Any, Any]] = {}
+    for label, all61 in (("production36", False), ("all61", True)):
+        strict_config = build_config(config, all61=all61)
+        probe_config = build_config(config, all61=all61, threshold=PROBE_THRESHOLD)
+        variants[label] = (
+            detector_of(
+                EvidenceFrameProcessor.from_config(
+                    strict_config, transition_classifier=build_transition_probe(strict_config)
+                )
+            ),
+            detector_of(
+                EvidenceFrameProcessor.from_config(
+                    probe_config, transition_classifier=build_transition_probe(probe_config)
+                )
+            ),
+        )
+    return variants
 
 
 def detector_of(processor: EvidenceFrameProcessor):  # noqa: ANN201
@@ -134,18 +170,19 @@ def _meta(metadata: Any, *keys: str) -> Any:
     return None
 
 
-def probe_frame(detector: Any, frame: Frame) -> dict[str, Any]:
-    """对单帧同时取"生产口径结果"与"匹配细节"。
+def probe_frame(detector: Any, probe_detector: Any, frame: Frame) -> dict[str, Any]:
+    """对单帧同时取"生产口径结果"与"低阈值探针细节"。
 
     Args:
-        detector: 证据 detector。
+        detector: 生产口径 detector（阈值保持 0.85）。
+        probe_detector: 同模板集合的低阈值探针（取真实最高分，避免被阈值截断）。
         frame: 帧。
 
     Returns:
         结果字典。
     """
     result = detector.detect(frame)
-    match, _roi = detector.best_match(frame)
+    match, _roi = probe_detector.best_match(frame)
     metadata = getattr(result, "metadata", {}) or {}
     return {
         "detected": bool(result.detected),
@@ -228,15 +265,16 @@ def summarize(rows: list[dict[str, Any]], *, threshold: float = PRODUCTION_THRES
     }
 
 
-def run_probe(detector: Any, frames: tuple[LiveFrame, ...]) -> list[dict[str, Any]]:
+def run_probe(detector: Any, probe_detector: Any, frames: tuple[LiveFrame, ...]) -> list[dict[str, Any]]:
     """对一组 live 帧跑探针。
 
     Args:
-        detector: 证据 detector。
+        detector: 生产口径 detector。
+        probe_detector: 低阈值探针。
         frames: live 帧。
 
     Returns:
-        逐帧结果（附带 ``relative_path``）。
+        逐帧结果（附带 ``relative_path`` / ``session_id`` / ``role``）。
     """
     rows: list[dict[str, Any]] = []
     for item in frames:
@@ -245,9 +283,10 @@ def run_probe(detector: Any, frames: tuple[LiveFrame, ...]) -> list[dict[str, An
         if frame is None:
             logger.warning("图片不可读，跳过探针: %s", item.relative_path)
             continue
-        row = probe_frame(detector, frame)
+        row = probe_frame(detector, probe_detector, frame)
         row["relative_path"] = item.relative_path
         row["session_id"] = item.session_id
+        row["role"] = item.role
         rows.append(row)
     return rows
 
@@ -417,13 +456,11 @@ def build_report(
         return report
 
     config = load_config()
-    production_processor, diagnostic_processor = build_processors(config)
-    production_detector = detector_of(production_processor)
-    diagnostic_detector = detector_of(diagnostic_processor)
+    variants = build_variants(config)
 
     probes: dict[str, Any] = {}
-    for label, detector in (("production36", production_detector), ("all61", diagnostic_detector)):
-        rows = run_probe(detector, frames)
+    for label, (detector, probe_detector) in variants.items():
+        rows = run_probe(detector, probe_detector, frames)
         by_session_role: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_session_role.setdefault(row["role"], []).append(row)
@@ -452,6 +489,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_summary(report: dict[str, Any]) -> None:
     """打印人可读摘要。"""
+    if hasattr(sys.stdout, "reconfigure"):
+        # Windows 控制台默认 GBK，摘要含中文与箭头符号；显式用 UTF-8 兜底，避免
+        # "UnicodeEncodeError" 把已经算完的审计结果打断。
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # pragma: no cover - 非文本流时忽略
+            pass
     audit = report["audit"]
     print(f"yard_live status   : {report['status']}")
     for reason in report["reasons"]:

@@ -49,6 +49,7 @@ from src.vision.capture.models import Frame  # noqa: E402
 from src.vision.dataset import live_yard  # noqa: E402
 from src.vision.dataset.live_yard import (  # noqa: E402
     LIVE_ROOT,
+    LiveFrame,
     LiveFrameError,
     assert_within_live_root,
     audit_live_dataset,
@@ -159,6 +160,17 @@ def source_record(
     )
 
 
+class FakeBinding:
+    """窗口绑定替身（只读前台查询）。"""
+
+    def __init__(self, *, foreground: bool = True) -> None:
+        self.foreground = bool(foreground)
+
+    def is_foreground(self) -> bool:
+        """目标窗口是否在前台（测试可控）。"""
+        return self.foreground
+
+
 class FakeSource:
     """帧来源替身（**不接触真实窗口**）。"""
 
@@ -171,12 +183,14 @@ class FakeSource:
         backend: str = "fake",
         foreground: bool | None = True,
         window: object | None = None,
+        binding: FakeBinding | None = None,
     ) -> None:
         self._frames = list(frames)
         self._reason = reason
         self._message = message
         self._foreground = foreground
         self.window = window
+        self.binding = binding if binding is not None else FakeBinding()
         self.backend_name = backend
         self.started = False
         self.stopped = False
@@ -609,7 +623,10 @@ def test_same_session_cannot_be_both_roles(tmp_path: Path) -> None:
     conflicts = session_role_conflicts(registry)
     assert conflicts and SESSION_A in conflicts[0]
     audit = audit_live_dataset(dataset, registry=registry)
-    assert audit["status"] == "role_conflict"
+    assert audit["status"] == "source_leakage"
+    assert audit["source_leakage"] is True
+    assert audit["hard_failure_kinds"]
+    assert any("多角色" in item for item in audit["hard_failures"])
 
 
 def test_cross_collection_near_duplicate_is_detected(tmp_path: Path) -> None:
@@ -632,11 +649,116 @@ def test_cross_collection_near_duplicate_is_detected(tmp_path: Path) -> None:
     pairs = near_duplicate_pairs(frames)
     assert any(pair.cross_collection for pair in pairs)
     report = leakage_report(frames)
-    assert report["possible_leakage"] is True
+    assert report["possible_visual_overlap"] is True
     assert report["cross_collection"] >= 1
+    assert report["source_leakage"] is False, "独立会话的视觉相似不是数据泄漏"
     audit = audit_live_dataset(dataset, registry=registry)
-    assert audit["status"] == "leakage_detected"
-    assert audit["status"] != "ok"
+    # 三级规则：跨会话 dHash<=6 只记为 possible_visual_overlap，**不**改变 status、不要求重采
+    assert audit["status"] == "ok"
+    assert audit["possible_visual_overlap"] is True
+    assert audit["source_leakage"] is False
+    assert audit["cross_session_near_duplicate_count"] >= 1
+    assert audit["cross_session_dhash_min"] is not None
+    assert audit["exact_duplicate_count"] == 0
+    assert audit["natural_visual_similarity"] is True
+
+
+def test_exact_duplicate_across_collections_is_source_leakage() -> None:
+    """同一字节身份同时出现在两个集合 ⇒ 硬失败 ``source_leakage``（纵深防御）。
+
+    正常流程下这种状态**不可能**产生：``source_id`` 由内容派生，``SourceRegistry.add``
+    与采集工具都会拒绝重复 SHA256。这里直接构造帧记录来验证审计层仍能把它抓出来。
+    """
+    frames = (
+        LiveFrame(
+            relative_path="raw/yard_live/s_a/f.png",
+            session_id="s_a",
+            index=1,
+            role=CAPTURE_ROLE_CANDIDATE,
+            source_id="src_dup",
+            sha256="ab" * 32,
+            width=10,
+            height=10,
+            dhash="0f" * 8,
+        ),
+        LiveFrame(
+            relative_path="raw/yard_live/s_b/f.png",
+            session_id="s_b",
+            index=1,
+            role=CAPTURE_ROLE_HOLDOUT,
+            source_id="src_dup",
+            sha256="ab" * 32,
+            width=10,
+            height=10,
+            dhash="0f" * 8,
+        ),
+    )
+    report = leakage_report(frames)
+    assert report["exact_duplicate_count"] == 1
+    assert report["source_leakage"] is True
+    assert report["natural_visual_similarity"] is False
+    assert any("SHA256 相同" in item for item in report["hard_failures"])
+    assert report["hard_failure_kinds"]
+
+
+def test_adjacent_capture_split_is_source_leakage(tmp_path: Path) -> None:
+    """跨集合但采集时间仅差数秒 ⇒ 疑似同一次连续采样被拆分 ⇒ 硬失败。"""
+    dataset = tmp_path
+    build_dataset(dataset, sessions={SESSION_A: [21], SESSION_B: [22]})
+    registry = SourceRegistry()
+    stamps = {
+        SESSION_A: "2026-10-03T10:00:00+08:00",
+        SESSION_B: "2026-10-03T10:00:05+08:00",
+    }
+    for session, role in ((SESSION_A, CAPTURE_ROLE_CANDIDATE), (SESSION_B, CAPTURE_ROLE_HOLDOUT)):
+        path = yard_live_dir(dataset, session) / frame_filename(session, 1)
+        registry.add(
+            CaptureSource(
+                source_id=f"src_{compute_sha256(path)[:16]}",
+                relative_path=f"{LIVE_ROOT}/{session}/{path.name}",
+                session_id=session,
+                captured_at=stamps[session],
+                source_sha256=compute_sha256(path),
+                capture_role=role,
+            )
+        )
+    audit = audit_live_dataset(dataset, registry=registry)
+    assert audit["status"] == "source_leakage"
+    assert audit["leakage"]["adjacent_capture_pairs"]
+    assert any("时间差" in item for item in audit["hard_failures"])
+
+
+def test_distant_capture_times_are_not_leakage(tmp_path: Path) -> None:
+    """独立会话、SHA 不同、采集时间相隔较久 ⇒ 即使 dHash<=6 也判 ``ok``。"""
+    dataset = tmp_path
+    base = make_image(31)
+    near = base.copy()
+    near[0, 0] = np.clip(base[0, 0].astype(int) + 1, 0, 255).astype(np.uint8)
+    write_png(yard_live_dir(dataset, SESSION_A) / frame_filename(SESSION_A, 1), base)
+    write_png(yard_live_dir(dataset, SESSION_B) / frame_filename(SESSION_B, 1), near)
+    registry = SourceRegistry()
+    stamps = {
+        SESSION_A: "2026-10-03T10:00:00+08:00",
+        SESSION_B: "2026-10-03T10:20:00+08:00",
+    }
+    for session, role in ((SESSION_A, CAPTURE_ROLE_CANDIDATE), (SESSION_B, CAPTURE_ROLE_HOLDOUT)):
+        path = yard_live_dir(dataset, session) / frame_filename(session, 1)
+        registry.add(
+            CaptureSource(
+                source_id=f"src_{compute_sha256(path)[:16]}",
+                relative_path=f"{LIVE_ROOT}/{session}/{path.name}",
+                session_id=session,
+                captured_at=stamps[session],
+                source_sha256=compute_sha256(path),
+                capture_role=role,
+            )
+        )
+    audit = audit_live_dataset(dataset, registry=registry)
+    assert audit["source_leakage"] is False
+    assert audit["status"] == "ok"
+    assert audit["possible_visual_overlap"] is True
+    assert audit["natural_visual_similarity"] is True
+    assert audit["leakage"]["adjacent_capture_pairs"] == []
 
 
 def test_wrong_role_partition_is_not_reported_ok(tmp_path: Path) -> None:
@@ -691,9 +813,10 @@ def test_manifest_separates_history_and_live(tmp_path: Path) -> None:
     )
     report = manifest_tool.verify_manifest(manifest_path, dataset=dataset)
     assert report["historical_ok"] is True
-    assert report["live_ok"] is False
-    assert report["ok"] is False
+    assert report["live_ok"] is True, "live 分区的 added 属正常新采集，不视为失败"
+    assert report["ok"] is True
     assert report["live"]["added"] == [f"{LIVE_ROOT}/{SESSION_A}/{frame_filename(SESSION_A, 2)}"]
+    assert report["live"]["missing"] == [] and report["live"]["changed"] == []
     assert report["missing"] == [] and report["changed"] == []
 
 
@@ -879,3 +1002,76 @@ def test_capture_refuses_interval_below_minimum(tmp_path: Path) -> None:
             dataset=dataset,
             source_factory=lambda _config: FakeSource([]),
         )
+
+
+def test_capture_waits_for_foreground_when_requested(tmp_path: Path) -> None:
+    """[6b] 请求等待前台：窗口稍后成为前台 ⇒ 采集成功，且全程只读检查、不抢焦点。"""
+    dataset = tmp_path
+    build_dataset(dataset, sessions={})
+    sources_path = tmp_path / "sources.jsonl"
+    binding = FakeBinding(foreground=False)
+    fake = FakeSource([frame_of(make_image(71))], binding=binding)
+    state = {"t": 0.0}
+
+    def fake_sleep(seconds: float) -> None:
+        state["t"] += float(seconds)
+        binding.foreground = True  # 第一次轮询后用户"切到前台"
+
+    report = capture_tool.capture_session(
+        load_config(),
+        session_id=SESSION_A,
+        role=CAPTURE_ROLE_CANDIDATE,
+        count=1,
+        interval_ms=300,
+        scene="yard",
+        theme="unknown",
+        variant="unknown",
+        note="",
+        sources_path=sources_path,
+        dataset=dataset,
+        source_factory=lambda _config: fake,
+        sleeper=fake_sleep,
+        clock=lambda: state["t"],
+        wait_foreground_s=10.0,
+        settle_s=2.0,
+    )
+    assert report["foreground_ready"] is True
+    assert report["waited_foreground_s"] == 10.0
+    assert report["window_guard"] == "no_activation"
+    assert state["t"] >= 2.0, "检测到前台后应留出稳定时间再抓拍"
+    assert len(report["saved"]) == 1
+    assert len(list_live_frames(dataset)) == 1
+
+
+def test_capture_times_out_waiting_for_foreground(tmp_path: Path) -> None:
+    """[6c] 等待超时 ⇒ `not_foreground`（退出码 4），不写任何文件。"""
+    dataset = tmp_path
+    build_dataset(dataset, sessions={})
+    sources_path = tmp_path / "sources.jsonl"
+    fake = FakeSource([frame_of(make_image(72))], binding=FakeBinding(foreground=False))
+    state = {"t": 0.0}
+
+    def fake_sleep(seconds: float) -> None:
+        state["t"] += float(seconds)
+
+    with pytest.raises(capture_tool.AbortCapture) as excinfo:
+        capture_tool.capture_session(
+            load_config(),
+            session_id=SESSION_A,
+            role=CAPTURE_ROLE_CANDIDATE,
+            count=1,
+            interval_ms=300,
+            scene="yard",
+            theme="unknown",
+            variant="unknown",
+            note="",
+            sources_path=sources_path,
+            dataset=dataset,
+            source_factory=lambda _config: fake,
+            sleeper=fake_sleep,
+            clock=lambda: state["t"],
+            wait_foreground_s=3.0,
+        )
+    assert excinfo.value.code == capture_tool.EXIT_NOT_FOREGROUND
+    assert not sources_path.exists()
+    assert list_live_sessions(dataset) == ()

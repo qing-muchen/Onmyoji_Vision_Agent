@@ -251,3 +251,134 @@ Production36 与 All61 的真实 baseline、以及由此得出的**缺口性质�
 | 数据目录 | `dataset/raw/yard_live/README.md` + `.gitkeep` |
 | 测试 | `tests/test_phase119a_yard_dataset_refresh.py`（**35 项**） |
 | 文档 | 本文件 + README / ARCHITECTURE 同步 |
+
+---
+
+# 附录 C：真实采集实测结果（Phase 11.9-A 执行完成）
+
+> 本附录是**采集执行后**追加的实测数据，不改写前面任何既往结论。判定规则已按操作方要求
+> 升级为**三级**（见下），因此与初版描述不同之处以本附录为准。
+
+## C.0 泄漏判定三级规则（已实现 + 测试固化）
+
+| 级别 | 判据 | 行为 |
+| --- | --- | --- |
+| **硬失败** `source_leakage` | SHA256 相同跨集合 · 同一会话双角色 · 同一帧身份跨集合 · 跨集合采集时间差 ≤ `ADJACENT_CAPTURE_WINDOW_S`(30s)（疑似同一次连续采样被拆分） | 审计 `status = source_leakage` |
+| **风险提示** `possible_visual_overlap` | 独立会话 · SHA 不同 · 非相邻帧，仅因"同一庭院画面有限"而 dHash ≤ 6 | **只记录**（文件名/距离/最近邻），**不删除、不重采** |
+| **可接受** | 真正独立 session + SHA 不同 + 非相邻帧 | 正常保留，`status = ok` |
+
+庭院场景面积有限、detector 又依赖较固定的底部功能栏，跨会话出现较低 dHash 距离属
+**自然现象**；dHash 在此用于"近重复风险审计"，**不是数据独立性的唯一判据**。
+
+## C.1 采集结果
+
+| 会话 | 皮肤（`yard_variant`） | 角色 | 张数 |
+| --- | --- | --- | --- |
+| `yard_live_20261003_s01` | 云景阆苑 | `diagnostic`（用户中途换皮肤，按约定降级，不参与任何模板结论） | 5 |
+| `yard_live_20261003_s03` | 茨心乐园 | `candidate` | 8 |
+| `yard_live_20261003_s02` | 茨心乐园 | `holdout` | 8 |
+
+* 全部 **1704×960**（原客户区像素，未 resize / 未裁 ROI / 未增强）；
+* 21 帧 **SHA256 两两不同**（`unique_sha256 = 21`）；
+* 历史 `dataset/raw/yard/*.png` 仍 **98 张**，历史 178 张 raw `missing = changed = 0`；
+* 生产 `template_include` / `threshold` / `roi_scale` / `prefilter_top_k` / `positive_sources.json`
+  **全部未改动**；新图未进入 `features/.../positive`。
+
+## C.2 独立性 / 泄漏审计（`tools/audit_yard_live.py`）
+
+```
+status                     : ok
+exact_duplicate_count      : 0
+cross_session_near_dup_cnt : 2
+cross_session_dhash_min    : 4
+possible_visual_overlap    : True
+source_leakage             : False        hard_failures: []
+natural_visual_similarity  : True
+```
+
+`possible_visual_overlap_pairs`：
+
+| 距离 | holdout | candidate |
+| --- | --- | --- |
+| 4 | `s02_001.png` | `s03_007.png` |
+| 4 | `s02_002.png` | `s03_002.png` |
+
+* candidate 内部（s03）28 对距离最小 **9**（仅 `#5~#7 = 6`，采集当时已明确保留）；
+* holdout 内部（s02）28 对距离最小 **11**；
+* 跨集合 64 对中仅 **2 对 ≤ 6**，且两集合采集时间相隔 ~9 分钟（远超 30s 相邻窗口）、
+  SHA 完全不同 ⇒ 属 **natural visual similarity**，非 source leakage。
+
+## C.3 Production36 vs All61（candidate / holdout 分别统计）
+
+| 探针 | candidate (8) | holdout (8) | diagnostic (5) |
+| --- | --- | --- | --- |
+| **Production36** TP / FN / recall | **7 / 1 / 0.875** | **5 / 3 / 0.625** | 0 / 5 / 0.0 |
+| Production36 confidence min/p50/p90/max | 0 / 0.865 / 0.8771 / **0.8828** | 0 / 0.863 / 0.8736 / **0.8888** | 0 / 0 / 0 / 0.7448 |
+| Production36 raw_best min/p50/p90/max | 0.8448 / 0.865 / 0.8771 / 0.8828 | 0.2876 / 0.863 / 0.8736 / 0.8888 | 0.1665 / 0.6709 / 0.7236 / 0.7448 |
+| **All61** TP / FN / recall | **8 / 0 / 1.0** | **7 / 1 / 0.875** | 1 / 4 / 0.2 |
+| All61 confidence min/p50/p90/max | 0.8927 / 0.9261 / 0.9377 / **0.9435** | 0 / 0.9154 / 0.9345 / **0.9674** | 0 / 0 / 0 / 0.8747 |
+| All61 raw_best min/p50/p90/max | 0.8927 / 0.9261 / 0.9377 / 0.9435 | 0.7255 / 0.9154 / 0.9345 / 0.9674 | 0.7467 / 0.7764 / 0.8332 / 0.8747 |
+
+（Production36 命中帧的 `fit_applied = true`，`fallback = 0`；探针被 `threshold=0.85` 截断的
+问题已修：生产口径判 `detected`，低阈值探针取真实最高分。）
+
+**逐帧最佳模板**：
+
+* Production36 命中的每一帧都是 **`cap_006`**（在生产 36 内 ⇒ 方向正确）；
+* Production36 漏检的帧在 All61 下的最佳模板是 **`cap_026` / `cap_020` / `cap_009`** ⇒ **都不在生产 36 内**。
+
+## C.4 Gap 判定（candidate 与 holdout 方向一致）
+
+```json
+{"verdict": "production-selection-gap",
+ "reason": "All61 raw max 0.9674 >= 0.85 而 Production36 raw max 0.8888（TP 12 -> 16）",
+ "production_raw_max": 0.8888, "all61_raw_max": 0.9674,
+ "production_tp": 12, "all61_tp": 16, "threshold": 0.85}
+```
+
+⇒ **不是"库里没有可用模板"，而是"生产 36 没把库里真正有用的那几张选进来"**。
+⇒ 独立 holdout 同样成立（0.625 → 0.875），满足"两集合一致"的判定要求。
+
+**副产物（皮肤变量的价值）**：诊断组（云景阆苑）Production36 recall **0**、All61 仅 **0.2** ⇒
+同一套模板对**不同皮肤**的覆盖差异巨大 ⇒ 印证"按当前皮肤采当前样本"的必要性。
+
+## C.5 新样本 ↔ 历史 17 个 cap FN 的关系
+
+```
+历史 17 个 cap FN 在 All61 下的最佳模板 = 它们自己（raw 0.9999~1.0000）
+  ⇒ 它们当初成为 FN，纯粹因为生产 36 没把对应 cap 模板选进来
+
+live 帧最佳模板 TOP：cap_026(13) · cap_009(3) · cap_020(3) · cap_008(1) · cap_019(1)
+共同模板（两边都出现）：cap_008 · cap_026 · cap_009
+
+模拟（只读，未改任何配置）：
+  现状 生产36                      : live TP 12/21 · 历史 cap FN TP 0/17
+  +cap_008                         : live TP 14/21 · 历史 cap FN TP 1/17
+  +cap_008 +cap_026                : live TP 16/21 · 历史 cap FN TP 2/17
+  +cap_008 +cap_026 +cap_009       : live TP 16/21 · 历史 cap FN TP 3/17
+```
+
+⇒ 回答"是否存在一个模板能同时改善新 holdout 与历史 17 个 cap FN"：**是**，且候选全部
+**来自现有 61 张库内**（`cap_008` / `cap_026` / `cap_009`），无需新采模板。
+
+## C.6 残余缺口（未解决）
+
+* All61 下 holdout 仍有 **1 个 FN**（`s02_004.png`，raw **0.7255**）、candidate 最小 raw 0.8927；
+* 即使加入共同模板，live 也仅到 **16/21** ⇒ 仍有部分真实画面**连 61 张库都覆盖不到**
+  （真实活动/主题装饰导致的视觉差异）；
+* ⇒ 属"**局部** existing-library-gap"：主体缺口是生产集合选择，边缘仍有少量覆盖缺口。
+
+## C.7 是否足以进入 Phase 11.9-B
+
+**是。** 已满足：≥2 个独立 capture session、candidate/holdout 明确分离、SHA 无重复、
+无 source leakage（2 对跨会话近重复已按新规则记录为自然视觉相似）、Production36 与 All61
+在**两个独立集合**上的 baseline 均已有、缺口性质已可判定。
+
+## C.8 Phase 11.9-B 输入建议（**本轮未执行**）
+
+1. 在**不动 `threshold`** 的前提下重选模板集合，候选增补 `cap_008` / `cap_026` / `cap_009`
+   （或用贪心覆盖 + LOO 饱和从 candidate 选、holdout 验证）；
+2. 目标：把 holdout recall 从 0.625 提升到 ≥0.875（All61 水平），并同时回收历史 cap FN；
+3. 仍受 20 calls/帧 预算约束 ⇒ 增补必须**替换**而非单纯追加，需重跑 98/80 全量回归；
+4. `s02_004` 这类低分帧单独分析（可能需要在**当前主题**下补采新 template source）。
+

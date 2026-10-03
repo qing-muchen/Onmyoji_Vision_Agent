@@ -2254,9 +2254,16 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `tools/audit_yard_live.py`（**Production36 vs All61 双探针** + 缺口判定
   `production-selection-gap` / `existing-library-gap` + 与历史 17 个 cap FN 的 dHash 近邻关系）；
   `tools/raw_manifest.py` 新增 **`live` 分区**（历史 `count`/`entries` 语义逐字段不变）、
-  `tools/check_dataset.py` 允许 `raw/yard_live/`。⚠️ 本轮**未采集任何真实数据**（窗口不可用 ⇒
-  `window_not_found`，**不伪造**），按约定停在 `data_insufficient`。测试 **+35**。
-  详见 `docs/PHASE11_9A_CURRENT_YARD_DATASET_REFRESH_REPORT.md`。
+  `tools/check_dataset.py` 允许 `raw/yard_live/`。**真实采集已完成**：`s01 云景阆苑×5 (diagnostic)`
+  + `s03 茨心乐园×8 (candidate)` + `s02 茨心乐园×8 (holdout)`，全部 **1704×960**、SHA 两两不同、
+  历史 98 张未动；泄漏审计升级为**三级规则**（硬失败 `source_leakage` / 风险提示
+  `possible_visual_overlap`（**仅记录、不删除不重采**）/ 可接受），实测 `exact_duplicate_count=0`、
+  `source_leakage=False`、`cross_session_dhash_min=4`（仅 2 对 ≤6，记为 natural visual similarity）。
+  **双探针**：Production36 candidate **7/8**、holdout **5/8**；All61 candidate **8/8**、holdout **7/8**
+  ⇒ gap 判定 **`production-selection-gap`**（All61 raw max 0.9674 vs 生产 0.8888，TP 12→16）；
+  可同时改善"新 live + 历史 17 个 cap FN"的候选全部来自库内 `cap_008/cap_026/cap_009`
+  （只读模拟：live TP 12→16、历史 cap FN 0→3）。测试 **+40**。
+  详见 `docs/PHASE11_9A_CURRENT_YARD_DATASET_REFRESH_REPORT.md`（**附录 C = 实测结果**）。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
