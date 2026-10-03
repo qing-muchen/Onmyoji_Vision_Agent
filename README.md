@@ -2282,6 +2282,19 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   命中的 5 张全部由新模板 `cap_028` 命中（0.8555~0.9362）⇒ 训练侧达标但**跨会话收益未证实**，
   需 **s04 blind holdout** 背书。测试 **+37**。详见
   `docs/PHASE11_9B_YARD_TEMPLATE_RESELECTION_REPORT.md`。
+- Phase 11.9-BR（**已完成：blind holdout 采集 + 一次性验收**）：在 `PROPOSED_36_FROZEN`
+  （`freeze_hash` 复算三者一致）冻结前提下，用户手动采集**全新** `yard_live_20261003_s04`
+  （`role=holdout`、`茨心乐园`、8 张 / 1704×960、一次 1 张）。**数据质量（未跑任何视觉评分）**：
+  `exact_duplicate_count=0`、`source_leakage=False`、s04 内部 dHash 最小 11、跨会话 ≤6 共 7 对
+  仅记 `possible_visual_overlap`、session metadata 8/8 合规、`status=ok`。**唯一一次 blind probe
+  只用 Frozen Proposed36** ⇒ `TEMP/phase119b_s04_blind_acceptance.json`
+  （`BLIND_RESULT_FROZEN`，文件 sha256 前缀 `0abc7007…`）：**TP 8/8 · recall 1.0** ·
+  conf **0.8765/0.8895/0.8970/0.8985** · candidate_count `{4:8}` · fallback 0 · bbox 越界 0 ·
+  每帧均由新模板 `cap_028` 命中。**post-hoc（冻结后才跑）**：current36 **8/8**、proposed36 **8/8**、
+  All61 **8/8**，逐帧全部 D ⇒ ⚠️ **s04 对"重选增益"无区分度**（current36 也能全过），仅置信度
+  上移 +0.008~+0.021。⇒ 结论：proposed36 **跨 session 稳健（不劣化）成立**，但**跨 session 召回
+  增量未被证实**；建议进入 11.9-C 并保留 rollback，且不得声称"改善真实场景召回"。本阶段
+  **未修改生产配置**。详见 `docs/PHASE11_9BR_BLIND_HOLDOUT_ACCEPTANCE_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

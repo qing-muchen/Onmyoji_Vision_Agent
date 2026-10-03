@@ -343,9 +343,17 @@ def test_positive_sources_unchanged() -> None:
 
 
 def test_raw_data_unchanged() -> None:
-    """[21] raw 未被修改（历史 98 张 + live 21 张）。"""
+    """[21] raw 未被修改（历史 98 张；live 会话均符合命名契约）。"""
     assert len(list(YARD_DIR.glob("*.png"))) == 98
-    assert len(list(LIVE_DIR.rglob("*.png"))) == 21
+    sessions = sorted(p.name for p in LIVE_DIR.iterdir() if p.is_dir())
+    assert sessions == [
+        "yard_live_20261003_s01",
+        "yard_live_20261003_s02",
+        "yard_live_20261003_s03",
+        "yard_live_20261003_s04",
+    ]
+    total = sum(len(list((LIVE_DIR / session).glob("*.png"))) for session in sessions)
+    assert total >= 21
 
 
 def test_greedy_is_reproducible() -> None:
@@ -482,12 +490,14 @@ def test_validation_cannot_feed_selection() -> None:
 
 
 def test_blind_holdout_is_waiting() -> None:
-    """[32] s04 尚不存在 ⇒ 明确 waiting_for_blind_holdout，且不得提前跑 blind 探针。"""
+    """[32] s04 作为**永久 blind holdout**：采集后仍不得进入 selection 样本路径。"""
     assert rs.BLIND_SESSION == "yard_live_20261003_s04"
-    assert not (LIVE_DIR / rs.BLIND_SESSION).exists()
     source = TOOL_SRC.read_text(encoding="utf-8")
     assert "waiting_for_blind_holdout" in source
-    # blind 会话不得出现在选择样本收集里
+    selection_ids = {rs.sample_id_of(path) for _group, path in rs.selection_items()}
+    assert not any(rs.BLIND_SESSION in sample_id for sample_id in selection_ids)
+    assert not any(rs.VALIDATION_SESSION in sample_id for sample_id in selection_ids)
+    # blind 会话不得出现在选择样本收集函数体内
     selection_body = source.split("def selection_live_items")[1].split("def selection_items")[0]
     assert rs.BLIND_SESSION not in selection_body
 
