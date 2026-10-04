@@ -2308,6 +2308,19 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **"s04 confirmed no regression, but was not discriminative for incremental recall."**
   （增益来自 historical LOO 与 candidate 集合；**不得**说"blind 证明提升"）。
   详见 `docs/PHASE11_9C_PRODUCTION_SWITCH_REPORT.md`。
+- Phase 12.0-A（**已完成：真实运行期 soak 验证**，**无代码改动**）：真实窗口（`阴阳师-网易游戏`
+  hwnd `0x6807de`，1704×960）跑通 **Capture → VisionBridge → YardDetector → StateStabilizer →
+  RuntimeObservation**。复用既有 `tools/run_runtime_soak.py`（**未新造工具**），`yard_metrics`
+  以 `config.model_copy` **内存开启**（生产默认仍 `False`、`configs/config.yaml` 未动）。
+  覆盖 **A 静态 / B′ 纯被动动态 / C 轻度 UI / 30 分钟长跑**：
+  **长跑 3600 cycles / 1800 s / `errors=0` / deadline miss 0 / flaps 0 / fallback 0 /
+  模板契约恒定 36·4·20 / capture 失败 0 / 快照失效 0 / `action=false`+`dry_run` 全程**；
+  cycle latency p50 **234** / p95 296 / p99 328 / max 406 ms，`yard_ms` p50 **25.9**；
+  **无人为操作时 detected ratio = 1.000**（A / B′ / C），**有人为操作时 0.931~0.955**
+  （长跑 248 轮未检出已由操作者确认为"移动角色 / 点 UI / 离开庭院"），且 **flaps 恒为 0**；
+  Scene C 期间实测到 **4 `not_foreground` + 3 `snapshot_invalidated` ⇒ 0 错误 action、恢复后正常**。
+  ⚠️ 两个缺口如实记录：**运行期无 bbox 字段**（越界仅引用 11.9-C 离线 0）、**无 `psutil` ⇒ RSS `not_available`**。
+  pytest **1858 passed, 1 skipped**。详见 `docs/PHASE12_0A_YARD_RUNTIME_SOAK_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
