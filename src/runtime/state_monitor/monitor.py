@@ -726,12 +726,14 @@ class StateMonitor:
                 recovery_count=self._recovery.count,
                 last_recovery_reason=self._recovery.last_reason,
                 # Phase 11.8：yard 运行期观测（未开启时为空 dict ⇒ 字段保持 None）
-                **self._yard_observation(),
+                # Phase 12.0-D：``produced`` 区分"本轮真的采集并判定过"与"本轮跳过"——
+                # 跳过轮**不得**携带上一轮残留的证据观测（否则识别率会被高估）。
+                **self._yard_observation(produced=frame is not None and result is not None),
             ),
             overrun_ms=schedule.overrun_ms,
         )
 
-    def _yard_observation(self) -> dict[str, Any]:
+    def _yard_observation(self, *, produced: bool) -> dict[str, Any]:
         """采集本轮 yard 运行期观测（Phase 11.8；未开启时返回空字典）。
 
         数据**全部来自 Runtime 已持有的对象**，不跨层 import，也不访问 detector 的私有属性：
@@ -743,16 +745,40 @@ class StateMonitor:
         * 安全确认 → 装配期记录的 action 配置。
 
         取不到的项一律留空（``None``），不猜测、不伪造。
+
+        Phase 12.0-D（``produced``）：证据类观测（``vision_ms`` / ``yard_*``）只在**本轮真的
+        采集并判定过**时才写入。跳过轮（失焦 / 最小化 / 采集失败）没有新产物，若沿用
+        ``_last_evidences`` / ``last_profile`` 就会**把上一轮的命中带进本轮**，导致识别率被高估
+        （例如失焦 23 轮仍报 ``yard_detected=true``）。配置类（``action_*``）与累计类
+        （``snapshot_invalidated`` / ``task_active`` / ``frame_id``）不受影响，照常写入。
+
+        Args:
+            produced: 本轮是否真的产出了帧与判定结果。
         """
         if not self._yard_metrics:
             return {}
+        # 与"本轮是否产出"无关的字段：轮号、安全配置、快照/任务的**累计**状态
         observation: dict[str, Any] = {
             "frame_id": self._cycles,
-            "vision_ms": self._last_detect_ms,
             "action_enabled": self._action_enabled,
             "action_backend": self._action_backend,
         }
 
+        bridge = self._vision_bridge
+        stats = getattr(bridge, "stats", None) if bridge is not None else None
+        if stats is not None:
+            observation["snapshot_status"] = getattr(stats, "last_reason", "") or None
+            observation["snapshot_invalidated"] = getattr(stats, "invalidated", None)
+
+        task_bridge = self._task_bridge
+        if task_bridge is not None:
+            observation["task_active"] = getattr(task_bridge, "active_task_id", None)
+
+        if not produced:
+            # Phase 12.0-D：本轮跳过 ⇒ 不写任何"上一轮残留"的证据观测
+            return observation
+
+        observation["vision_ms"] = self._last_detect_ms
         profile = self._profile_of(YARD_EVIDENCE_NAME)
         if profile is not None:
             observation["yard_ms"] = profile.elapsed_ms
@@ -781,16 +807,10 @@ class StateMonitor:
                 scales = len(profile.scales) if profile is not None else 0
                 if isinstance(candidates, int) and scales:
                     observation["yard_match_calls"] = candidates * scales
-
-        bridge = self._vision_bridge
-        stats = getattr(bridge, "stats", None) if bridge is not None else None
-        if stats is not None:
-            observation["snapshot_status"] = getattr(stats, "last_reason", "") or None
-            observation["snapshot_invalidated"] = getattr(stats, "invalidated", None)
-
-        task_bridge = self._task_bridge
-        if task_bridge is not None:
-            observation["task_active"] = getattr(task_bridge, "active_task_id", None)
+                # Phase 12.0-D：真正的 matchTemplate 次数（由 matcher 累计、vision 层取增量）
+                actual = metadata.get("prefilter_match_calls_actual")
+                if isinstance(actual, int):
+                    observation["yard_match_calls_actual"] = actual
         return observation
 
     def _evidence_of(self, name: str) -> Any | None:

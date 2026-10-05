@@ -152,6 +152,9 @@ class CycleMetrics:
     yard_total_templates: int | None = None
     #: 本帧 ``matchTemplate`` 调用数（= 候选数 × 档位数）
     yard_match_calls: int | None = None
+    #: 本帧**真正执行** ``matchTemplate`` 的次数（Phase 12.0-D；被 overflow 整档跳过的不计入）
+    #: ⇒ ``yard_match_calls - yard_match_calls_actual`` = 因尺寸不兼容被跳过的调用数
+    yard_match_calls_actual: int | None = None
     #: 预筛自身耗时（ROI 特征 + 排序）
     yard_prefilter_ms: float | None = None
     #: 是否发生预筛回退（回退到全量匹配）
@@ -224,6 +227,7 @@ class CycleMetrics:
             ("yard_candidates", self.yard_candidates),
             ("yard_total_templates", self.yard_total_templates),
             ("yard_match_calls", self.yard_match_calls),
+            ("yard_match_calls_actual", self.yard_match_calls_actual),
             (
                 "yard_prefilter_ms",
                 None if self.yard_prefilter_ms is None else round(self.yard_prefilter_ms, 4),

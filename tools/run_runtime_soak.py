@@ -64,6 +64,15 @@ YARD_EVIDENCE = "bottom_menu_yard"
 MAX_SOAK_RECORDS: int = 20000
 #: 判定"状态抖动"的时间窗（秒）：``A→B→A`` 在窗口内发生即记为一次 flap
 FLAP_WINDOW_S = 2.0
+
+#: 字节 → MB（RSS 观测统一用 MB 汇报，Phase 12.0-D）
+MB: float = 1024.0 * 1024.0
+#: RSS 分段窗口（前/中/后各取这么长的窗口，Phase 12.0-D）
+RSS_WINDOW_S: float = 600.0
+#: RSS warmup 期（该段不计入"是否持续增长"的判定，Phase 12.0-D）
+RSS_WARMUP_S: float = 300.0
+#: warmup 后斜率绝对值小于该值视为"平台"（MB/hour，Phase 12.0-D）
+RSS_SLOPE_FLAT_MB_PER_H: float = 5.0
 #: 离线 replay 的默认场景脚本（group, 连续轮数）——对应 11.8 的 A/C 场景
 DEFAULT_REPLAY_SCRIPT: tuple[tuple[str, int], ...] = (
     ("yard", 8),
@@ -247,12 +256,31 @@ def count_flaps(timeline: list[tuple[str, float]], *, window_s: float = FLAP_WIN
 
 
 def _yard_stats(records: list[Any]) -> dict[str, Any]:
-    """从逐轮指标聚合 yard 观测（未采集到的项为 ``None``）。"""
+    """从逐轮指标聚合 yard 观测（未采集到的项为 ``None``）。
+
+    Phase 12.0-D（观测缺口①）：**分母修正**。``status=skipped`` 的轮次（失焦 / 最小化 /
+    采集失败）**没有** yard 证据，Runtime 也不再为其写 ``yard_detected`` ⇒ 这里以
+    "``yard_detected is not None``"作为**真正产生过 yard 观测**的轮次（``yard_observed``），
+    识别率只在其中计算 ⇒ 不再把"未采集"误算成"命中"。
+    """
     rows = [record.to_dict() for record in records]
-    detected = [row for row in rows if row.get("yard_detected")]
+    observed = [row for row in rows if row.get("yard_detected") is not None]
+    detected = [row for row in observed if row.get("yard_detected")]
     yard_ms = [row["yard_ms"] for row in rows if row.get("yard_ms") is not None]
     candidates = [row["yard_candidates"] for row in rows if row.get("yard_candidates") is not None]
     calls = [row["yard_match_calls"] for row in rows if row.get("yard_match_calls") is not None]
+    # Phase 12.0-D：真正的 matchTemplate 调用数（budget 的对照）
+    actual_calls = [
+        row["yard_match_calls_actual"]
+        for row in rows
+        if row.get("yard_match_calls_actual") is not None
+    ]
+    skipped_calls = [
+        row["yard_match_calls"] - row["yard_match_calls_actual"]
+        for row in rows
+        if row.get("yard_match_calls") is not None
+        and row.get("yard_match_calls_actual") is not None
+    ]
     prefilter_ms = [
         row["yard_prefilter_ms"] for row in rows if row.get("yard_prefilter_ms") is not None
     ]
@@ -266,8 +294,16 @@ def _yard_stats(records: list[Any]) -> dict[str, Any]:
     bbox_flags = [row["yard_bbox_oob"] for row in rows if row.get("yard_bbox_oob") is not None]
 
     return {
-        "observations": len(rows),
+        "cycles": len(rows),
+        #: 真正产生过 yard 观测的轮次（= 有效采集轮次；Phase 12.0-D 的识别率分母）
+        "yard_observed": len(observed),
+        #: 未产生 yard 观测的轮次（失焦 / 最小化 / 采集失败），逐轮原因见 ``skip_reasons``
+        "yard_unobserved": len(rows) - len(observed),
+        "observations": len(observed),
         "detections": len(detected),
+        "detected_ratio": round(len(detected) / len(observed), 6) if observed else None,
+        #: 兼容视图：分母含"未采集"轮（**会高估**识别率，仅作历史对照）
+        "detected_ratio_all_cycles": round(len(detected) / len(rows), 6) if rows else None,
         # bbox 被 clamp 修正的次数（= 不修正本会越出 ROI）；样本仅含**命中**轮次
         "bbox": {
             "samples": len(bbox_flags),
@@ -289,6 +325,22 @@ def _yard_stats(records: list[Any]) -> dict[str, Any]:
             "min": min(calls) if calls else None,
             "max": max(calls) if calls else None,
             "distribution": dict(sorted(Counter(calls).items())),
+            "note": "**预算** = candidate_count × 配置档位数（历史语义，Phase 12.0-D 未改）",
+        },
+        "match_calls_actual": {
+            "samples": len(actual_calls),
+            "min": min(actual_calls) if actual_calls else None,
+            "max": max(actual_calls) if actual_calls else None,
+            "distribution": dict(sorted(Counter(actual_calls).items())),
+            "note": "本轮**真正执行** cv2.matchTemplate 的次数（overflow 超容差整档跳过的不计入）",
+        },
+        "skipped_match_calls": {
+            "samples": len(skipped_calls),
+            "min": min(skipped_calls) if skipped_calls else None,
+            "max": max(skipped_calls) if skipped_calls else None,
+            "total": sum(skipped_calls) if skipped_calls else None,
+            "distribution": dict(sorted(Counter(skipped_calls).items())),
+            "note": "派生量 = match_calls(预算) - match_calls_actual",
         },
         "best_confidence": {
             "count": len(confidence),
@@ -386,8 +438,21 @@ def build_summary(
             "foreground_status": dict(
                 sorted(Counter(row.get("foreground_status") or "(none)" for row in rows).items())
             ),
+            # Phase 12.0-D（观测缺口③）：**具体原因统计一律使用 ``skip_reason``**。
+            # ``unknown_reason`` 是**状态层**语义（"unknown 为什么 unknown"），不复制底层
+            # Runtime 原因 —— 它保留在 ``diagnosis.unknown_reasons`` 供状态层诊断，二者职责分离。
+            "skip_reasons": dict(
+                sorted(Counter(row.get("skip_reason") or "(none)" for row in rows).items())
+            ),
+        },
+        "diagnosis": {
+            # 状态层诊断（**不是**采集原因统计）：unknown 的细分原因
             "unknown_reasons": dict(
                 sorted(Counter(row.get("unknown_reason") or "(none)" for row in rows).items())
+            ),
+            "note": (
+                "具体采集/前台/最小化原因请看 capture.skip_reasons（唯一权威）；"
+                "unknown_reason 只描述状态层为何是 unknown"
             ),
         },
         "snapshot": {
@@ -443,15 +508,24 @@ class _RssSampler:
     def __init__(self, interval_s: float = 1.0) -> None:
         self._interval = max(0.1, float(interval_s))
         self._values: list[int] = []
+        # Phase 12.0-D：保留每个采样点的相对时刻（秒），用于分段 median 与趋势估计
+        self._times: list[float] = []
+        self._t0: float | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def _record(self, value: int) -> None:
+        """记录一个采样点（同时记录相对开始的时刻）。"""
+        self._values.append(value)
+        self._times.append(0.0 if self._t0 is None else (time.monotonic() - self._t0))
 
     def start(self) -> None:
         """开始采样（无 psutil 时只记录一个瞬时值）。"""
         first = _rss_bytes()
         if first is None:
             return
-        self._values.append(first)
+        self._t0 = time.monotonic()
+        self._record(first)
         self._thread = threading.Thread(target=self._loop, name="rss-sampler", daemon=True)
         self._thread.start()
 
@@ -460,25 +534,131 @@ class _RssSampler:
         while not self._stop.wait(self._interval):
             value = _rss_bytes()
             if value is not None:
-                self._values.append(value)
+                self._record(value)
 
     def stop(self) -> dict[str, Any]:
-        """停止采样并返回 ``start / peak / end / samples``。"""
+        """停止采样并返回 ``start / peak / end / samples`` + 时序（Phase 12.0-D）。"""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=self._interval * 2)
         last = _rss_bytes()
         if last is not None:
-            self._values.append(last)
+            self._record(last)
         if not self._values:
             return {"rss_start_bytes": None, "rss_peak_bytes": None, "rss_end_bytes": None,
-                    "rss_samples": 0}
+                    "rss_samples": 0, "rss_timeseries": None}
         return {
             "rss_start_bytes": self._values[0],
             "rss_peak_bytes": max(self._values),
             "rss_end_bytes": self._values[-1],
             "rss_samples": len(self._values),
+            # 仅在**两者等长**时才提供（保证是同一序列的两个投影）
+            "rss_timeseries": (
+                {"t_s": list(self._times), "rss_bytes": list(self._values)}
+                if len(self._times) == len(self._values)
+                else None
+            ),
         }
+
+
+def _rss_window_stats(
+    times: list[float], values: list[int]
+) -> dict[str, Any] | None:
+    """RSS 前/中/后 10 分钟窗口的 median（Phase 12.0-D）。
+
+    不足 10 分钟的数据会如实标注 ``insufficient``；窗口按**时间**切分（不是按样本数），
+    因此采样间隔抖动不会影响窗口语义。
+    """
+    if not times or len(times) != len(values):
+        return None
+    span = times[-1] - times[0]
+    if span < RSS_WINDOW_S:
+        return {
+            "available": False,
+            "note": f"运行时长 {span:.1f}s < {RSS_WINDOW_S:.0f}s，无法切分前/中/后 10 分钟窗口",
+            "span_s": round(span, 3),
+        }
+    windows: dict[str, Any] = {"available": True, "window_s": RSS_WINDOW_S, "span_s": round(span, 3)}
+    edges = {
+        "first_10min": (0.0, RSS_WINDOW_S),
+        "middle_10min": (span / 2 - RSS_WINDOW_S / 2, span / 2 + RSS_WINDOW_S / 2),
+        "last_10min": (span - RSS_WINDOW_S, span),
+    }
+    for name, (low, high) in edges.items():
+        picked = [v for t, v in zip(times, values) if low <= t <= high]
+        windows[name] = {
+            "samples": len(picked),
+            "median_mb": round(float(np.median(picked)) / MB, 3) if picked else None,
+            "min_mb": round(min(picked) / MB, 3) if picked else None,
+            "max_mb": round(max(picked) / MB, 3) if picked else None,
+        }
+    return windows
+
+
+def _rss_trend(times: list[float], values: list[int]) -> dict[str, Any]:
+    """RSS 线性趋势估计（MB/hour）+ 结论（Phase 12.0-D）。
+
+    **不**把 ``peak > start`` 当作内存泄漏：
+    先看 warmup（前 :data:`RSS_WARMUP_S` 秒）之后的窗口是否**持续单调上升**；
+    只做统计描述，**不**自动修改缓存 / GC 策略。
+    """
+    if not times or len(times) != len(values) or len(values) < 4:
+        return {"verdict": "insufficient_data", "note": "采样点不足（<4），无法估计趋势"}
+    t = np.asarray(times, dtype=float)
+    y = np.asarray(values, dtype=float) / MB
+    span = float(t[-1] - t[0])
+    if span <= 0:
+        return {"verdict": "insufficient_data", "note": "采样时长不足，无法估计趋势"}
+    slope, intercept = np.polyfit(t, y, 1)
+    pred = slope * t + intercept
+    ss_res = float(np.sum((y - pred) ** 2))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+    # warmup 之后（前 RSS_WARMUP_S 秒不计）的段
+    tail = t >= RSS_WARMUP_S
+    tail_slope = None
+    tail_r2 = None
+    if int(tail.sum()) >= 4:
+        tt, yy = t[tail], y[tail]
+        tail_slope, tail_intercept = np.polyfit(tt, yy, 1)
+        pred_tail = tail_slope * tt + tail_intercept
+        ss_res_t = float(np.sum((yy - pred_tail) ** 2))
+        ss_tot_t = float(np.sum((yy - yy.mean()) ** 2))
+        tail_r2 = 1.0 - ss_res_t / ss_tot_t if ss_tot_t > 0 else None
+    slope_per_hour = round(float(slope) * 3600.0, 3)
+    tail_slope_per_hour = None if tail_slope is None else round(float(tail_slope) * 3600.0, 3)
+    # 结论：以 warmup 后的斜率与幅度共同判断（阈值刻意保守，只做描述）
+    verdict = "insufficient_data"
+    note = ""
+    growth_mb = (float(y[-1]) - float(y[0]))
+    if tail_slope_per_hour is not None:
+        if abs(tail_slope_per_hour) < RSS_SLOPE_FLAT_MB_PER_H:
+            verdict = "stabilized_after_warmup"
+            note = (
+                f"warmup({RSS_WARMUP_S:.0f}s) 后斜率 {tail_slope_per_hour} MB/h "
+                f"（|slope| < {RSS_SLOPE_FLAT_MB_PER_H} MB/h 视为平台）"
+            )
+        elif tail_slope_per_hour > 0:
+            verdict = "possible_memory_growth"
+            note = f"warmup 后仍以 {tail_slope_per_hour} MB/h 上升（需人工确认）"
+        else:
+            verdict = "declining_after_warmup"
+            note = f"warmup 后下降 {tail_slope_per_hour} MB/h"
+    return {
+        "verdict": verdict,
+        "note": note,
+        "span_s": round(span, 3),
+        "samples": len(values),
+        "slope_mb_per_hour": slope_per_hour,
+        "intercept_mb": round(float(intercept), 3),
+        "r2": None if r2 is None else round(float(r2), 4),
+        "tail_slope_mb_per_hour": tail_slope_per_hour,
+        "tail_r2": None if tail_r2 is None else round(float(tail_r2), 4),
+        "delta_mb": round(growth_mb, 3),
+        "warmup_s": RSS_WARMUP_S,
+        "flat_threshold_mb_per_hour": RSS_SLOPE_FLAT_MB_PER_H,
+        "note_disclaimer": "peak > start **不**等于内存泄漏；此处只做统计描述，未修改缓存/GC 策略",
+    }
 
 
 def measure_memory(rss: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -493,16 +673,26 @@ def measure_memory(rss: dict[str, Any] | None = None) -> dict[str, Any]:
     current, peak = tracemalloc.get_traced_memory()
     sample = rss if rss is not None else {
         "rss_start_bytes": _rss_bytes(), "rss_peak_bytes": None, "rss_end_bytes": None,
-        "rss_samples": 0,
+        "rss_samples": 0, "rss_timeseries": None,
     }
     available = sample.get("rss_start_bytes") is not None
+    series = sample.get("rss_timeseries")
+    windows = None
+    trend = {"verdict": "insufficient_data", "note": "psutil 不可用或未采到时序"}
+    if isinstance(series, dict):
+        windows = _rss_window_stats(series.get("t_s") or [], series.get("rss_bytes") or [])
+        trend = _rss_trend(series.get("t_s") or [], series.get("rss_bytes") or [])
+    elif available:
+        trend = {"verdict": "insufficient_data", "note": "本次采样未保留时序（仅单点）"}
     return {
         "rss_start": sample.get("rss_start_bytes"),
         "rss_peak": sample.get("rss_peak_bytes"),
         "rss_end": sample.get("rss_end_bytes"),
         "rss_samples": sample.get("rss_samples", 0),
+        "rss_windows": windows,
+        "rss_trend": trend,
         "rss_note": (
-            "psutil 可用 ⇒ RSS 来自 Process().memory_info().rss（start/peak/end 由后台 1s 采样）"
+            "psutil 可用 ⇒ RSS 来自 Process().memory_info().rss（后台 1s 采样并保留时序）"
             if available
             else "psutil 未安装 ⇒ RSS 为 not_available；仅提供 tracemalloc 的 Python 分配量"
         ),
@@ -618,13 +808,15 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(f"  deadline: misses={deadline['misses']} rate={deadline['rate']} budget={deadline['budget_ms']}ms")
     yard = summary["yard"]
     print(
-        f"  yard: detections={yard['detections']}/{yard['observations']} "
+        f"  yard: detections={yard['detections']}/{yard.get('yard_observed', yard['observations'])} "
+        f"(ratio={yard.get('detected_ratio')}) unobserved={yard.get('yard_unobserved')} "
         f"detector_ms p50={yard['detector_ms']['p50']} p95={yard['detector_ms']['p95']} "
         f"max={yard['detector_ms']['max']}"
     )
     print(
         f"  prefilter: {yard['prefilter']} candidates={yard['candidate_count']['distribution']} "
-        f"match_calls={yard['match_calls']['distribution']} "
+        f"match_calls(budget)={yard['match_calls']['distribution']} "
+        f"match_calls(actual)={yard.get('match_calls_actual', {}).get('distribution')} "
         f"fallback={yard['fallback_count']} ({yard['fallback_reasons']})"
     )
     if "bbox" in yard:
@@ -635,6 +827,13 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(f"  states: counts={summary['states']['counts']} transitions={summary['states']['transitions']} flaps={summary['states']['flaps']}")
     capture = summary["capture"]
     print(f"  capture: success={capture['success']} failures={capture['failures']} reasons={capture['skipped_reasons']}")
+    if capture.get("skip_reasons"):
+        print(
+            f"  skip_reasons（权威具体原因）: {capture['skip_reasons']}"
+        )
+    diagnosis = summary.get("diagnosis")
+    if diagnosis:
+        print(f"  diagnosis(状态层): unknown_reasons={diagnosis['unknown_reasons']}")
     print(
         f"  snapshot: statuses={summary['snapshot']['statuses']} invalidations={summary['snapshot']['invalidations']}"
     )
@@ -650,6 +849,23 @@ def print_summary(summary: dict[str, Any]) -> None:
         f"  memory(python): current={memory['python_alloc_current_bytes']} "
         f"peak={memory['python_alloc_peak_bytes']} | {rss_text}"
     )
+    windows = memory.get("rss_windows")
+    if isinstance(windows, dict) and windows.get("available"):
+        print(
+            "  rss windows(MB median): "
+            f"first10={windows['first_10min']['median_mb']} "
+            f"mid10={windows['middle_10min']['median_mb']} "
+            f"last10={windows['last_10min']['median_mb']}"
+        )
+    trend = memory.get("rss_trend")
+    if isinstance(trend, dict) and trend.get("verdict"):
+        print(
+            f"  rss trend: verdict={trend['verdict']} slope={trend.get('slope_mb_per_hour')}MB/h "
+            f"tail_slope={trend.get('tail_slope_mb_per_hour')}MB/h r2={trend.get('r2')} "
+            f"delta={trend.get('delta_mb')}MB"
+        )
+        if trend.get("note"):
+            print(f"    note: {trend['note']}")
     print(f"  safety: {summary['safety']}")
 
 

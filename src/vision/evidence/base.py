@@ -354,6 +354,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         self._last_prefilter: dict[str, object] | None = None
         #: 最近一次 ``best_match`` 是否触发 bbox clamp 修正（Phase 12.0-B 观测）
         self._last_bbox_clamped: bool = False
+        #: 最近一次 ``best_match`` **真正执行** ``cv2.matchTemplate`` 的次数（Phase 12.0-D 观测）
+        self._last_match_calls_actual: int = 0
         if self._prefilter_enabled:
             self._build_prefilter()
 
@@ -571,6 +573,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             已换算回**帧坐标系**，且保证不越出 ROI。
         """
         cropped, roi_rect = self.crop_roi(frame)
+        # Phase 12.0-D：本轮实际匹配调用的起点（跨实例累计 ⇒ 用增量表示本轮）
+        self._last_match_calls_actual = 0
         if cropped.size == 0:
             # Phase 5.1：极小/异常帧可能裁不出像素——按"未检出"处理，而不是让 OpenCV 抛错
             self._last_bbox_clamped = False
@@ -580,6 +584,7 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             return None, roi_rect
         frame_gray = self._matcher.prepare(self._matching_image(cropped))
 
+        calls_before = self._matcher.match_calls
         best: TemplateMatch | None = None
         for template in self._candidate_templates(frame_gray):
             match = self._matcher.match(frame_gray, template)
@@ -587,6 +592,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
                 continue
             if best is None or match.confidence > best.confidence:
                 best = match
+        # Phase 12.0-D：本轮真正执行 matchTemplate 的次数（整档被 overflow 跳过的**不计入**）
+        self._last_match_calls_actual = self._matcher.match_calls - calls_before
         if best is None:
             self._last_bbox_clamped = False
             return None, roi_rect
@@ -935,6 +942,9 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             "prefilter_top_k": self._last_prefilter["top_k"],
             "prefilter_candidate_count": self._last_prefilter["candidate_count"],
             "prefilter_total_templates": self._last_prefilter["total_templates"],
+            # Phase 12.0-D：本轮**真正执行** matchTemplate 的次数（跨实例累计取增量）。
+            # 与"预算"（候选数 × 档位数）区分：被 overflow 整档跳过的不计入。
+            "prefilter_match_calls_actual": int(self._last_match_calls_actual),
         }
         if self._last_prefilter["fallback"]:
             payload["prefilter_fallback"] = True

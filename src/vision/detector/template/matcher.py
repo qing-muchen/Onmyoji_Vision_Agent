@@ -107,6 +107,10 @@ class TemplateMatcher:
         self._pyramid_cache_hits = 0
         #: Phase 11.8-R1：累计执行 bounded fit-to-ROI 的档位次数（诊断用）
         self._fit_count = 0
+        #: Phase 12.0-D：累计**真正执行** ``cv2.matchTemplate`` 的次数（诊断用）。
+        #: 只在进入 :meth:`_match_once` 时 +1；因模板显著大于匹配图
+        #: （``overflow > FIT_TOLERANCE_PX``）而整档跳过的不计入。**不参与判定逻辑**。
+        self._match_calls = 0
 
     @property
     def config(self) -> TemplateDetectorConfig:
@@ -191,6 +195,16 @@ class TemplateMatcher:
     def fit_count(self) -> int:
         """累计执行 bounded fit-to-ROI 的档位次数（诊断用，不改变判定逻辑）。"""
         return self._fit_count
+
+    @property
+    def match_calls(self) -> int:
+        """累计**真正执行** ``cv2.matchTemplate`` 的次数（Phase 12.0-D 诊断用）。
+
+        只统计实际进入匹配的档位：因模板显著大于匹配图（``overflow > FIT_TOLERANCE_PX``）
+        而整档跳过的**不计入**；bounded fit-to-ROI 之后若实际执行了匹配则**计入**。
+        该计数**不参与任何判定逻辑**，仅供观测（用于区分"跑了但分数低"与"根本没跑"）。
+        """
+        return self._match_calls
 
     def match(self, frame_gray: np.ndarray, template: TemplateInfo) -> TemplateMatch | None:
         """在灰度帧中查找单个模板的最佳位置。
@@ -307,6 +321,8 @@ class TemplateMatcher:
         Returns:
             ``(归一化置信度, (left, top))``。
         """
+        # Phase 12.0-D：只有真正执行匹配才计数（调用方已排除 overflow 超容差的档位）
+        self._match_calls += 1
         result = cv2.matchTemplate(frame_gray, template_gray, self._method)
         min_value, max_value, min_location, max_location = cv2.minMaxLoc(result)
         if self._method_name in LOWER_IS_BETTER_METHODS:
