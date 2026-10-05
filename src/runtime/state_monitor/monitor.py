@@ -763,6 +763,10 @@ class StateMonitor:
             observation["yard_confidence"] = float(getattr(evidence, "confidence", 0.0) or 0.0)
             metadata = dict(getattr(evidence, "metadata", None) or {})
             observation["yard_template_id"] = metadata.get("template_id")
+            # Phase 12.0-B：bbox 观测 —— 仅在**命中**时有意义（未命中无 bbox ⇒ 保持 None，
+            # 不写 False，避免把"没有 bbox"误读成"bbox 合法"）。
+            if observation["yard_detected"]:
+                observation["yard_bbox_oob"] = bool(metadata.get("bbox_clamped", False))
             if metadata.get("template_prefilter") is not None:
                 observation["yard_prefilter"] = metadata.get("template_prefilter")
                 observation["yard_top_k"] = metadata.get("prefilter_top_k")

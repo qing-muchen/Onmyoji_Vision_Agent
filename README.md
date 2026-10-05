@@ -2321,6 +2321,18 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   Scene C 期间实测到 **4 `not_foreground` + 3 `snapshot_invalidated` ⇒ 0 错误 action、恢复后正常**。
   ⚠️ 两个缺口如实记录：**运行期无 bbox 字段**（越界仅引用 11.9-C 离线 0）、**无 `psutil` ⇒ RSS `not_available`**。
   pytest **1858 passed, 1 skipped**。详见 `docs/PHASE12_0A_YARD_RUNTIME_SOAK_REPORT.md`。
+- Phase 12.0-B（**已完成：运行期观测补全**，只加观测、不改判定）：补齐 12.0-A 的两个缺口。
+  ① **bbox 观测**：`base.py` 新增无状态 `_restore_rect_ex()`（返回「是否被 clamp 修正」= "不修正
+  本会越出 ROI"）+ 薄别名 `_match_and_restore()`；`detect()` **仅触发时**写
+  `metadata["bbox_clamped"]=True`；`CycleMetrics` 新增 `yard_bbox_oob`，monitor **仅命中时**注入
+  （未命中保持未设置）。② **RSS 观测**：`psutil` 作为**可选依赖**（只在 `requirements-dev.txt`，
+  **不入运行时依赖**）+ `_RssSampler` 后台 1s 采样 ⇒ `rss_start/peak/end/samples`；缺 `psutil` 时
+  全部 `not_available`，**绝不用 Python 分配量冒充 RSS**。soak 的 `_yard_stats` 现聚合
+  `bbox.{samples,invalid}`，摘要新增 bbox 行与 RSS 显示。**向后兼容**：`yard_metrics=False`
+  （生产默认未变）时 `to_dict()` 仍**不含**任何观测键；`best_match()`/`_restore_rect()` 签名不变；
+  `detect()` **仍必经 `best_match()`**（该契约由 `test_phase116_template_cache` 的 spy 固化，
+  实现中先踩中后修正）。测试 **+26** ⇒ pytest **1884 passed, 1 skipped**；`configs/config.yaml`
+  未改。详见 `docs/PHASE12_0B_RUNTIME_OBSERVABILITY_COMPLETION_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

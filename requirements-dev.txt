@@ -4,3 +4,5 @@
 -r requirements.txt
 
 pytest>=8.0
+# 可选：运行期内存观测（soak 的 RSS start/peak/end）。未安装时 RSS 保持 not_available。
+psutil>=5.9

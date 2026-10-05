@@ -352,6 +352,8 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         self._templates_by_id = {item.template_id: item for item in self._templates}
         #: 最近一次 ``best_match`` 的预筛诊断（``None`` = 未启用预筛）
         self._last_prefilter: dict[str, object] | None = None
+        #: 最近一次 ``best_match`` 是否触发 bbox clamp 修正（Phase 12.0-B 观测）
+        self._last_bbox_clamped: bool = False
         if self._prefilter_enabled:
             self._build_prefilter()
 
@@ -571,8 +573,10 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
         cropped, roi_rect = self.crop_roi(frame)
         if cropped.size == 0:
             # Phase 5.1：极小/异常帧可能裁不出像素——按"未检出"处理，而不是让 OpenCV 抛错
+            self._last_bbox_clamped = False
             return None, roi_rect
         if not self._templates:
+            self._last_bbox_clamped = False
             return None, roi_rect
         frame_gray = self._matcher.prepare(self._matching_image(cropped))
 
@@ -584,22 +588,48 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             if best is None or match.confidence > best.confidence:
                 best = match
         if best is None:
+            self._last_bbox_clamped = False
             return None, roi_rect
 
-        offset_rect = self._restore_rect(best.rect, roi_rect.size).translated(
-            roi_rect.x, roi_rect.y
-        )
+        local, clamped = self._restore_rect_ex(best.rect, roi_rect.size)
+        # Phase 12.0-B：记录"本帧 bbox 是否被 clamp 修正"，供 detect() 写入 metadata。
+        # ``detect()`` 仍**必须**经由 ``best_match()``（既有契约：缓存/子类/测试依赖），
+        # 因此该标记以"最近一次调用"的形式暴露为只读属性（与 ``_last_prefilter`` 同风格）。
+        self._last_bbox_clamped = bool(clamped)
         return (
             TemplateMatch(
                 template=best.template,
                 confidence=best.confidence,
-                rect=offset_rect,
+                rect=local.translated(roi_rect.x, roi_rect.y),
                 scale=best.scale,
                 fit_applied=best.fit_applied,
                 fit_ratio=best.fit_ratio,
             ),
             roi_rect,
         )
+
+    @property
+    def last_bbox_clamped(self) -> bool:
+        """最近一次 :meth:`best_match` 是否触发 bbox clamp 修正（Phase 12.0-B 观测）。
+
+        ``True`` 表示"若不修正，bbox 本会越出 ROI"；未命中时为 ``False``。
+        """
+        return self._last_bbox_clamped
+
+    def _match_and_restore(self, frame: Frame) -> tuple[TemplateMatch | None, Rect, bool]:
+        """:meth:`best_match` 的**带观测**入口：额外返回「bbox 是否被 clamp 修正」。
+
+        Phase 12.0-B：``detect()`` 仍**必须**经由 ``best_match()``，因此本方法只是
+        "取标记"的便捷入口 —— 与 ``best_match`` **共用同一路径与同一状态**（不重复实现）。
+
+        Args:
+            frame: 待检测的帧。
+
+        Returns:
+            ``(最佳匹配或 None, ROI 像素矩形, bbox 是否被 clamp 修正)``。
+        """
+        match, roi_rect = self.best_match(frame)
+        return match, roi_rect, self._last_bbox_clamped
 
     def _candidate_templates(self, frame_gray: np.ndarray) -> tuple[TemplateInfo, ...]:
         """选出本帧要送进精匹配的模板（Phase 11.7-B）。
@@ -695,11 +725,34 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             位于 **ROI 局部坐标系**（左上角为原点）的矩形。
         """
         inverse = 1.0 / self.roi_scale
-        left = min(max(0, round(rect.x * inverse)), max(0, roi_size.width - 1))
-        top = min(max(0, round(rect.y * inverse)), max(0, roi_size.height - 1))
-        right = min(max(left + 1, left + round(rect.width * inverse)), roi_size.width)
-        bottom = min(max(top + 1, top + round(rect.height * inverse)), roi_size.height)
-        return Rect(x=left, y=top, width=right - left, height=bottom - top)
+        rect, _clamped = self._restore_rect_ex(rect, roi_size)
+        return rect
+
+    def _restore_rect_ex(self, rect: Rect, roi_size: Size) -> tuple[Rect, bool]:
+        """:meth:`_restore_rect` 的**带观测**版本：额外返回「本次是否被 clamp 修正」。
+
+        Phase 12.0-B：运行期需要一个"bbox 是否需要被修正"的**标量观测** —— clamp 被触发
+        等价于"若不修正，bbox 本会越出 ROI"。该判定完全由输入决定（**无实例状态**），
+        因此不影响既有调用方与线程安全。
+
+        Args:
+            rect: 匹配结果矩形（降采样后的灰度图坐标系）。
+            roi_size: ROI 的原始像素尺寸。
+
+        Returns:
+            ``(落在 ROI 内的矩形, 是否发生 clamp 修正)``。
+        """
+        inverse = 1.0 / self.roi_scale
+        raw_left = round(rect.x * inverse)
+        raw_top = round(rect.y * inverse)
+        raw_right = raw_left + round(rect.width * inverse)
+        raw_bottom = raw_top + round(rect.height * inverse)
+        left = min(max(0, raw_left), max(0, roi_size.width - 1))
+        top = min(max(0, raw_top), max(0, roi_size.height - 1))
+        right = min(max(left + 1, raw_right), roi_size.width)
+        bottom = min(max(top + 1, raw_bottom), roi_size.height)
+        clamped = (left, top, right, bottom) != (raw_left, raw_top, raw_right, raw_bottom)
+        return Rect(x=left, y=top, width=right - left, height=bottom - top), clamped
 
     def detect(self, frame: Frame) -> EvidenceResult:
         """在 ROI 内检测该证据（**带可选的 ROI 结果缓存**）。
@@ -757,6 +810,9 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
             证据结果。
         """
         match, _roi_rect = self.best_match(frame)
+        # Phase 12.0-B：``detect()`` **必须**经由 ``best_match()``（既有契约：缓存 / 子类 /
+        # 测试 spy 依赖该调用路径），因此 clamp 标记以"最近一次调用"的只读属性读取。
+        bbox_clamped = self.last_bbox_clamped
         text = self.find_target_text(frame)
 
         if match is None and text is None:
@@ -771,6 +827,10 @@ class TemplateEvidenceDetector(BaseEvidenceDetector):
 
         if match is not None:
             metadata = self.template_metadata(match)
+            if bbox_clamped:
+                # Phase 12.0-B：bbox 曾被 clamp 修正（= 不修正本会越出 ROI）。
+                # **仅在触发时写入**，保证未触发时 metadata 与既有版本逐字段一致。
+                metadata["bbox_clamped"] = True
             if text is None:
                 return self.build_hit(
                     confidence=self._confidence(match.confidence),

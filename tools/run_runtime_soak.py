@@ -35,6 +35,7 @@ import json
 import sys
 import tempfile
 import time
+import threading
 import tracemalloc
 from collections import Counter
 from datetime import datetime
@@ -261,10 +262,19 @@ def _yard_stats(records: list[Any]) -> dict[str, Any]:
     fallback_rows = [row for row in rows if row.get("yard_fallback")]
     reasons = Counter(row.get("yard_fallback_reason") or "(unknown)" for row in fallback_rows)
     prefilter_names = {row.get("yard_prefilter") for row in rows if row.get("yard_prefilter")}
+    # Phase 12.0-B：bbox 观测（仅"命中"轮次有值；未命中的 None 不参与统计）
+    bbox_flags = [row["yard_bbox_oob"] for row in rows if row.get("yard_bbox_oob") is not None]
 
     return {
         "observations": len(rows),
         "detections": len(detected),
+        # bbox 被 clamp 修正的次数（= 不修正本会越出 ROI）；样本仅含**命中**轮次
+        "bbox": {
+            "samples": len(bbox_flags),
+            "clamped": sum(1 for flag in bbox_flags if flag),
+            "invalid": sum(1 for flag in bbox_flags if flag),
+            "note": "samples 仅统计命中轮次；未命中（None）不计入",
+        },
         "detector_ms": _latency_stats(yard_ms),
         "prefilter_ms": _latency_stats(prefilter_ms),
         "candidate_count": {
@@ -408,14 +418,94 @@ def build_summary(
     return payload
 
 
-def measure_memory() -> dict[str, Any]:
-    """内存快照：``tracemalloc`` 的 Python 分配量（RSS 需要 psutil，未安装 ⇒ not_available）。"""
+def _rss_bytes() -> int | None:
+    """当前进程 RSS（字节）；``psutil`` 不可用时返回 ``None``（**不伪造**）。
+
+    Phase 12.0-B：RSS 走 ``psutil`` 这一**可选依赖**；未安装时所有 RSS 字段保持
+    ``not_available``，而不是用 Python 分配量冒充常驻内存。
+    """
+    try:
+        import psutil  # noqa: PLC0415 - 可选依赖，缺失时静默降级
+    except ImportError:
+        return None
+    try:
+        return int(psutil.Process().memory_info().rss)
+    except Exception:  # noqa: BLE001 - 采样失败不应影响 soak
+        return None
+
+
+class _RssSampler:
+    """后台线程按固定间隔采样 RSS，给出 ``start / peak / end``。
+
+    ``psutil`` 不可用时所有值为 ``None``，且**不启动线程**（零额外开销）。
+    """
+
+    def __init__(self, interval_s: float = 1.0) -> None:
+        self._interval = max(0.1, float(interval_s))
+        self._values: list[int] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        """开始采样（无 psutil 时只记录一个瞬时值）。"""
+        first = _rss_bytes()
+        if first is None:
+            return
+        self._values.append(first)
+        self._thread = threading.Thread(target=self._loop, name="rss-sampler", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        """采样循环。"""
+        while not self._stop.wait(self._interval):
+            value = _rss_bytes()
+            if value is not None:
+                self._values.append(value)
+
+    def stop(self) -> dict[str, Any]:
+        """停止采样并返回 ``start / peak / end / samples``。"""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self._interval * 2)
+        last = _rss_bytes()
+        if last is not None:
+            self._values.append(last)
+        if not self._values:
+            return {"rss_start_bytes": None, "rss_peak_bytes": None, "rss_end_bytes": None,
+                    "rss_samples": 0}
+        return {
+            "rss_start_bytes": self._values[0],
+            "rss_peak_bytes": max(self._values),
+            "rss_end_bytes": self._values[-1],
+            "rss_samples": len(self._values),
+        }
+
+
+def measure_memory(rss: dict[str, Any] | None = None) -> dict[str, Any]:
+    """内存快照：``tracemalloc`` 的 Python 分配量 + 可选 ``psutil`` RSS。
+
+    Args:
+        rss: :meth:`_RssSampler.stop` 的结果；省略时尝试取一次瞬时 RSS。
+
+    Returns:
+        内存字段字典（缺 ``psutil`` 时 RSS 相关键为 ``None`` 并给出说明）。
+    """
     current, peak = tracemalloc.get_traced_memory()
+    sample = rss if rss is not None else {
+        "rss_start_bytes": _rss_bytes(), "rss_peak_bytes": None, "rss_end_bytes": None,
+        "rss_samples": 0,
+    }
+    available = sample.get("rss_start_bytes") is not None
     return {
-        "rss_start": None,
-        "rss_end": None,
-        "rss_peak": None,
-        "rss_note": "psutil 未安装 ⇒ RSS 为 not_available；使用 tracemalloc 的 Python 分配量",
+        "rss_start": sample.get("rss_start_bytes"),
+        "rss_peak": sample.get("rss_peak_bytes"),
+        "rss_end": sample.get("rss_end_bytes"),
+        "rss_samples": sample.get("rss_samples", 0),
+        "rss_note": (
+            "psutil 可用 ⇒ RSS 来自 Process().memory_info().rss（start/peak/end 由后台 1s 采样）"
+            if available
+            else "psutil 未安装 ⇒ RSS 为 not_available；仅提供 tracemalloc 的 Python 分配量"
+        ),
         "python_alloc_current_bytes": current,
         "python_alloc_peak_bytes": peak,
     }
@@ -473,11 +563,13 @@ def run_soak(
     )
 
     tracemalloc.start()
+    sampler = _RssSampler()
+    sampler.start()
     started = time.perf_counter()
     monitor.run(duration_s=duration_s, max_cycles=max_cycles)
     elapsed = time.perf_counter() - started
 
-    memory = measure_memory()
+    memory = measure_memory(sampler.stop())
     tracemalloc.stop()
     return build_summary(
         monitor,
@@ -535,6 +627,11 @@ def print_summary(summary: dict[str, Any]) -> None:
         f"match_calls={yard['match_calls']['distribution']} "
         f"fallback={yard['fallback_count']} ({yard['fallback_reasons']})"
     )
+    if "bbox" in yard:
+        print(
+            f"  bbox: invalid={yard['bbox']['invalid']} / samples={yard['bbox']['samples']} "
+            f"（clamp 修正次数；未命中轮次不计入）"
+        )
     print(f"  states: counts={summary['states']['counts']} transitions={summary['states']['transitions']} flaps={summary['states']['flaps']}")
     capture = summary["capture"]
     print(f"  capture: success={capture['success']} failures={capture['failures']} reasons={capture['skipped_reasons']}")
@@ -542,9 +639,16 @@ def print_summary(summary: dict[str, Any]) -> None:
         f"  snapshot: statuses={summary['snapshot']['statuses']} invalidations={summary['snapshot']['invalidations']}"
     )
     memory = summary["memory"]
+    if memory.get("rss_start") is None:
+        rss_text = "rss: not_available（psutil 未安装）"
+    else:
+        rss_text = (
+            f"rss: start={memory['rss_start']} peak={memory['rss_peak']} "
+            f"end={memory['rss_end']} samples={memory.get('rss_samples')}"
+        )
     print(
-        f"  memory(python): start={memory['python_alloc_current_bytes']} "
-        f"peak={memory['python_alloc_peak_bytes']} | rss: not_available"
+        f"  memory(python): current={memory['python_alloc_current_bytes']} "
+        f"peak={memory['python_alloc_peak_bytes']} | {rss_text}"
     )
     print(f"  safety: {summary['safety']}")
 

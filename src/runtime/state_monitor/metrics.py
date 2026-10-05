@@ -158,6 +158,9 @@ class CycleMetrics:
     yard_fallback: bool | None = None
     #: 预筛回退原因（诊断）
     yard_fallback_reason: str | None = None
+    #: Phase 12.0-B：本轮 bbox 是否曾被 clamp 修正（= 不修正本会越出 ROI）。
+    #: ``None`` = 本轮未命中 / 无 bbox（**不**代表"合法"）；``False`` = 命中且未被修正。
+    yard_bbox_oob: bool | None = None
     #: 视觉快照状态（``processed`` / ``no_frame`` / ``window_unavailable`` / ``adapter_error`` …）
     snapshot_status: str | None = None
     #: 累计快照主动失效次数（Phase 11.0 语义）
@@ -227,6 +230,7 @@ class CycleMetrics:
             ),
             ("yard_fallback", self.yard_fallback),
             ("yard_fallback_reason", self.yard_fallback_reason),
+            ("yard_bbox_oob", self.yard_bbox_oob),
             ("snapshot_status", self.snapshot_status),
             ("snapshot_invalidated", self.snapshot_invalidated),
             ("task_active", self.task_active),
