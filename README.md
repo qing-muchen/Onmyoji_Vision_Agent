@@ -2333,6 +2333,7 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `detect()` **仍必经 `best_match()`**（该契约由 `test_phase116_template_cache` 的 spy 固化，
   实现中先踩中后修正）。测试 **+26** ⇒ pytest **1884 passed, 1 skipped**；`configs/config.yaml`
   未改。详见 `docs/PHASE12_0B_RUNTIME_OBSERVABILITY_COMPLETION_REPORT.md`。
+- Phase 12.0-C（**已完成：Scene D–F 真实运行期验证**，无生产代码改动）：D 窗口尺寸变化与恢复（**1704×960** / **1156×651** / **2305×1299**，用户手动 resize，程序从不改窗口）⇒ **capture 与 ROI 每次正确重算、bbox 恒合法、恢复原尺寸后识别 120/120 回归、无陈旧快照、无 flap、无崩溃**；识别率下降仅出现在模板档位之外（D1 需 scale<0.6、D2 需 ≈1.35，而档位为 0.6~0.9），属**模板为固定像素源**的**已知架构限制**（`FIT_TOLERANCE_PX=2` 只吸收取整误差），**不调参**。E 失焦（23 轮 `not_foreground`）与最小化（27 轮 `window_minimized`，`frame_ms≈0.05ms` **未进入采集**）⇒ **0 action / 0 stale target / snapshot 正确失效 / 无 fallback 风暴**，恢复均 **≤1 轮**。F **3600.025 s / 7200 cycles**：**deadline miss 1/7200、flaps 0、fallback 0、bbox samples 7200 / invalid 0**、candidates ≤4、match_calls 20、confidence min 0.8729/p50 0.9191、分段无热漂移。**12.0-A 缺口①（运行期 bbox）正式关闭**。同时记录 4 个 `observability_gap`（skipped 轮 yard 字段泄漏、match_calls 是预算、`unknown_reason` 不一致、RSS 采样器无时序）留待 12.0-D。pytest **1884 passed, 1 skipped**；`configs/config.yaml` 未改。详见 `docs/PHASE12_0C_SCENE_D_F_RUNTIME_VALIDATION_REPORT.md`。
 - 后续（未执行）：**人工配合的真实 yard soak**（切到庭院后按场景 A–F 各跑 2–5 分钟）；
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
