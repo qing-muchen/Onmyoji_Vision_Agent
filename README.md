@@ -2345,6 +2345,14 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   ④ **RSS 时序**：`_RssSampler` 保留 `(t, rss)` ⇒ 前/中/后 10 分钟 median + MB/hour 斜率 +
   `stabilized_after_warmup` / `possible_memory_growth` / `insufficient_data` 结论（不把 `peak>start` 当泄漏，不自动改缓存/GC）。
   测试 **+30** ⇒ pytest **1914 passed, 1 skipped**；`configs/config.yaml` 未改。详见 `docs/PHASE12_0D_OBSERVABILITY_GAP_CLOSURE_REPORT.md`。
+- Phase 12.0-D-R（**已完成：新观测的真实运行期复验**，**零源代码改动**）：三个场景各 600 周期（客户区 1704×960、hwnd `0x70d52`、`errors 0`）。
+  **D-R-a 被动基线**：ok 600 / skip 0、`yard_observed=600`、detections 513/600、**budget {20} / actual {12} / skipped {8} 零违例**（与 12.0-D 报告一致）、`bbox invalid 0 / samples 513`、`fallback 0`、deadline 0、flaps 0。
+  **D-R-b1 手动失焦**（20 轮 ≈10 s）：`skip_reasons={not_foreground:20}`、`unknown_reasons={no_evidence:139, not_foreground:20}`、
+  **失焦轮残留证据字段 `NONE (clean)`**、`yard_observed=580`、snapshot invalidated 19→20、第 1 轮即恢复观测。
+  **D-R-b2 手动最小化**（13 轮）：`skip_reasons={window_minimized:13}` 而 **`unknown_reasons={skipped:13}`**（状态层语义未被替换）、`frame_ms 0.048~0.149 ms`（**未进入采集**）、
+  **零残留**、`yard_observed=587`、恢复轮 `yard_detected=False`（**不复用过期数据**）。
+  ⇒ **缺口①③ 在真实运行期确认关闭**。RSS：3×299 采样点、时间戳严格单调、按纪律标记 **`insufficient_duration`**（未宣称长期趋势通过）。
+  全程 `action invocation=0`、`real_input=false`、`deadline miss 0`、`flaps 0`。pytest **1914 passed, 1 skipped**；`configs/`/`dataset/`/`src/`/`tests/` **未改**。详见 `docs/PHASE12_0DR_RUNTIME_OBSERVABILITY_REAL_WORLD_VERIFICATION_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
   把"模板集合重新选择流程"（贪心覆盖 + LOO 饱和）产品化；评估 `roi_scale = 0.5` 与 ROI 缓存（11.6-A）；
