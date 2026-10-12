@@ -224,6 +224,77 @@ def test_harness_assembly_uses_isolated_port_and_registers_task(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
+# 6. 运行期取证与手动收尾（Scene C 所需的观测/控制能力）
+# ---------------------------------------------------------------------------
+
+
+def test_timeline_jsonl_is_written_per_cycle(tmp_path: Path) -> None:
+    """逐轮 JSONL 落盘可用：行数 = 运行轮数，且不产生任何动作请求。"""
+    import json
+
+    from src.core.config import load_config
+
+    module = _harness_module()
+    config = load_config()
+    source = _NullFrameSource()
+    timeline = tmp_path / "timeline.jsonl"
+    harness = module.build_harness(
+        config,
+        source,
+        documents=module.task_documents("obs_yard_watch"),
+        trigger_state="yard",
+        trigger_task="obs_yard_watch",
+        interval_ms=1,
+        estop_path=tmp_path / "ESTOP",
+        timeline_path=timeline,
+    )
+    module._start_source(source)
+    try:
+        harness.monitor.run(max_cycles=5)
+    finally:
+        module._stop_source(source)
+
+    lines = [json.loads(line) for line in timeline.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 5
+    assert [row["runtime_cycle"] for row in lines] == [1, 2, 3, 4, 5]
+    assert all(row["metrics"]["status"] == "skipped" for row in lines)
+    assert all(row["intent_count"] == 0 for row in lines)
+    assert harness.port.intent_count == 0
+
+
+def test_stop_file_ends_run_cleanly_without_action_requests(tmp_path: Path) -> None:
+    """停止哨兵文件存在 ⇒ 运行正常收尾（不产生动作请求、不留活动实例）。"""
+    from src.core.config import load_config
+
+    module = _harness_module()
+    config = load_config()
+    source = _NullFrameSource()
+    stop_file = tmp_path / "STOP_OBS"
+    stop_file.write_text("stop\n", encoding="utf-8")
+    harness = module.build_harness(
+        config,
+        source,
+        documents=module.task_documents("obs_yard_watch"),
+        trigger_state="yard",
+        trigger_task="obs_yard_watch",
+        interval_ms=1,
+        estop_path=tmp_path / "ESTOP",
+        stop_file=stop_file,
+    )
+    module._start_source(source)
+    try:
+        report = harness.monitor.run(duration_s=30.0)
+    finally:
+        module._stop_source(source)
+
+    assert harness.observer.rows, "至少应完成一轮"
+    assert harness.port.intent_count == 0
+    assert harness.bridge.active_task_id is None
+    assert any(item["kind"] == "stop_file" for item in harness.observer.stop_actions)
+    assert str(getattr(report, "stop_reason", "")) == "stop_requested"
+
+
+# ---------------------------------------------------------------------------
 # 5. 安全结论口径
 # ---------------------------------------------------------------------------
 

@@ -351,6 +351,12 @@ class CycleObserver:
     violations: list[str] = field(default_factory=list)
     #: 观测回调自身的失败（**已隔离**；用于如实报告"观测通道是否可用"）
     observation_errors: list[str] = field(default_factory=list)
+    #: 运行期逐轮增量落盘（JSON Lines；TEMP 下）——用于运行**期间**做分段取证
+    timeline_path: Path | None = None
+    #: 每 N 轮向 stdout 打印一行进度（0 = 关闭；仅用于外部观测）
+    progress_every: int = 0
+    #: 手动停止哨兵文件：存在即调用 ``StateMonitor.stop()`` **正常收尾**（写出完整报告）
+    stop_file: Path | None = None
     #: 每个实例最后一次**非空**的生命周期快照（实例被收割后引擎上下文可能被清空，
     #: 这份累积快照因此是"生命周期确实发生过"的权威证据）
     lifecycle_seen: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -438,6 +444,27 @@ class CycleObserver:
                 self.lifecycle_seen[instance_id] = list(row["lifecycle"])
             if row.get("task_state"):
                 self.task_state_seen[instance_id] = str(row["task_state"])
+        self._write_timeline(rows[-1])
+        if self.progress_every > 0 and isinstance(cycle_id, int) and cycle_id % self.progress_every == 0:
+            metrics_row = rows[-1]["metrics"]
+            print(
+                f"[obs] cycle={cycle_id} elapsed={elapsed:.1f}s "
+                f"status={metrics_row.get('status')} state={metrics_row.get('state')} "
+                f"stable={metrics_row.get('stable_state')} skip={metrics_row.get('skip_reason')} "
+                f"task_active={rows[-1]['live_task_active']} intent={self.port.intent_count}",
+                flush=True,
+            )
+
+    def _write_timeline(self, row: dict[str, Any]) -> None:
+        """把本轮的观测行**增量**追加到 JSONL（供运行期间分段取证；失败只计数）。"""
+        if self.timeline_path is None:
+            return
+        try:
+            self.timeline_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.timeline_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+        except Exception as exc:  # noqa: BLE001 - 落盘失败绝不影响 Runtime
+            self.observation_errors.append(f"timeline_write: {exc}")
 
     # ---- 安全与停止 ---------------------------------------------------------
 
@@ -463,6 +490,20 @@ class CycleObserver:
         关闭该选项则继续运行，用于如实观察**既有契约**的"停止后允许重新触发"行为。
         """
         triggered = False
+        if self.stop_file is not None and not self._stop_done and self.stop_file.exists():
+            # 手动停止哨兵：**正常收尾**（等价于人工按"停止观察"），并留下证据
+            self._stop_done = True
+            triggered = True
+            self.stop_actions.append(
+                {
+                    "kind": "stop_file",
+                    "at_s": round(elapsed, 3),
+                    "path": str(self.stop_file),
+                    "returned": True,
+                    "reason": "observation stop file present",
+                }
+            )
+            logger.warning("检测到停止哨兵文件，准备正常结束本次观察: %s", self.stop_file)
         if self.stop_after_s is not None and not self._stop_done and elapsed >= self.stop_after_s:
             self._stop_done = True
             triggered = True
@@ -707,6 +748,9 @@ def build_harness(
     stop_reason: str = "phase121b-manual-stop",
     exit_after_stop: bool = True,
     unregister_trigger_on_stop: bool = False,
+    timeline_path: Path | None = None,
+    progress_every: int = 0,
+    stop_file: Path | None = None,
 ) -> Harness:
     """装配「真实 Runtime + 真 Task 层 + 隔离动作端口」的观察 harness。
 
@@ -784,6 +828,9 @@ def build_harness(
         exit_after_stop=exit_after_stop,
         trigger_state=trigger_state,
         unregister_trigger_on_stop=unregister_trigger_on_stop,
+        timeline_path=timeline_path,
+        progress_every=progress_every,
+        stop_file=stop_file,
     )
     monitor = StateMonitor.from_config(
         active,
@@ -988,6 +1035,14 @@ def build_report(harness: Harness, monitor_report: Any, *, meta: dict[str, Any])
             "save_history": False,
             "save_metrics": False,
             "notes": list(harness.notes),
+            "timeline_path": (
+                str(harness.observer.timeline_path) if harness.observer.timeline_path else None
+            ),
+            "progress_every": harness.observer.progress_every,
+            "stop_file": str(harness.observer.stop_file) if harness.observer.stop_file else None,
+            "stop_file_triggered": any(
+                item.get("kind") == "stop_file" for item in observer.stop_actions
+            ),
             "source": type(harness.source).__name__,
             "runtime_interval_from_config": harness.config.runtime.state_monitor.interval_ms,
             "stabilization": {
@@ -1217,6 +1272,9 @@ def run_observation(
     estop_after_s: float | None,
     exit_after_stop: bool,
     unregister_trigger_on_stop: bool,
+    timeline_path: Path | None,
+    progress_every: int,
+    stop_file: Path | None,
     mode: str,
 ) -> dict[str, Any]:
     """装配 → 运行 → 汇总（完整的一次观察）。"""
@@ -1234,6 +1292,9 @@ def run_observation(
         estop_after_s=estop_after_s,
         exit_after_stop=exit_after_stop,
         unregister_trigger_on_stop=unregister_trigger_on_stop,
+        timeline_path=timeline_path,
+        progress_every=progress_every,
+        stop_file=stop_file,
     )
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     # 显式启动帧来源：``StateMonitor.run()`` 只驱动循环，**不**自动启动 source
@@ -1437,6 +1498,17 @@ def main(argv: list[str] | None = None) -> int:
         default=60.0,
         help="真实窗口模式下等待窗口进入前台的秒数（只读轮询；不激活、不抢占）",
     )
+    parser.add_argument(
+        "--timeline-jsonl",
+        default=None,
+        help="运行期逐轮增量落盘路径（JSONL，建议放 TEMP；用于运行期间分段取证）",
+    )
+    parser.add_argument("--progress-every", type=int, default=0, help="每 N 轮打印一行进度")
+    parser.add_argument(
+        "--stop-file",
+        default=None,
+        help="停止哨兵文件：存在即正常结束本次观察（写出完整报告）",
+    )
     parser.add_argument("--indent", type=int, default=2)
     args = parser.parse_args(argv)
 
@@ -1499,6 +1571,9 @@ def main(argv: list[str] | None = None) -> int:
             estop_after_s=args.estop_after_s,
             exit_after_stop=not args.keep_running_after_stop,
             unregister_trigger_on_stop=args.unregister_trigger_on_stop,
+            timeline_path=Path(args.timeline_jsonl) if args.timeline_jsonl else None,
+            progress_every=args.progress_every,
+            stop_file=Path(args.stop_file) if args.stop_file else None,
             mode=args.mode,
         )
     except Exception as exc:  # noqa: BLE001 - 致命错误也要留下证据文件（不静默失败）
