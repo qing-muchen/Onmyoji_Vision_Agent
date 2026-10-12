@@ -60,7 +60,7 @@ StateMonitor.run()                                    monitor.py:1156-1215
 | G3 | soak 工具未接 Task ⇒ 其 `task_active` 恒 `None` | 低 | 未改（按用户决定不动 soak）；12.1-B 可复用 harness |
 | G4 | Task 观测未纳入 soak summary | 低 | 留待后续 |
 | **G5** | `DecisionContext.cycle_id` 比 `bridge.runtime_cycle` **滞后 ≤1 轮**（同轮内先 `on_state_stable` 后 `on_cycle` 递增轮次） | 低 | **如实记录 + 测试固化**（不影响决策正确性） |
-| **G6** | **workflow 路径的 `ActionOutcome` 不写回 `DecisionContext`** ⇒ `context.actions` 恒 0（`WorkflowRunner.enter` 自行调 `port.request`，绕过 `engine._record_action_feedback`）；而仓库 `TaskDefinition` **只有 workflow 形式** ⇒ 属**主路径** | **中**（反馈可观测性） | **仅审计记录 + 测试固化**（涉及 `src/task`，按用户要求待批准） |
+| **G6** | ~~workflow 路径的 `ActionOutcome` 不写回 `DecisionContext`~~ **→ 已于 Phase 12.1-A1 修复**（`_WorkflowFeedbackPort` 包装 `WorkflowRunner` 端口，复用既有 `_record_action_feedback`；`context.actions` 不再恒 0） | 中 | ✅ **已修复并验证**（见 `PHASE12_1A1_WORKFLOW_FEEDBACK_CLOSURE_REPORT.md`） |
 | G7 | `ActionDispatcher.from_config` 不读 `action.enabled`；强制 dry-run 由 `create_input_backend` 保证（**双保险，非缺陷**） | 信息 | 记录 |
 
 **安全影响**：G5/G6 均**不影响安全性** —— 动作仍完整经过 5 道安全门与 `DryRunBackend`，`executed_count` 恒 0。
@@ -173,15 +173,16 @@ commit hash：见提交记录（`feat(task): add offline task dry-run harness`�
 | 基于 Runtime observation 决定 | ✅ | 真跑 `StateMonitor` 循环 + `StateStabilizer` 真实语义 |
 | 确定性离线决策 | ✅ | 8 场景全部确定性可复现（固定时钟 / 固定计划） |
 | 走通语义 Action dry-run | ✅ | A/D/F2：`intent=1 → accepted=1 → dry_run_outcome=1 → executed=0` |
-| **Feedback 闭环** | ⚠️ **主路径未闭环（G6）** | step 路径闭环；workflow（仓库唯一任务形式）不写回 `DecisionContext` |
+| **Feedback 闭环** | ✅ **已闭环（G6 于 12.1-A1 修复）** | workflow 主路径经 `_WorkflowFeedbackPort` 写回 `DecisionContext`；`recorded == intent_count == len(outcomes)` |
 | 保持真实输入安全限制 | ✅ | 全部场景 `executed_count=0`，生产配置未改 |
 
 ⇒ **本阶段判为 PASS（含一项待批准的 wiring 修复建议 G6）**。按用户要求**未擅自扩大实施范围**。
 
-## 14. 建议的下一步（需你决定）
+## 14. 建议的下一步
 
-1. **批准修复 G6**（最小 wiring）：让 workflow 路径的 `ActionOutcome` 也写回 `DecisionContext`
-   —— 建议在 `WorkflowRunner` 的端口调用点改为"经引擎回调"或由引擎在 `handle_state` 后
-   统一记账（**不改判定逻辑、不改 Action 安全**）；需同步更新本报告 §5 的 F3/§7 断言。
-2. 或**先进入 Phase 12.1-B**（真实 Runtime observation-only validation）：用本 harness 的装配
-   方式为 12.1-B 提供入口（**只观测、不分发**），G6 仅影响反馈可观测性、不影响安全。
+1. ~~批准修复 G6~~ **已于 Phase 12.1-A1 完成并验证**（`fix(task): close workflow action feedback loop`）：
+   workflow 主路径经 `_WorkflowFeedbackPort` 把真实 `ActionOutcome` 写回 `DecisionContext`，
+   复用既有 `_record_action_feedback`；**未**改判定逻辑与 Action 安全；
+   `recorded == intent_count == len(outcomes)`；E-STOP / target 缺失 / 限流三类拒绝同样如实记录。
+2. **进入 Phase 12.1-B**（真实 Runtime **observation-only** validation）：可用本 harness 的装配
+   方式提供入口（**只观测、不分发**）；G6 已闭环后，Task 反馈可观测性完整。

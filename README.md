@@ -2365,6 +2365,14 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **审计缺口**：G1 装配缺失（本轮以 harness 解决）、G5 `DecisionContext.cycle_id` 滞后 ≤1 轮（已固化）、
   **G6 workflow 主路径的 `ActionOutcome` 不写回 `DecisionContext`（`context.actions` 恒 0，反馈可观测性断裂；安全无影响）**、
   G7 `from_config` 不读 `action.enabled`（强制 dry-run 由 `create_input_backend` 双保险保证）。
+- Phase 12.1-A1（**已完成：Workflow ActionFeedback Closure**，G6 **已修复**）：`WorkflowRunner.enter()` 自行调用
+  `port.request()` 绕过反馈写入 ⇒ 在 `engine._start_definition` 处**只包装传给 runner 的端口**
+  （`_WorkflowFeedbackPort`），每次 `request()` 后复用既有 `TaskEngine._record_action_feedback` 记录**真实** outcome。
+  **未改** runner、step 路径、`_record_action_feedback`、Action 安全门、`StateStabilizer`/`Scheduler`、生产配置。
+  实测：正常 workflow `intent=1 recorded=1 status=skipped dry_run=True`；E-STOP `4=4 rejected`；
+  target 缺失 `2=2 rejected`（`target_not_found`）⇒ **`recorded == intent_count == len(outcomes)` 不重不漏**，
+  **dry-run 未被当作已执行**，拒绝反馈**不推进**工作流。改动仅 `src/task/engine.py`(+60/−2)。测试 **+22** ⇒
+  pytest **1969 passed, 1 skipped**。详见 `docs/PHASE12_1A1_WORKFLOW_FEEDBACK_CLOSURE_REPORT.md`。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

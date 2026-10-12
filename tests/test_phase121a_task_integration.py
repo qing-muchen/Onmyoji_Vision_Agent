@@ -369,29 +369,51 @@ def test_same_cycle_snapshot_context_and_request_line_up(config) -> None:  # noq
     assert getattr(request, "step_id", None) == "CLICK"
 
 
-def test_audit_g6_workflow_path_does_not_write_decision_context(config) -> None:  # noqa: ANN001
-    """[G6] 审计发现：workflow 路径的 ``ActionOutcome`` **未**写回 ``DecisionContext``。
+def test_g6_fixed_workflow_path_writes_decision_context(config) -> None:  # noqa: ANN001
+    """[G6 已修复] workflow 路径的 ``ActionOutcome`` **必须**写回 ``DecisionContext``。
 
-    事实（Phase 12.1-A 审计）：
-
-    * 仓库的 ``TaskDefinition`` 只有 workflow 形式 ⇒ 任务**主路径**是 ``WorkflowRunner``；
-    * ``WorkflowRunner.enter()``（``src/task/workflow.py:243-269``）**自行**调用
-      ``port.request(request)``，绕过了 ``TaskEngine._record_action_feedback``；
-    * 因此 ``DecisionContext.actions`` **不会**记录这些动作（反馈可观测性断裂）。
-
-    安全影响：**无**（动作仍完整经过 5 道安全门与 ``DryRunBackend``，零真实输入）。
-    本测试**固化现状**，以便修复后需要同步更新；修复需用户批准（涉及 ``src/task``）。
+    Phase 12.1-A1 修复：``WorkflowRunner`` 的端口被 ``_WorkflowFeedbackPort`` 包装，
+    每次 ``request()`` 后调用既有 ``TaskEngine._record_action_feedback``。
+    本测试同时验证：**dry-run 如实记录**（``status=skipped`` + ``dry_run=True``），
+    **不**被解释为已执行 / 已确认。
     """
     built = harness.build_harness(config, harness.plan_a())
     built.monitor.run(max_cycles=6)
-    # 动作确实被派发并得到 dry-run outcome（安全链路完好）
     assert built.port.intent_count == 1
-    assert built.port.outcomes[0].status is ActionStatus.SKIPPED
-    assert built.port.outcomes[0].detail.get("dry_run") is True
-    # 但上下文没有记录（G6）
+    outcome = built.port.outcomes[0]
+    assert outcome.status is ActionStatus.SKIPPED
+    assert outcome.detail.get("dry_run") is True
     context = built.bridge.context
     assert context is not None
-    assert len(context.actions) == 0, "若此处变为 >0，说明 G6 已修复：请同步更新本测试"
+    # 反馈闭环：恰好一条记录，且与真实 outcome 一致
+    assert len(context.actions) == 1, "workflow 路径必须写回决策上下文"
+    record = context.actions[0]
+    assert record.kind == "click"
+    assert record.status == "skipped"
+    assert bool(getattr(record, "dry_run", False)) is True, "dry-run 必须被如实标记"
+    assert record.ok is True
+    assert record.task_id == "dry_run_click"
+    assert record.step_id == "CLICK"
+    assert record.action_id == "dry_run_click:CLICK:1"
+    assert record.attempt == 1
+
+
+def test_g6_feedback_written_exactly_once_per_outcome(config) -> None:  # noqa: ANN001
+    """[G6] 每次真实分发**恰好**一条反馈记录（不得重复）。"""
+    built = harness.build_harness(config, harness.plan_a())
+    built.monitor.run(max_cycles=6)
+    context = built.bridge.context
+    assert len(context.actions) == built.port.intent_count == 1
+    assert context.stats.to_dict()["actions"] == 1
+
+
+def test_g6_repeated_callbacks_do_not_duplicate_records(config) -> None:  # noqa: ANN001
+    """[G6] 重复上报稳定状态**不产生**重复反馈记录（任务不重复启动）。"""
+    built = harness.build_harness(config, harness.plan_a(frames=10))
+    built.monitor.run(max_cycles=10)
+    assert built.bridge.stats.starts == 1
+    assert built.port.intent_count == 1
+    assert len(built.bridge.context.actions) == 1
 
 
 def test_harness_only_uses_existing_modules() -> None:

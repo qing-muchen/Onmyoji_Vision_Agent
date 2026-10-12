@@ -109,9 +109,65 @@ def _read_request_id(outcome: Any) -> str:
     return 
 
 
+def _target_name_of(request: Any) -> str:
+    """从 Task 侧请求的语义目标里取元素名（Phase 12.1-A1；仅字段视图，不 import ``src.action``）。"""
+    target = getattr(request, "target", None)
+    if isinstance(target, Mapping):
+        for key in ("element", "name", "target"):
+            value = target.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(target, str):
+        return target
+    return ""
+
+
+class _WorkflowFeedbackPort:
+    """把**工作流路径**的 ``ActionOutcome`` 写回 ``DecisionContext``（Phase 12.1-A1）。
+
+    背景（Phase 12.1-A 审计缺口 G6）：``WorkflowRunner.enter()`` 直接调用
+    ``ActionPort.request()``，绕过了 ``TaskEngine._record_action_feedback``，导致
+    workflow（仓库唯一的任务形式）路径的 ``DecisionContext.actions`` 恒为空。
+
+    修复策略（**最小、符合依赖方向**）：
+
+    * 只包装从引擎传给 :class:`~src.task.workflow.WorkflowRunner` 的端口；
+    * 每次 ``request()`` **恰好**记录一次（真实端口调用一次 ⇒ 反馈一条）；
+    * **不修改** runner、不修改 ``ActionOutcome``、不改变 ``StepActionOutcome.ok``
+      （工作流是否推进仍由真实 outcome 决定）；
+    * 记录的是**真实返回**的 outcome —— dry-run 的 ``SKIPPED`` + ``detail.dry_run``
+      如实记录，不会被当作"已执行/已确认"。
+
+    Args:
+        engine: 所属引擎（用于复用既有 ``_record_action_feedback``）。
+        context: 本任务实例的上下文（反馈归属该 instance）。
+    """
+
+    def __init__(self, engine: TaskEngine, context: TaskContext) -> None:
+        self._engine = engine
+        self._context = context
+
+    def request(self, request: Any, /) -> Any:
+        """转发一次语义动作请求，并把**真实**结果写回决策上下文。"""
+        outcome = self._engine._action_port.request(request)  # noqa: SLF001 - 同模块协作
+        self._engine._record_action_feedback(  # noqa: SLF001
+            self._context,
+            outcome,
+            kind=str(getattr(request, "kind", "") or ""),
+            target=_target_name_of(request),
+            step_id=str(getattr(request, "step_id", "") or ""),
+            attempt=int(getattr(request, "attempt", 1) or 1),
+            action_id=str(getattr(request, "action_id", "") or ""),
+        )
+        return outcome
+
+    def describe(self) -> str:
+        """可读描述。"""
+        return f"_WorkflowFeedbackPort(task={self._context.task.task_id})"
+
+
 class TaskEngineError(TaskError):
     """Task Engine 运行期错误（例如谓词执行失败）。"""
-
 
 class TaskEngineBusyError(TaskEngineError):
     """已有活动任务时再次启动新任务。"""
@@ -421,7 +477,9 @@ class TaskEngine:
         self._definition = definition
         self._runner = WorkflowRunner(
             definition,
-            port=self._action_port,
+            # Phase 12.1-A1（缺口 G6）：工作流路径必须把 ActionOutcome 写回 DecisionContext。
+            # 只包装传给 runner 的端口；**step 路径**（``_dispatch``）保持原样，避免重复记录。
+            port=_WorkflowFeedbackPort(self, context),
             clock=self._clock,
             now=self._now,
             dispatch_guard=self._workflow_dispatch_guard,
