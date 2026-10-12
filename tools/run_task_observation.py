@@ -1344,8 +1344,15 @@ def _print_report(payload: dict[str, Any], *, out: Path) -> None:
     print("=" * 96)
 
 
-def _build_source(config: AppConfig, mode: str) -> tuple[Any | None, dict[str, Any], str]:
-    """构造帧来源；不可用时给出**明确原因**（不伪造成功）。"""
+def _build_source(
+    config: AppConfig, mode: str, *, wait_foreground_s: float = 0.0
+) -> tuple[Any | None, dict[str, Any], str]:
+    """构造帧来源；不可用时给出**明确原因**（不伪造成功）。
+
+    ``wait_foreground_s``：真实窗口模式下最多等待多少秒，让操作者有时间把游戏窗口
+    切到前台。等待只用**只读**查询（前台句柄 / 最小化状态），**不激活、不抢占、
+    不发送任何输入**；超时后仍不可采集则如实返回 ``window_unavailable``。
+    """
     if mode == "window":
         from src.runtime.state_monitor.frame_source import WindowFrameSource
 
@@ -1353,12 +1360,31 @@ def _build_source(config: AppConfig, mode: str) -> tuple[Any | None, dict[str, A
         binding = source.binding
         window = binding.find(refresh=True)
         if window is None:
-            return None, {"reason": "window_not_found"}, "window_unavailable"
+            return None, {"reason": "window_not_found", "waited_s": 0.0}, "window_unavailable"
+        waited = 0.0
+        remaining = max(0.0, float(wait_foreground_s))
+        step = 0.5
+        while remaining > 0 and not (binding.is_foreground() and not binding.is_minimized()):
+            time.sleep(min(step, remaining))
+            waited += min(step, remaining)
+            remaining -= min(step, remaining)
         if binding.is_minimized():
-            return None, {"reason": "window_minimized"}, "window_unavailable"
+            return (
+                None,
+                {"reason": "window_minimized", "waited_s": round(waited, 1)},
+                "window_unavailable",
+            )
         if not binding.is_foreground():
-            return None, {"reason": "window_not_foreground"}, "window_unavailable"
-        return source, {"window": window.describe()}, "ok"
+            return (
+                None,
+                {"reason": "window_not_foreground", "waited_s": round(waited, 1)},
+                "window_unavailable",
+            )
+        return (
+            source,
+            {"window": window.describe(), "waited_s": round(waited, 1)},
+            "ok",
+        )
     if mode == "replay":
         # 复用**已验收**的 run_runtime_soak.ReplayFrameSource（只读加载，不修改该工具）
         import importlib.util
@@ -1405,6 +1431,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rerun", action="store_true", help="允许已完成任务再次触发")
     parser.add_argument("--watchdog-s", type=float, default=0.0)
     parser.add_argument("--output", default=str(DEFAULT_OUT_DIR / "observation.json"))
+    parser.add_argument(
+        "--wait-foreground-s",
+        type=float,
+        default=60.0,
+        help="真实窗口模式下等待窗口进入前台的秒数（只读轮询；不激活、不抢占）",
+    )
     parser.add_argument("--indent", type=int, default=2)
     args = parser.parse_args(argv)
 
@@ -1419,7 +1451,9 @@ def main(argv: list[str] | None = None) -> int:
 
     documents = task_documents(args.task, bounded_seconds=args.bounded_seconds)
     trigger_task = args.task
-    source, source_meta, source_status = _build_source(config, args.mode)
+    source, source_meta, source_status = _build_source(
+        config, args.mode, wait_foreground_s=args.wait_foreground_s
+    )
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
 
