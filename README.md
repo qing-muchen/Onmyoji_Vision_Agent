@@ -2353,6 +2353,19 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **零残留**、`yard_observed=587`、恢复轮 `yard_detected=False`（**不复用过期数据**）。
   ⇒ **缺口①③ 在真实运行期确认关闭**。RSS：3×299 采样点、时间戳严格单调、按纪律标记 **`insufficient_duration`**（未宣称长期趋势通过）。
   全程 `action invocation=0`、`real_input=false`、`deadline miss 0`、`flaps 0`。pytest **1914 passed, 1 skipped**；`configs/`/`dataset/`/`src/`/`tests/` **未改**。详见 `docs/PHASE12_0DR_RUNTIME_OBSERVABILITY_REAL_WORLD_VERIFICATION_REPORT.md`。
+- Phase 12.1-A（**已完成：Task 集成审计 + 离线 dry-run 闭环**，**零生产代码改动**）：审计确认 Task 架构（Phase 6–10）**完整可复用、无需重构** ——
+  `Snapshot → Observation → DecisionContext → TaskRuntimeBridge → TaskEngine/Triggers → 语义 ActionRequest →
+  ActionDispatcher(**它本身就是 ActionPort**) → 5 道安全门 → DryRunBackend → dry-run outcome`。
+  **`task_active=None` 根因**：**装配侧从未把 `task_bridge` 接上**（全仓库仅 `tests/**` 传入）⇒ 观测代码本身正确、**未伪造**。
+  新增独立 harness `tools/run_task_dry_run.py`（**只装配、不重实现**，不改已验收的 soak）+ **33 项测试**；A–F 共 8 个子场景全部确定性跑通：
+  **A** 稳定庭院 `intent=1 accepted=1 dry_run_outcome=1 executed=0`；**B** 注入 3 轮漏检 ⇒ **不重复触发**（starts=1）；
+  **C** `capture_failed/not_foreground/window_minimized` ⇒ **0 意图、无任务、无证据泄漏**；**D** 完整门控链 + dry-run；
+  **E** `bottom_menu_yard` 当点击目标 ⇒ **全部被拒**（`target_not_found origin=registry`）；**F** E-STOP ⇒ 4/4 被拒、任务 failed；
+  **F2** 第二任务**无法抢占**（`engine_busy_ignored`）；**F3** `stop` 后无活动任务。全部场景 **`executed_count=0`**（零真实输入）。
+  **审计缺口**：G1 装配缺失（本轮以 harness 解决）、G5 `DecisionContext.cycle_id` 滞后 ≤1 轮（已固化）、
+  **G6 workflow 主路径的 `ActionOutcome` 不写回 `DecisionContext`（`context.actions` 恒 0，反馈可观测性断裂；安全无影响）**、
+  G7 `from_config` 不读 `action.enabled`（强制 dry-run 由 `create_input_backend` 双保险保证）。
+  pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
   把"模板集合重新选择流程"（贪心覆盖 + LOO 饱和）产品化；评估 `roi_scale = 0.5` 与 ROI 缓存（11.6-A）；
