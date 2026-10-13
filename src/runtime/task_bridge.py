@@ -510,6 +510,22 @@ class TaskRuntimeBridge:
                 "请把 TaskControlState.admission_reason ——与外部 guard 组合后注入调度器。"
             )
 
+    def sync_records(self) -> None:
+        """把调度器实例状态同步到兼容运行记录（**公开**装配入口；Phase 12.1-C3）。
+
+        语义与内部同步一致（F1：先历史、后活动实例）。供编排层在**直接调用**
+        ``TaskScheduler``（不经本桥的事件入口）之后刷新 ``TaskRunRecord``，
+        避免兼容记录停留在过期状态（例如关闭后仍显示 ``RUNNING``）。
+        """
+        if self._scheduler is None:
+            return
+        try:
+            self._sync_scheduler_records()
+        except Exception as exc:  # noqa: BLE001 - 同步失败不影响调用方
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.warning("兼容记录同步失败（已隔离）: %s", exc)
+
     def stop_task(self, task_id: str, *, reason: str = "stopped") -> bool:
         """停止一个任务（之后允许重新触发）。
 

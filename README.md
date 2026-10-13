@@ -2425,6 +2425,27 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   上下文进 closed_contexts、E-STOP 与 Disable 并存时原因优先 `estop_active`、E-STOP reset 后回落
   `task_disabled`；全程 `intent_count=0` / `executed_count=0` / `real_input=False`。pytest
   **2034 passed, 1 skipped**（C1 的 14 项与 F1 / G5 / G6 既有语义不回归）。
+- Phase 12.1-C3（**已完成：Runtime / Task Coordinated Shutdown & Unified Control Wiring**，
+  **未**接入生产 `main.py`）：新增 `src/runtime/orchestration.py::TaskRuntimeOrchestrator`
+  （+ `ShutdownReport` / `OrchestrationError`）。**唯一权威控制状态** = `TaskControlState`：统一准入优先级
+  固定为 **E-STOP → Shutdown → Disabled**（结构化 `estop_active` / `shutdown_active` / `task_disabled`；
+  guard 异常仍 fail-closed）；`begin_shutdown()` 置**终局 latch**（不可复位 ⇒ `enable_task()` 无法重新开放
+  已关闭的 Runtime）。**装配校验 `assert_safe_wiring()` fail-fast**：调度器未注入 guard / 由**外部 guard
+  接管**（与控制状态不同源）/ Bridge 持有的 control 不是同一对象 / 实例引擎未共享同一 `EStop` ⇒ 抛
+  `OrchestrationError`（**不再**只发 warning 后宣称安全闭环成立）。**`shutdown()` 幂等 + 异常安全**：
+  ① 置 latch（拒绝新 submit / 排队启动 / PAUSED 恢复）→ ② `monitor.stop()` 并**确定性确认运行循环退出**
+  （编排器持有运行线程并 `join`；从 Monitor **自身线程**调用则跳过 join 避免死锁；**不用固定 sleep 猜测**，
+  无线程句柄时如实报告未确认）→ ③ 取消全部活动实例（RUNNING / QUEUED / PAUSED，逐个隔离失败并继续）
+  → ④ 校验资源锁由既有 `_finish` 路径释放（**不清空锁表、不伪造终态**）→ ⑤ 同步 Bridge 兼容记录并输出
+  结构化审计（`shutdown_requested` / `monitor_stop_requested` / `monitor_exited` / 三类实例计数 /
+  `cancel_failures` / `context_closed_count` / `locks_released` / `locks_remaining` / `shutdown_errors` /
+  `shutdown_completed`）。新增 `TaskRuntimeBridge.sync_records()`（公开装配入口，供编排层直接调用
+  `TaskScheduler` 后刷新记录）。离线实测（fake Monitor + fake runtime + **真实 `StateMonitor` 线程化**）：
+  D1–D10 全覆盖 —— RUNNING/QUEUED/PAUSED 全部终止、锁 `{}`、`DecisionContext` 关闭、重复 `shutdown()`
+  三次幂等（同一报告）、Monitor 线程内调用**不死锁**、`stop` 未使循环退出时如实报告不完整、
+  monitor/cancel/guard 异常路径安全、E-STOP + Shutdown 并存仍完成清理且**不清除 E-STOP**、
+  Scheduler / Bridge 记录一致（`task_active=None`）；全程 `intent_count=0` / `real_input=False`。
+  测试 **+26** ⇒ pytest **2060 passed, 1 skipped**。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

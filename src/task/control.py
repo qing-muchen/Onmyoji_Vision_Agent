@@ -35,12 +35,15 @@ from src.task.estop import EStop
 __all__ = [
     "ADMISSION_ESTOP_ACTIVE",
     "ADMISSION_GUARD_ERROR",
+    "ADMISSION_SHUTDOWN_ACTIVE",
     "ADMISSION_TASK_DISABLED",
     "TaskControlState",
 ]
 
 #: 结构化拒绝原因：E-STOP 有效（**最高**优先级）
 ADMISSION_ESTOP_ACTIVE: str = "estop_active"
+#: 结构化拒绝原因：编排层已进入 Shutdown（Phase 12.1-C3；**终局** latch，不可复位）
+ADMISSION_SHUTDOWN_ACTIVE: str = "shutdown_active"
 #: 结构化拒绝原因：任务被显式禁用
 ADMISSION_TASK_DISABLED: str = "task_disabled"
 #: 结构化拒绝原因：准入 guard 自身故障（由 ``TaskScheduler`` 产生，fail-closed）
@@ -65,6 +68,10 @@ class TaskControlState:
     def __init__(self, *, estop: EStop | None = None, disabled: Iterable[str] = ()) -> None:
         self._estop = estop
         self._disabled: set[str] = {str(item) for item in disabled}
+        # Phase 12.1-C3：Shutdown latch（**终局**：一旦置位永不复位；Enable 不影响它）
+        self._shutdown = False
+        self._shutdown_reason = ""
+        self._shutdown_at = ""
 
     # ---- 只读视图 -----------------------------------------------------------
 
@@ -108,16 +115,52 @@ class TaskControlState:
         self._disabled.discard(key)
         return True
 
+    # ---- Shutdown latch（Phase 12.1-C3；终局） ------------------------------
+
+    @property
+    def is_shutdown(self) -> bool:
+        """是否已进入 Shutdown（终局 latch）。"""
+        return self._shutdown
+
+    @property
+    def shutdown_reason(self) -> str:
+        """首次进入 Shutdown 的原因（未进入时为空串）。"""
+        return self._shutdown_reason
+
+    @property
+    def shutdown_at(self) -> str:
+        """首次进入 Shutdown 的时刻（由调用方传入，未进入时为空串）。"""
+        return self._shutdown_at
+
+    def begin_shutdown(self, *, reason: str = "shutdown", at: str = "") -> bool:
+        """置位 Shutdown latch（**终局、不可复位、幂等**）。
+
+        置位后 :meth:`admission_reason` 对**所有** ``task_id`` 返回
+        :data:`ADMISSION_SHUTDOWN_ACTIVE`（仅在 E-STOP 有效时让位于
+        :data:`ADMISSION_ESTOP_ACTIVE`）。
+
+        Returns:
+            ``True`` 表示本次调用首次置位；重复调用返回 ``False``。
+        """
+        if self._shutdown:
+            return False
+        self._shutdown = True
+        self._shutdown_reason = str(reason)
+        self._shutdown_at = str(at)
+        return True
+
     # ---- 准入判定（注入 ``TaskScheduler.admission_guard``） -----------------
 
     def admission_reason(self, task_id: str) -> str | None:
         """准入判定：``None`` = 允许；否则返回**结构化**拒绝原因。
 
-        优先级：``estop_active`` > ``task_disabled``。
+        优先级：``estop_active`` > ``shutdown_active`` > ``task_disabled``。
         """
         estop = self._estop
         if estop is not None and estop.check():
             return ADMISSION_ESTOP_ACTIVE
+        if self._shutdown:
+            return ADMISSION_SHUTDOWN_ACTIVE
         if str(task_id) in self._disabled:
             return ADMISSION_TASK_DISABLED
         return None
@@ -126,7 +169,13 @@ class TaskControlState:
 
     def to_dict(self) -> dict[str, object]:
         """返回可 JSON 序列化的字典（审计用；不含截图 / 用户数据）。"""
-        return {"disabled": list(self.disabled_tasks), "estop_bound": self._estop is not None}
+        return {
+            "disabled": list(self.disabled_tasks),
+            "estop_bound": self._estop is not None,
+            "shutdown": self._shutdown,
+            "shutdown_reason": self._shutdown_reason,
+            "shutdown_at": self._shutdown_at,
+        }
 
     def describe(self) -> str:
         """返回可读描述（**不**访问文件系统：只用 E-STOP 的 API 侧状态）。"""
@@ -134,7 +183,10 @@ class TaskControlState:
             estop = "none"
         else:
             estop = "triggered" if self._estop.is_triggered else "clear"
-        return f"TaskControlState(disabled={list(self.disabled_tasks)}, estop={estop})"
+        return (
+            f"TaskControlState(disabled={list(self.disabled_tasks)}, estop={estop}, "
+            f"shutdown={self._shutdown})"
+        )
 
     def __repr__(self) -> str:
         return self.describe()

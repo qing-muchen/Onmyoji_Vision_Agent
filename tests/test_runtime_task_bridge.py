@@ -751,12 +751,13 @@ def test_runtime_task_bridge_dependencies() -> None:
 def test_runtime_monitor_does_not_import_action_or_task() -> None:
     """``src/runtime`` 内不得 import ``src.action``。
 
-    ``src.task`` 只允许出现在两个**授权的编排入口**：
+    ``src.task`` 只允许出现在**授权的编排入口**：
 
     * ``task_bridge.py``（Phase 7.5/9：Runtime ↔ Task 编排）；
-    * ``context_bridge.py``（Phase 10：观察 → 决策上下文的单向桥）。
+    * ``context_bridge.py``（Phase 10：观察 → 决策上下文的单向桥）；
+    * ``orchestration.py``（Phase 12.1-C3：Runtime / Task 统一控制与关闭编排）。
     """
-    allowed = {"task_bridge.py", "context_bridge.py"}
+    allowed = {"task_bridge.py", "context_bridge.py", "orchestration.py"}
     violations = [
         f"{path.name}: {module}"
         for path, module in _iter_imports("runtime")
