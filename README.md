@@ -2373,6 +2373,20 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   target 缺失 `2=2 rejected`（`target_not_found`）⇒ **`recorded == intent_count == len(outcomes)` 不重不漏**，
   **dry-run 未被当作已执行**，拒绝反馈**不推进**工作流。改动仅 `src/task/engine.py`(+60/−2)。测试 **+22** ⇒
   pytest **1969 passed, 1 skipped**。详见 `docs/PHASE12_1A1_WORKFLOW_FEEDBACK_CLOSURE_REPORT.md`。
+- Phase 12.1-C0（**已完成：E-STOP 准入与生命周期契约审计 + C1/C2/C3 契约设计**，**只读审计、零生产代码改动**）：
+  R-2 实测 E-STOP 检查点**只在 `TaskEngine`（6 处，且都在实例创建之后）**，而 `TaskScheduler.submit/_schedule/_launch`、
+  `TaskRuntimeBridge`、`TaskTriggerRegistry` **均无 E-STOP 感知** ⇒ 每轮 stable yard 都会
+  `submit → _launch → engine.start() → _check_estop → _fail → _reap`，**Scene E3 实测 264 次实例风暴**（零 ActionRequest、无锁遗留，
+  **非安全突破**）。R-3 实测**不存在统一 orchestration / shutdown 入口**（`src/main.py` 仅 vision 演示、Task 未接线），
+  `Stop Monitor` / `Cancel Instance` / `Shutdown Task Runtime` **三者互不等价**；`TaskRuntimeBridge.stop_task()`
+  在调度模式下**只改兼容记录、不停实例**（已固化为测试）。F2 实测 `TriggerRegistry` 无 enable/disable。
+  据此给出 **C1 `admission_guard`（Scheduler 层可选注入）→ C2 Disable Task → C3 编排器** 三步最小方案与 18 项测试矩阵（全部 proposed、未实施）。
+  **Owner 裁决**：批准 C1 基本架构，但**否决"C0 被阻断实例保持 QUEUED、解除后自动启动"的提案** —— E-STOP 有效时**拒绝新准入**、
+  **不产生反复立即失败的新实例**、E-STOP 前已排队实例**明确取消并保留审计**、**不新增 `BLOCKED` 终态**；
+  显式 `reset` **只解除 E-STOP、不自动恢复**已失败/已取消实例，恢复只能由**新的有效 stable observation** 触发，
+  **不得重放旧 `ActionRequest` / 旧 `DecisionContext`**。详见
+  `docs/PHASE12_1C0_ESTOP_ADMISSION_AUDIT_AND_CONTRACT_DESIGN_REPORT.md`（原文逐字归档）与
+  `docs/PHASE12_1C0_DECISION_SUPPLEMENT.md`（Owner 决策补充记录）。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
