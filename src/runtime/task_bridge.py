@@ -559,11 +559,24 @@ class TaskRuntimeBridge:
             return None
 
     def _sync_scheduler_records(self, *, state_name: str = "") -> None:
-        """把调度器实例状态同步到兼容运行记录。"""
+        """把调度器实例状态同步到兼容运行记录。
+
+        Phase 12.1-B-F1（活动记录一致性）：兼容记录 ``TaskRunRecord`` 按 ``task_id``
+        **共享**（一个 ``task_id`` 只有一条），而同一任务在"终止 → 自动重新触发"后
+        会同时存在**历史终态实例**与**新的活动实例**。若历史实例最后写入，其终态
+        （CANCELLED / FAILED / COMPLETED）会覆盖当前 ``RUNNING`` 实例的状态，
+        导致 ``active_task_id`` / ``task_active`` 错误地变成 ``None``
+        （Scene D 实测：调度器持续 RUNNING，而 Bridge 持续 None）。
+
+        因此同步顺序固定为：**先历史（保留终态审计），后活动实例（权威状态）**——
+        活动实例是"当前事实"，必须最后写入；遍历顺序由容器自身决定，结果确定。
+        历史实例对象本身仍保留真实终止状态（``scheduler.history`` 不受影响）。
+        """
         scheduler = self._scheduler
         if scheduler is None:
             return
-        for instance in list(scheduler.instances) + list(scheduler.history):
+        ordered = list(scheduler.history) + list(scheduler.instances)
+        for instance in ordered:
             record = self._records.get(instance.task_id)
             if record is None:
                 record = TaskRunRecord(task_id=instance.task_id)
