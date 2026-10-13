@@ -730,6 +730,7 @@ def test_runtime_task_bridge_dependencies() -> None:
     assert {module for module in project_imports if module.startswith("src.")} <= {
         "src.runtime.context_bridge",  # Phase 10：观察 → 决策上下文（Runtime 侧单向桥）
         "src.task.context",  # Phase 10：决策上下文数据模型
+        "src.task.control",  # Phase 12.1-C2：任务控制状态（TaskControlState 的 disable/enable）
         "src.task.engine",
         "src.task.models",  # Phase 12.1-C1：准入拒绝异常类型（TaskAdmissionDenied）
         "src.task.registry",

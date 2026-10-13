@@ -4,8 +4,9 @@
 
 * **A. Cancel Instance**：``TaskScheduler.cancel`` 终止当前实例并释放锁；``TriggerRegistry``
   在状态仍稳定时会按既有契约重新创建实例（``cancel`` 不是"永久禁止"）。
-* **B. Stop Task**：``TaskRuntimeBridge.stop_task`` 在**调度模式**下只更新兼容记录，
-  **不会**停止调度器中的实例（单引擎模式另有语义）——能力/文档缺口，如实固化。
+* **B. Stop Task**：``TaskRuntimeBridge.stop_task`` 在**调度模式**下**真正取消**目标
+  ``TaskInstance``（Phase 12.1-C2 关闭了 Phase 12.1-B 发现的"只改兼容记录"缺口）；
+  单引擎模式另走 ``TaskEngine.stop`` 的既有语义。``stop_task`` **不**自动 Disable。
 * **C. E-STOP**：``EStop``（API / 文件哨兵）让**运行中的实例失败**，但**不阻止**
   ``TriggerRegistry`` 重新触发；后续实例同样会被 E-STOP 立即失败，且**不产生 ActionRequest**。
 """
@@ -138,22 +139,31 @@ def test_a_cancel_instance_releases_lock_and_allows_retrigger() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_b_bridge_stop_task_does_not_stop_scheduler_instance() -> None:
-    """调度模式下 ``bridge.stop_task`` 只改兼容记录，**不**停止实例（能力缺口）。"""
+def test_b_bridge_stop_task_cancels_scheduler_instance() -> None:
+    """调度模式下 ``bridge.stop_task`` **真正取消**目标实例（Phase 12.1-C2 已修复缺口）。
+
+    对照历史：Phase 12.1-B 曾固化"C0 缺口"——调度模式下只改兼容记录、实例仍在运行。
+    C2-B 改为经 ``TaskScheduler.cancel`` 委托 ⇒ 实例终态 ``CANCELLED``、锁释放、历史保留，
+    兼容记录与调度器一致（F1 不回归）；``stop_task`` **不**自动 Disable。
+    """
     bridge, scheduler = make_bridge()
     bridge.on_state_stable(Stable())
     instance = scheduler.active_tasks[0]
 
     returned = bridge.stop_task(TASK_ID, reason="scene-e-stop-task-probe")
 
-    assert returned is True                                   # API 报告"已停止"
-    assert instance.status is TaskInstanceStatus.RUNNING      # 但实例仍在运行
-    assert scheduler.locks.owner("GAME_WINDOW") == instance.instance_id
-    # 兼容记录被改写为 STOPPED；下一次同步（F1 起活动实例为权威）会纠正回 RUNNING
+    assert returned is True                                     # 返回值与真实取消一致
+    assert instance.status is TaskInstanceStatus.CANCELLED      # 实例**确实**被取消
+    assert scheduler.instances == ()
+    assert scheduler.locks.to_dict() == {}                      # 资源锁已释放
+    assert instance.instance_id in {item.instance_id for item in scheduler.history}
     assert bridge.record(TASK_ID).status is TaskRunStatus.STOPPED  # type: ignore[union-attr]
     bridge.on_cycle(None)
-    assert bridge.record(TASK_ID).status is TaskRunStatus.RUNNING  # type: ignore[union-attr]
-    assert bridge.active_task_id == TASK_ID
+    assert bridge.record(TASK_ID).status is TaskRunStatus.STOPPED  # type: ignore[union-attr]
+    assert bridge.active_task_id is None
+    # stop_task 不自动 Disable：新的有效观察仍按既有契约重新触发
+    bridge.on_state_stable(Stable())
+    assert len(scheduler.instances) == 1
 
 
 # ---------------------------------------------------------------------------

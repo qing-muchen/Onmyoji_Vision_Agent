@@ -244,6 +244,24 @@ class TaskScheduler:
         self._context_provider = provider
         logger.debug("调度器已接入决策上下文提供者: %s", provider is not None)
 
+    def set_admission_guard(self, guard: Callable[[str], str | None] | None) -> None:
+        """注入 / 替换准入 guard（**装配期**使用；Phase 12.1-C2）。
+
+        Args:
+            guard: ``(task_id) -> str | None``；``None`` 表示取消准入判定。
+
+        Raises:
+            TaskDefinitionError: ``guard`` 既不是 ``None`` 也不是可调用对象。
+
+        Notes:
+            供装配侧（``TaskRuntimeBridge`` / 未来编排器）在**构造之后**接线；
+            与 ``TaskScheduler(admission_guard=...)`` 等价。
+        """
+        if guard is not None and not callable(guard):
+            raise TaskDefinitionError("admission_guard 必须是可调用对象")
+        self._admission_guard = guard
+        logger.debug("调度器已接入准入 guard: %s", guard is not None)
+
     @property
     def admission_guard(self) -> Callable[[str], str | None] | None:
         """准入 guard（未注入时为 ``None``；Phase 12.1-C1）。"""

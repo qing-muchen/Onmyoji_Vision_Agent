@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from time import monotonic
 from typing import Any
 
+from src.task.control import ADMISSION_TASK_DISABLED, TaskControlState
 from src.task.engine import TaskEngine
 from src.task.models import TaskAdmissionDenied
 from src.task.registry import TaskRegistry, TaskRunRecord, TaskRunStatus
@@ -182,6 +183,11 @@ class TaskRuntimeBridge:
             不再直接驱动单个引擎，而是把它交给 :class:`~src.task.scheduler.TaskScheduler`
             （由调度器决定"哪个任务获得执行机会"：排队 / 优先级 / 抢占 / 资源锁）；
             运行记录 :class:`TaskRunRecord` 退化为**兼容视图**，细节请读 ``scheduler``。
+        control: 可选的任务控制状态（Phase 12.1-C2，
+            :class:`~src.task.control.TaskControlState`）。未传入时本桥自行创建一个，
+            使 :meth:`disable_task` / :meth:`enable_task` 门面始终可用；若调度器**尚未**
+            注入 ``admission_guard``，构造时会自动接线 ``control.admission_reason``
+            （**已存在 guard 时不覆盖**，避免静默改写 C1 的 E-STOP 装配）。
     """
 
     def __init__(
@@ -196,6 +202,7 @@ class TaskRuntimeBridge:
         scheduler: Any = None,
         context_bridge: ContextBridge | None = None,
         observation_store: Any = None,
+        control: TaskControlState | None = None,
     ) -> None:
         if scheduler is not None:
             from src.task.scheduler import TaskScheduler
@@ -212,6 +219,10 @@ class TaskRuntimeBridge:
         if not isinstance(task_engine, TaskEngine):
             raise TypeError(
                 f"task_bridge 需要 TaskEngine（当前: {type(task_engine).__name__}）"
+            )
+        if control is not None and not isinstance(control, TaskControlState):
+            raise TypeError(
+                f"task_bridge.control 需要 TaskControlState（当前: {type(control).__name__}）"
             )
         self._engine = task_engine
         self._registry = task_registry if task_registry is not None else TaskRegistry()
@@ -232,6 +243,18 @@ class TaskRuntimeBridge:
         self._stats = TaskBridgeStats()
         # Phase 12.1-C1：准入阻断日志**去重**键（持续 E-STOP 不得形成无界重复日志）
         self._admission_log_key = ""
+        # Phase 12.1-C2：任务控制状态（Enable / Disable）。未显式注入时自行创建一个，
+        # 使 enable_task / disable_task 门面始终可用。
+        # 接线规则（**不覆盖**既有 guard，避免静默改写 C1 的 E-STOP 装配）：
+        #   * 调度器尚未注入 admission_guard ⇒ 注入 control.admission_reason；
+        #   * 调度器已有 guard ⇒ 保持不动（装配侧可显式注入 control.admission_reason 组合）。
+        self._control = control if control is not None else TaskControlState()
+        self._control_warned = False
+        if self._scheduler is not None:
+            _existing_guard = getattr(self._scheduler, "admission_guard", None)
+            _setter = getattr(self._scheduler, "set_admission_guard", None)
+            if _existing_guard is None and callable(_setter):
+                _setter(self._control.admission_reason)
         # 调度模式下自动接线：调度器每轮从桥取当前决策上下文（调度器不认识观察层）
         if self._scheduler is not None and self._context_bridge is not None:
             attach = getattr(self._scheduler, "set_context_provider", None)
@@ -266,6 +289,11 @@ class TaskRuntimeBridge:
     def scheduler(self) -> Any:
         """多任务调度器（Phase 9；未注入时为 ``None``）。"""
         return self._scheduler
+
+    @property
+    def control(self) -> TaskControlState:
+        """任务控制状态（Phase 12.1-C2；未注入时由本桥自动创建）。"""
+        return self._control
 
     @property
     def context_bridge(self) -> ContextBridge | None:
@@ -415,16 +443,96 @@ class TaskRuntimeBridge:
             logger.error("手动启动任务失败（已隔离）: %s", exc)
             return None
 
+    def disable_task(self, task_id: str, *, reason: str = "manual") -> bool:
+        """禁用任务：阻止其为**新的** stable observation 创建新实例（Phase 12.1-C2）。
+
+        已冻结语义：
+
+        * 阻止指定 ``task_id`` 创建**新** ``TaskInstance``；
+        * **不**隐式取消已经 ``RUNNING`` 的实例（需要停止请显式 :meth:`stop_task`）；
+        * 对已 ``QUEUED`` 尚未启动的实例，由调度器在下一轮做**可审计取消**
+          （终态 ``CANCELLED`` + 保留历史 / 关闭上下文）⇒ Enable 后不会作为旧请求自动启动；
+        * 不影响其它 ``task_id``；不修改 ``TaskDefinition``；**幂等**。
+
+        Args:
+            task_id: 任务标识。
+            reason: 禁用原因（审计）。
+
+        Returns:
+            ``True`` 表示状态发生变化（重复禁用返回 ``False``，幂等）。
+        """
+        try:
+            changed = self._control.disable(task_id)
+            self._stats.last_task_id = str(task_id)
+            self._stats.last_reason = f"disable: {reason}"
+            if changed:
+                logger.info("任务已禁用（不再创建新实例）: %s（%s）", task_id, reason)
+            self._warn_if_control_not_wired()
+            return changed
+        except Exception as exc:  # noqa: BLE001
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.error("禁用任务失败（已隔离）: %s", exc)
+            return False
+
+    def enable_task(self, task_id: str) -> bool:
+        """重新启用任务：只恢复**触发资格**（Phase 12.1-C2）。
+
+        已冻结语义：**不**直接创建实例、**不**恢复已 ``CANCELLED`` / ``FAILED`` 的旧实例、
+        **不**自动运行 Enable 前积累的排队任务；必须等待 Enable 之后**新的**有效 stable
+        observation 才按既有触发规则创建实例（不引入额外 N 帧确认）。**幂等**。
+
+        Returns:
+            ``True`` 表示状态发生变化（重复启用返回 ``False``，幂等）。
+        """
+        try:
+            changed = self._control.enable(task_id)
+            self._stats.last_task_id = str(task_id)
+            self._stats.last_reason = "enable"
+            if changed:
+                logger.info("任务已启用（恢复触发资格；不恢复旧实例）: %s", task_id)
+            return changed
+        except Exception as exc:  # noqa: BLE001
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.error("启用任务失败（已隔离）: %s", exc)
+            return False
+
+    def _warn_if_control_not_wired(self) -> None:
+        """装配自检：控制状态未接到调度器准入时给出**一次性**提示（不改变行为）。"""
+        if self._control_warned or self._scheduler is None:
+            return
+        guard = getattr(self._scheduler, "admission_guard", None)
+        if guard is not None and guard != self._control.admission_reason:
+            self._control_warned = True
+            logger.warning(
+                "调度器已由外部 guard 接管准入：本桥 disable_task 不会阻止触发。"
+                "请把 TaskControlState.admission_reason ——与外部 guard 组合后注入调度器。"
+            )
+
     def stop_task(self, task_id: str, *, reason: str = "stopped") -> bool:
-        """停止一个任务（``STOPPED``；之后允许重新触发）。
+        """停止一个任务（之后允许重新触发）。
+
+        语义：
+
+        * **调度模式**（注入了 ``scheduler``）：**真正取消**该 ``task_id`` 的活动实例
+          （经 ``TaskScheduler.cancel`` ⇒ ``_finish``：释放资源锁、关闭 ``DecisionContext``、
+          保留历史审计），返回值与调度器真实结果一致；**没有目标时返回 ``False``**
+          （不虚报成功）。若同一 ``task_id`` 出现多个活动实例（目标不明确），**不**任意选择，
+          记录告警并返回 ``False``；
+        * **单引擎模式**：保持既有兼容行为（``TaskEngine.stop`` + 兼容记录置 ``STOPPED``）；
+        * **``stop_task`` 不自动 Disable**：之后若出现新的有效 stable 事件，任务仍可能按既有
+          契约重新触发；需要"持续停止"请显式组合 :meth:`disable_task` 与 :meth:`stop_task`。
 
         Args:
             task_id: 任务标识。
             reason: 停止原因。
 
         Returns:
-            ``True`` 表示确实停止了正在运行的任务。
+            ``True`` 表示确实停止了目标实例 / 运行中的任务。
         """
+        if self._scheduler is not None:
+            return self._stop_scheduler_task(str(task_id), reason=reason)
         try:
             record = self._records.get(str(task_id))
             if record is None or not record.is_running:
@@ -438,6 +546,44 @@ class TaskRuntimeBridge:
             self._stats.last_reason = reason
             logger.info("任务已停止: %s（%s）", record.task_id, reason)
             return True
+        except Exception as exc:  # noqa: BLE001
+            self._stats.errors += 1
+            self._stats.last_error = str(exc)
+            logger.error("停止任务失败（已隔离）: %s", exc)
+            return False
+
+    def _stop_scheduler_task(self, task_id: str, *, reason: str) -> bool:
+        """调度模式下的 ``stop_task``：定位并**真正取消**目标活动实例（Phase 12.1-C2）。"""
+        try:
+            scheduler = self._scheduler
+            actives = [
+                item
+                for item in (*scheduler.active_tasks, *scheduler.queue, *scheduler.paused)
+                if item.task_id == task_id
+            ]
+            if not actives:
+                self._stats.last_reason = f"no active instance: {task_id}"
+                return False
+            if len(actives) > 1:
+                self._stats.last_reason = (
+                    f"ambiguous stop target: {task_id}"
+                    f"（{[item.instance_id for item in actives]}）"
+                )
+                logger.warning(
+                    "停止目标不明确（同一任务多个活动实例），未做任何取消: %s（%s）",
+                    task_id,
+                    [item.instance_id for item in actives],
+                )
+                return False
+            target = actives[0]
+            cancelled = bool(scheduler.cancel(target.instance_id, reason=reason))
+            self._stats.last_task_id = task_id
+            self._stats.last_reason = reason
+            # F1：按"先历史、后活动"同步兼容记录（活动实例是权威状态）
+            self._sync_scheduler_records()
+            if cancelled:
+                logger.info("任务已停止（真实取消实例）: %s（%s）", target.instance_id, reason)
+            return cancelled
         except Exception as exc:  # noqa: BLE001
             self._stats.errors += 1
             self._stats.last_error = str(exc)
@@ -523,16 +669,16 @@ class TaskRuntimeBridge:
 
     # ---- 调度器模式（Phase 9） ---------------------------------------------
 
-    def _log_admission_blocked(self, exc: TaskAdmissionDenied) -> None:
+    def _log_admission_blocked(self, task_id: str, reason: str) -> None:
         """记录准入阻断（**按 ``(task_id, reason)`` 去重**；**不计入** ``errors``）。
 
-        持续 E-STOP 期间每周期都会尝试提交，去重后只写一条日志（计数照常累计）。
+        持续 E-STOP / Disable 期间每周期都会尝试提交，去重后只写一条日志（计数照常累计）。
         """
-        key = f"{exc.task_id}|{exc.reason}"
+        key = f"{task_id}|{reason}"
         if key == self._admission_log_key:
             return
         self._admission_log_key = key
-        logger.warning("准入阻断（未创建实例）: %s（reason=%s）", exc.task_id, exc.reason)
+        logger.warning("准入阻断（未创建实例）: %s（reason=%s）", task_id, reason)
 
     def _tick_scheduler(self, state_result: Any, state_name: str) -> TaskRunRecord | None:
         """调度器模式：触发 → 交给调度器 tick → 同步兼容记录。
@@ -575,7 +721,7 @@ class TaskRuntimeBridge:
                     self._stats.last_reason = (
                         f"admission blocked: {exc.task_id}（reason={exc.reason}）"
                     )
-                    self._log_admission_blocked(exc)
+                    self._log_admission_blocked(exc.task_id, exc.reason)
                     return None
                 self._stats.starts += 1
             scheduler.tick(state_result)
@@ -659,7 +805,13 @@ class TaskRuntimeBridge:
         return self._records[active]
 
     def _start(self, task_id: str, *, reason: str) -> TaskRunRecord | None:
-        """启动任务（含重复启动与完成态保护）。"""
+        """启动任务（含禁用、重复启动与完成态保护）。"""
+        if self._control.is_disabled(task_id):
+            # Phase 12.1-C2：单引擎 / 手动启动路径同样尊重 Disable（调度模式由准入 guard 处理）
+            self._stats.admission_blocked += 1
+            self._stats.last_reason = f"task disabled: {task_id}"
+            self._log_admission_blocked(task_id, ADMISSION_TASK_DISABLED)
+            return None
         definition = self._registry.get(task_id)
         if definition is None:
             self._stats.unknown_task += 1

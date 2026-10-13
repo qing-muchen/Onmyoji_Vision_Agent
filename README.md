@@ -2404,6 +2404,27 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   判定算法 / 生产配置**未改**；改动仅 `src/task/models`（+异常与导出）、`src/task/scheduler`（guard + 计数）、
   `src/runtime/task_bridge.py`（异常归类 + 计数）。测试 **+14** ⇒ pytest **2009 passed, 1 skipped**；
   契约见 `docs/PHASE12_1C0_DECISION_SUPPLEMENT.md`（Owner 冻结契约）。
+- Phase 12.1-C2（**已完成：Task Enable/Disable & Stop Semantics**，按 Owner 冻结契约）：
+  新增 `src/task/control.py::TaskControlState`（**纯 Task 层**：持有 disabled 集合 + 可选 E-STOP 绑定，
+  `admission_reason` 签名与 Scheduler 的 `admission_guard` **完全一致**，可直接注入）。统一准入优先级固定为
+  **E-STOP → Task Disabled → 正常准入**；结构化原因 `estop_active` / `task_disabled` / `guard_error`
+  （guard 故障 **fail-closed**，不解析文本）。`TaskScheduler` 新增 `set_admission_guard()` 供**装配期**后置接线；
+  `TaskRuntimeBridge` 新增 `disable_task()` / `enable_task()` 门面与 `control` 注入（**已存在 guard 时不覆盖**，
+  并对"控制状态未接入准入"给出一次性告警）。
+  **Disable**：阻止创建新实例、**不**隐式取消 `RUNNING` 实例、对已 `QUEUED` 实例做**可审计取消**
+  （`CANCELLED` + 保留 history / closed_contexts）、按 `task_id` 隔离、**幂等**、不修改 `TaskDefinition`。
+  **Enable**：只恢复触发资格 —— 不创建实例、不恢复旧实例 / 旧队列，必须等待 Enable 之后**新的**有效
+  stable observation（触发仍是**事件驱动**：仅 `on_state_stable` 会提交，跳过帧不产生 stable 事件；
+  不引入额外 N 帧确认，`StateStabilizer` 与 G5 `cycle_id` 时序未改）。
+  **C2-B 修复 `stop_task`**：调度模式改为经 `TaskScheduler.cancel` **真正取消**目标活动实例
+  （释放 `GAME_WINDOW` 锁、关闭 `DecisionContext`、保留历史审计、F1 记录同步），**无目标时返回 `False`**
+  （不虚报），同一 `task_id` 目标不明确时**不**任意选择；单引擎模式保持既有兼容行为；
+  `stop_task` **不**自动 Disable（持续停止需显式组合 Disable + stop）。
+  新增 **25** 个测试；离线 harness 实测：Disable 后 32 周期 **0 实例 / 准入阻断计数 32 / errors 0**、
+  Enable 无新观察 0 实例、新观察 → 新实例、`stop_task` → `CANCELLED` + 锁 `{}` + 记录 `stopped` +
+  上下文进 closed_contexts、E-STOP 与 Disable 并存时原因优先 `estop_active`、E-STOP reset 后回落
+  `task_disabled`；全程 `intent_count=0` / `executed_count=0` / `real_input=False`。pytest
+  **2034 passed, 1 skipped**（C1 的 14 项与 F1 / G5 / G6 既有语义不回归）。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
