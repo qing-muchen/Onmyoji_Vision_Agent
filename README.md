@@ -2387,6 +2387,23 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   **不得重放旧 `ActionRequest` / 旧 `DecisionContext`**。详见
   `docs/PHASE12_1C0_ESTOP_ADMISSION_AUDIT_AND_CONTRACT_DESIGN_REPORT.md`（原文逐字归档）与
   `docs/PHASE12_1C0_DECISION_SUPPLEMENT.md`（Owner 决策补充记录）。
+- Phase 12.1-C1（**已完成：E-STOP Admission & Re-trigger Suppression**，按 Owner 冻结契约消除 E-STOP 期间的
+  **实例创建风暴**）：新增 `TaskAdmissionDenied(TaskDefinitionError)`（携带**结构化** `reason`，如
+  `estop_active` / `guard_error`，不靠字符串前缀判定）；`TaskScheduler` 支持**可选注入**
+  `admission_guard: (task_id) -> str | None`（**缺省 `None` ⇒ 既有行为逐字节不变**）。准入覆盖
+  `submit()`（拒绝时**不创建** `TaskInstance`）、`_schedule()`（E-STOP 前已排队的 `QUEUED` 实例**显式取消**并
+  保留 `history` / `closed_contexts` 审计 ⇒ 不在 reset 后隐式恢复）、`_launch()`（启动前**再判一次**，防绕过与
+  同轮竞态）与 `PAUSED` 恢复路径（准入被拒 **不恢复**）；guard 自身抛异常 **fail-closed**
+  （`reason=guard_error` + 计入 `errors` + 保留 `last_error`，**不默认放行、不静默吞掉**）。
+  `TaskRuntimeBridge` **单独捕获**该异常并归入 `admission_blocked`（**不计入** errors）；新增
+  `SchedulerStats` / `SchedulerTick` / `TaskBridgeStats.admission_blocked` 计数，日志按 `(task_id, reason)`
+  **去重**（持续阻断不形成无界日志）。实测：E-STOP 持续 **32 轮 ⇒ 0 实例创建、0 失败、计数累计、日志 1 条**
+  （对照固化：**未**注入 guard 时 8 轮即 8 个"启动即 FAILED"实例 = 修复前风暴）；`EStop.reset()` 只解除阻断、
+  **不**自动恢复已取消 / 已失败实例，恢复只能由**新的** stable observation 触发**新实例**（新对象 + 新
+  `DecisionContext`，不复用旧上下文）。`EStop` / `TriggerRegistry` / Action E-STOP / `StateStabilizer` /
+  判定算法 / 生产配置**未改**；改动仅 `src/task/models`（+异常与导出）、`src/task/scheduler`（guard + 计数）、
+  `src/runtime/task_bridge.py`（异常归类 + 计数）。测试 **+14** ⇒ pytest **2009 passed, 1 skipped**；
+  契约见 `docs/PHASE12_1C0_DECISION_SUPPLEMENT.md`（Owner 冻结契约）。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

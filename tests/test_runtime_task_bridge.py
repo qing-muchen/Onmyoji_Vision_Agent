@@ -731,6 +731,7 @@ def test_runtime_task_bridge_dependencies() -> None:
         "src.runtime.context_bridge",  # Phase 10：观察 → 决策上下文（Runtime 侧单向桥）
         "src.task.context",  # Phase 10：决策上下文数据模型
         "src.task.engine",
+        "src.task.models",  # Phase 12.1-C1：准入拒绝异常类型（TaskAdmissionDenied）
         "src.task.registry",
         "src.task.scheduler",  # Phase 9：编排桥把驱动权交给多任务调度器
         "src.task.triggers",

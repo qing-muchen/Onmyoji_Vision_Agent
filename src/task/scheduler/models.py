@@ -392,6 +392,8 @@ class SchedulerTick:
     failed: int = 0
     cancelled: int = 0
     lock_conflicts: int = 0
+    #: 被准入 guard 阻断的实例数（Phase 12.1-C1；E-STOP / 禁用期间 > 0）
+    admission_blocked: int = 0
     #: 看门狗强制失败的实例数（Phase 11.1）
     watchdog_kills: int = 0
     errors: int = 0
@@ -415,6 +417,7 @@ class SchedulerTick:
             "failed": self.failed,
             "cancelled": self.cancelled,
             "lock_conflicts": self.lock_conflicts,
+            "admission_blocked": self.admission_blocked,
             "watchdog_kills": self.watchdog_kills,
             "errors": self.errors,
             "reason": self.reason,
@@ -427,6 +430,7 @@ class SchedulerTick:
             f"preempted={self.preempted}, advanced={self.advanced}, "
             f"completed={self.completed}, failed={self.failed}, cancelled={self.cancelled}, "
             f"lock_conflicts={self.lock_conflicts}, "
+            f"admission_blocked={self.admission_blocked}, "
             f"watchdog_kills={self.watchdog_kills}, errors={self.errors})"
         )
 
@@ -447,6 +451,8 @@ class SchedulerStats:
     completed: int = 0
     failed: int = 0
     lock_conflicts: int = 0
+    #: 被准入 guard 阻断的实例数 / 提交次数（Phase 12.1-C1；E-STOP / 禁用期间 > 0）
+    admission_blocked: int = 0
     #: 被看门狗强制失败的实例数（Phase 11.1）
     watchdog_kills: int = 0
     errors: int = 0

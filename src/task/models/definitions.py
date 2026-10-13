@@ -78,6 +78,38 @@ class TaskDefinitionError(TaskError):
     """任务定义非法（空步骤、未知动作类型、策略取值非法等）。"""
 
 
+class TaskAdmissionDenied(TaskDefinitionError):
+    """调度**准入被拒绝**（admission guard 判定；Phase 12.1-C1）。
+
+    语义边界（与 :class:`TaskDefinitionError` 严格区分）：
+
+    * 只用于**明确的准入拒绝**（例如 E-STOP 有效、任务被禁用）——**不是**任务定义错误、
+      **不是**运行期异常、**不是**代码缺陷；
+    * 被拒绝时**不会创建** ``TaskInstance``（``submit()`` 成功时的返回契约不变）；
+    * 携带**结构化**拒绝原因 :attr:`reason`（如 ``estop_active`` / ``guard_error``）：
+      调用方按字段判定，**不要**解析异常文本。
+
+    Attributes:
+        task_id: 被拒绝的任务标识。
+        reason: 结构化拒绝原因（机器可读）：``admission_guard`` 的返回值，或 guard 自身
+            抛异常时的 ``guard_error``（fail-closed）。
+        detail: 附加说明（人类可读；可为空）。
+    """
+
+    def __init__(self, task_id: str, reason: str, *, detail: str = "") -> None:
+        self.task_id = str(task_id)
+        self.reason = str(reason)
+        self.detail = str(detail)
+        message = f"调度准入被拒绝: {self.task_id}（reason={self.reason}）"
+        if self.detail:
+            message = f"{message}: {self.detail}"
+        super().__init__(message)
+
+    def to_dict(self) -> dict[str, str]:
+        """返回可 JSON 序列化的字典（审计用；不含截图 / 用户数据）。"""
+        return {"task_id": self.task_id, "reason": self.reason, "detail": self.detail}
+
+
 class StepPhase(StrEnum):
     """步骤 / 状态的执行阶段（引擎与工作流执行器共用，Phase 6.1 / 6.2）。"""
 

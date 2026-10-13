@@ -34,7 +34,7 @@ from typing import Any
 
 from src.task.context import ContextUpdateError, DecisionContext
 from src.task.engine import TaskEngine
-from src.task.models import TaskDefinitionError
+from src.task.models import TaskAdmissionDenied, TaskDefinitionError
 from src.task.registry import TaskRegistry
 from src.task.scheduler.models import (
     DEFAULT_RESOURCE,
@@ -78,9 +78,18 @@ class TaskScheduler:
         watchdog_timeout_s: **看门狗**超时（秒；``0`` 或负数 = 关闭，默认关闭）。
             语义：``RUNNING`` 实例连续超过该时长**既未推进也未终结** ⇒ 判定挂起，
             强制置为 ``FAILED(reason="watchdog timeout")`` 并释放资源（Phase 11.1）。
+        admission_guard: **准入 guard**（可选注入；Phase 12.1-C1）。签名
+            ``(task_id) -> str | None``：返回 ``None`` 表示允许准入；返回**非空结构化原因**
+            （如 ``"estop_active"``）表示拒绝 —— ``submit()`` 抛
+            :class:`~src.task.models.TaskAdmissionDenied`（**不创建实例**），
+            已排队的 ``QUEUED`` 实例在启动前被**显式取消**（终态 ``CANCELLED`` + 保留历史，
+            避免 ``EStop.reset()`` 后隐式恢复）。guard 自身抛异常时 **fail-closed**
+            （按 ``reason="guard_error"`` 拒绝并记录），**不默认放行**。
+            **未注入时行为与既有一致**（逐字节不变）。
 
     Raises:
-        TaskDefinitionError: ``max_concurrent < 1`` 或 ``engine_factory`` 非法。
+        TaskDefinitionError: ``max_concurrent < 1``、``engine_factory`` /
+            ``admission_guard`` 非法。
     """
 
     def __init__(
@@ -102,6 +111,7 @@ class TaskScheduler:
         context_factory: Callable[[str], DecisionContext] | None = None,
         closed_context_limit: int = 20,
         watchdog_timeout_s: float = 0.0,
+        admission_guard: Callable[[str], str | None] | None = None,
     ) -> None:
         if int(max_concurrent) < 1:
             raise TaskDefinitionError(f"max_concurrent 必须 >= 1（当前 {max_concurrent}）")
@@ -131,6 +141,8 @@ class TaskScheduler:
             raise TaskDefinitionError("context_provider 必须是可调用对象")
         if context_factory is not None and not callable(context_factory):
             raise TaskDefinitionError("context_factory 必须是可调用对象")
+        if admission_guard is not None and not callable(admission_guard):
+            raise TaskDefinitionError("admission_guard 必须是可调用对象")
         # 推荐组合：provider = 共享观察视图来源，factory = 实例私有上下文工厂。
         # 两者可以同时提供（这正是"共享观察 + 独立反馈"的标准接线）。
         self._context_provider = context_provider
@@ -143,6 +155,9 @@ class TaskScheduler:
         self._history: list[TaskInstance] = []
         self._sequence = 0
         self._stats = SchedulerStats()
+        # Phase 12.1-C1：准入 guard（可选注入）+ 阻断日志**去重**键（避免每周期重复日志）
+        self._admission_guard = admission_guard
+        self._admission_log_key = ""
 
     # ---- 只读视图 -----------------------------------------------------------
 
@@ -230,6 +245,11 @@ class TaskScheduler:
         logger.debug("调度器已接入决策上下文提供者: %s", provider is not None)
 
     @property
+    def admission_guard(self) -> Callable[[str], str | None] | None:
+        """准入 guard（未注入时为 ``None``；Phase 12.1-C1）。"""
+        return self._admission_guard
+
+    @property
     def stats(self) -> SchedulerStats:
         """累计统计。"""
         return self._stats
@@ -310,6 +330,57 @@ class TaskScheduler:
 
     # ---- 外部控制（submit / cancel / pause / resume） ------------------------
 
+    # ---- 准入 guard（Phase 12.1-C1） ---------------------------------------
+
+    def admission_reason(self, task_id: str) -> str | None:
+        """查询某任务当前是否被准入 guard 拒绝（``None`` = 允许准入）。
+
+        与 :meth:`submit` 及启动路径使用**同一判定**：调用方（如 ``TaskRuntimeBridge``）
+        可先查询以避免异常，但判定结果与 ``submit()`` 抛出的
+        :class:`TaskAdmissionDenied` 完全一致（**不**静默放行）。
+
+        Args:
+            task_id: 任务标识。
+
+        Returns:
+            结构化拒绝原因（如 ``"estop_active"`` / ``"guard_error"``）；``None`` 表示允许。
+        """
+        if self._admission_guard is None:
+            return None
+        key = str(task_id)
+        try:
+            reason = self._admission_guard(key)
+        except Exception as exc:  # noqa: BLE001 - fail-closed：guard 故障**不得**默认放行
+            self._stats.errors += 1
+            self._stats.last_error = f"admission guard 异常: {exc!r}"
+            self._log_admission_blocked(key, "guard_error", detail=repr(exc), level="error")
+            return "guard_error"
+        if reason is None:
+            return None
+        text = str(reason).strip()
+        if not text:
+            return None
+        self._log_admission_blocked(key, text)
+        return text
+
+    def _log_admission_blocked(
+        self, task_id: str, reason: str, *, detail: str = "", level: str = "warning"
+    ) -> None:
+        """记录准入阻断（**按 ``(task_id, reason)`` 去重**：持续阻断不产生无界日志）。
+
+        阻断**计数**（``stats.admission_blocked`` / ``tick.admission_blocked``）照常累计；
+        只有**原因变化**时才写一条日志。
+        """
+        log_key = f"{task_id}|{reason}"
+        if log_key == self._admission_log_key:
+            return
+        self._admission_log_key = log_key
+        suffix = f" - {detail}" if detail else ""
+        if level == "error":
+            logger.error("准入被拒绝: %s（reason=%s）%s", task_id, reason, suffix)
+        else:
+            logger.warning("准入被拒绝: %s（reason=%s）%s", task_id, reason, suffix)
+
     def submit(
         self,
         task_id: str,
@@ -331,6 +402,8 @@ class TaskScheduler:
 
         Raises:
             TaskDefinitionError: 任务不在注册表中（**reject**）。
+            TaskAdmissionDenied: 准入 guard 拒绝（例如 E-STOP 有效 / 任务被禁用）——
+                **不会创建** :class:`TaskInstance`，异常携带结构化 ``reason``。
         """
         key = str(task_id)
         definition = self._registry.get(key)
@@ -356,6 +429,15 @@ class TaskScheduler:
                 self._stats.last_reason = f"already completed: {key}"
                 logger.debug("任务已完成，默认不重复提交: %s", key)
                 return existing
+
+        # Phase 12.1-C1：准入 guard —— E-STOP / 禁用期间**不创建实例**（消除失败风暴）。
+        # 顺序说明：重复提交（返回既有实例）优先于准入判定，避免"已有活跃实例"时抛异常；
+        # 拒绝时**不创建** TaskInstance，并抛出结构化 TaskAdmissionDenied（fail-closed）。
+        blocked = self.admission_reason(key)
+        if blocked is not None:
+            self._stats.admission_blocked += 1
+            self._stats.last_reason = f"admission blocked: {key}（reason={blocked}）"
+            raise TaskAdmissionDenied(key, blocked)
 
         self._sequence += 1
         instance = TaskInstance(
@@ -653,16 +735,47 @@ class TaskScheduler:
 
     # ---- 内部：调度决策 -----------------------------------------------------
 
+    def _block_queued(self, tick: SchedulerTick) -> None:
+        """取消被准入 guard 拒绝的**排队**实例（Phase 12.1-C1）。
+
+        E-STOP / 禁用生效时，E-STOP **之前**已排队的实例**不得**在 ``EStop.reset()``
+        之后隐式启动：这里显式取消（终态 ``CANCELLED``，原因携带结构化 guard reason），
+        实例进入 ``history`` 与 ``closed_contexts`` **保留审计**，并从 ``_instances`` 移除 ⇒
+        阻断解除后只能由**新的** stable observation 触发**新实例**。
+
+        未注入 guard 时**零开销**（不改变既有调度语义）。
+        """
+        if self._admission_guard is None:
+            return
+        for instance in list(self._queued()):
+            reason = self.admission_reason(instance.task_id)
+            if reason is None:
+                continue
+            self._stats.admission_blocked += 1
+            tick.admission_blocked += 1
+            self._finish(
+                instance,
+                TaskInstanceStatus.CANCELLED,
+                reason=f"admission blocked: {reason}",
+            )
+            self._stats.cancelled += 1
+            logger.info(
+                "排队实例因准入被拒绝而取消: %s（reason=%s）", instance.instance_id, reason
+            )
+
     def _schedule(self, tick: SchedulerTick) -> None:
-        """抢占 → 启动 → 恢复（一轮决策）。
+        """准入 → 抢占 → 启动 → 恢复（一轮决策）。
 
         顺序很重要：
 
+        0. **准入**（Phase 12.1-C1）：被 guard 拒绝的**排队实例显式取消**（保留审计）——
+           既保证它们不会绕过 guard 启动，也保证阻断解除后不会被隐式恢复；
         1. **抢占**：队列中最高优先级 > 运行中最低优先级 → 让位（暂停 + 释放资源）；
         2. **启动**：让位者腾出的槽位与资源**先给更高优先级**的任务；
         3. **恢复**：只有在仍有槽位（例如高优任务已完成）时才恢复被抢占的实例——
            否则刚被抢占的任务会立刻把资源抢回来（顺序反了就退化成"抖动"）。
         """
+        self._block_queued(tick)
         queued = self._queued()
         if queued:
             top = queued[0]
@@ -690,9 +803,15 @@ class TaskScheduler:
                 break
             if self._launch(instance):
                 tick.started += 1
+            elif instance.status is TaskInstanceStatus.CANCELLED:
+                # 启动前被准入 guard 拒绝（防御路径；_block_queued 已取消的实例不会走到这里）
+                tick.admission_blocked += 1
         for instance in self._paused():
             if not instance.preempted_by:
                 # 手动暂停：等待显式 resume()（调度器不自动恢复）
+                continue
+            if self.admission_reason(instance.task_id) is not None:
+                # 准入被拒（E-STOP / 禁用）：**不恢复**（保持 PAUSED，不取消、不启动）
                 continue
             if not self._has_capacity():
                 break
@@ -719,6 +838,18 @@ class TaskScheduler:
         Returns:
             ``True`` 表示已启动（资源不可用 / 定义缺失时保持排队并返回 ``False``）。
         """
+        # Phase 12.1-C1：启动前**再判一次**准入（防绕过 + 同轮竞态；fail-closed）。
+        # 被拒时不启动、不占锁，并显式取消该实例（终态 CANCELLED + 保留历史）。
+        blocked = self.admission_reason(instance.task_id)
+        if blocked is not None:
+            self._stats.admission_blocked += 1
+            self._finish(
+                instance,
+                TaskInstanceStatus.CANCELLED,
+                reason=f"admission blocked: {blocked}",
+            )
+            self._stats.cancelled += 1
+            return False
         if instance.engine is None:
             instance.engine = self._create_engine()
         definition = self._registry.get(instance.task_id)

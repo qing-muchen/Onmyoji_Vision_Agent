@@ -40,6 +40,7 @@ from time import monotonic
 from typing import Any
 
 from src.task.engine import TaskEngine
+from src.task.models import TaskAdmissionDenied
 from src.task.registry import TaskRegistry, TaskRunRecord, TaskRunStatus
 from src.task.triggers import TaskTriggerRegistry
 from src.utils.logger import get_logger
@@ -103,6 +104,8 @@ class TaskBridgeStats:
     unknown_task: int = 0
     #: 状态没有触发映射 / 状态名缺失
     unknown_state: int = 0
+    #: 被 Scheduler 准入 guard 阻断的次数（E-STOP / 禁用；Phase 12.1-C1）——**不计入 errors**
+    admission_blocked: int = 0
     #: 任务完成次数
     completions: int = 0
     #: 任务失败次数
@@ -125,6 +128,7 @@ class TaskBridgeStats:
             "ignored_completed": self.ignored_completed,
             "unknown_task": self.unknown_task,
             "unknown_state": self.unknown_state,
+            "admission_blocked": self.admission_blocked,
             "completions": self.completions,
             "failures": self.failures,
             "errors": self.errors,
@@ -140,6 +144,7 @@ class TaskBridgeStats:
             f"TaskBridgeStats(events={self.events}, cycles={self.cycles}, starts={self.starts}, "
             f"running_skipped={self.ignored_running}, completed_skipped={self.ignored_completed}, "
             f"unknown_task={self.unknown_task}, unknown_state={self.unknown_state}, "
+            f"admission_blocked={self.admission_blocked}, "
             f"completed={self.completions}, failed={self.failures}, errors={self.errors})"
         )
 
@@ -152,6 +157,7 @@ class TaskBridgeStats:
         self.ignored_completed = 0
         self.unknown_task = 0
         self.unknown_state = 0
+        self.admission_blocked = 0
         self.completions = 0
         self.failures = 0
         self.errors = 0
@@ -224,6 +230,8 @@ class TaskRuntimeBridge:
         self._records: dict[str, TaskRunRecord] = {}
         self._started_instances: set[str] = set()
         self._stats = TaskBridgeStats()
+        # Phase 12.1-C1：准入阻断日志**去重**键（持续 E-STOP 不得形成无界重复日志）
+        self._admission_log_key = ""
         # 调度模式下自动接线：调度器每轮从桥取当前决策上下文（调度器不认识观察层）
         if self._scheduler is not None and self._context_bridge is not None:
             attach = getattr(self._scheduler, "set_context_provider", None)
@@ -515,6 +523,17 @@ class TaskRuntimeBridge:
 
     # ---- 调度器模式（Phase 9） ---------------------------------------------
 
+    def _log_admission_blocked(self, exc: TaskAdmissionDenied) -> None:
+        """记录准入阻断（**按 ``(task_id, reason)`` 去重**；**不计入** ``errors``）。
+
+        持续 E-STOP 期间每周期都会尝试提交，去重后只写一条日志（计数照常累计）。
+        """
+        key = f"{exc.task_id}|{exc.reason}"
+        if key == self._admission_log_key:
+            return
+        self._admission_log_key = key
+        logger.warning("准入阻断（未创建实例）: %s（reason=%s）", exc.task_id, exc.reason)
+
     def _tick_scheduler(self, state_result: Any, state_name: str) -> TaskRunRecord | None:
         """调度器模式：触发 → 交给调度器 tick → 同步兼容记录。
 
@@ -547,7 +566,17 @@ class TaskRuntimeBridge:
                         "触发映射指向不存在的任务: %s（已注册: %s）", task_id, self._registry.ids()
                     )
                     return None
-                instance = scheduler.submit(task_id, reason=f"state={state_name}")
+                try:
+                    scheduler.submit(task_id, reason=f"state={state_name}")
+                except TaskAdmissionDenied as exc:
+                    # Phase 12.1-C1：准入阻断是**正常语义**（E-STOP / 禁用），不是编排故障
+                    # ⇒ 归入 admission_blocked，**不计 errors**、不写 error 日志（按原因去重）。
+                    self._stats.admission_blocked += 1
+                    self._stats.last_reason = (
+                        f"admission blocked: {exc.task_id}（reason={exc.reason}）"
+                    )
+                    self._log_admission_blocked(exc)
+                    return None
                 self._stats.starts += 1
             scheduler.tick(state_result)
             self._sync_scheduler_records(state_name=state_name)
