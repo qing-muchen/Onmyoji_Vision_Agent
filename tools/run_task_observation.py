@@ -1203,8 +1203,9 @@ def build_report(harness: Harness, monitor_report: Any, *, meta: dict[str, Any])
                     for task_id, record in harness.bridge.records.items()
                 },
                 "note": (
-                    "bridge 兼容记录按 task_id 共享；停止/重跑场景下历史实例的终态会覆盖"
-                    "当前实例状态 ⇒ 判读 task_active 时必须同时看调度器实例列表"
+                    "bridge 兼容记录按 task_id 共享；Phase 12.1-B-F1 起**活动实例为权威**"
+                    "（同 task_id 的历史终态不再覆盖当前 RUNNING 实例），"
+                    "此视图仍同时给出调度器实例列表以便交叉核对"
                 ),
             },
             "instances": [
