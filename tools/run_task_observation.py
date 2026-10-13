@@ -384,6 +384,9 @@ class CycleObserver:
     _locks: dict[str, str] = field(default_factory=dict)
     _stop_done: bool = False
     _estop_done: bool = False
+    #: ``stop_file`` 独立标志：**不得**与 ``stop_after_s`` / E-STOP 共用（否则先触发者
+    #: 会永久屏蔽后续的手动收尾哨兵；Phase 12.1-B Scene E 实测）
+    _stop_file_done: bool = False
 
     # ---- 装配后接线 ---------------------------------------------------------
 
@@ -561,10 +564,14 @@ class CycleObserver:
         **既有契约**的"停止后允许重新触发"行为，以及 Metrics 相位延迟。
         """
         triggered = False
-        if self.stop_file is not None and not self._stop_done and self.stop_file.exists():
-            # 手动停止哨兵：**正常收尾**（等价于人工按"停止观察"），并留下证据
-            self._stop_done = True
+        stop_file_triggered = False
+        if self.stop_file is not None and not self._stop_file_done and self.stop_file.exists():
+            # 手动停止哨兵：**正常收尾**（等价于人工按"停止观察"），并留下证据。
+            # 独立标志（``_stop_file_done``）：即使此前已按计划 cancel / E-STOP，
+            # 收尾哨兵仍必须生效——Scene D/E 会同时使用这两类停止动作。
+            self._stop_file_done = True
             triggered = True
+            stop_file_triggered = True
             self.stop_actions.append(
                 {
                     "kind": "stop_file",
@@ -634,7 +641,10 @@ class CycleObserver:
                 }
             )
             logger.warning("已创建 E-STOP 哨兵文件（等价人工操作）: %s", path)
-        if triggered and self.exit_after_stop:
+        # 收尾哨兵（``stop_file``）是**人工收尾机制**：无论 ``exit_after_stop`` 如何，
+        # 它都必须结束本次运行；``stop_after_s`` / E-STOP 才受 ``exit_after_stop`` 控制
+        # （``--keep-running-after-stop`` 用于继续观察停止后的行为）。
+        if (triggered and self.exit_after_stop) or stop_file_triggered:
             stopper = getattr(self.monitor, "stop", None)
             if callable(stopper):
                 stopper()

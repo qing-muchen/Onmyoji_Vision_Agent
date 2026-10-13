@@ -421,3 +421,49 @@ def test_verdict_fails_when_any_measured_check_fails() -> None:
     errors = module._verdict(_payload(observation_errors=["boom"]))  # noqa: SLF001
     assert errors["safety_pass"] is False
     assert errors["evidence_complete"] is False
+
+
+# ---------------------------------------------------------------------------
+# 8. 多类停止动作互不屏蔽（Scene E 实测修复）
+# ---------------------------------------------------------------------------
+
+
+def test_stop_file_still_works_after_planned_cancel(tmp_path: Path) -> None:
+    """已按计划 ``cancel``（``stop_after_s``）后，收尾哨兵仍必须生效。
+
+    回归：``stop_file`` 与 ``stop_after_s`` 原先共用 ``_stop_done``，先触发者会
+    永久屏蔽后者（Scene E 实测：E1 的 cancel 之后 stop_file 失效，会话只能等
+    ``duration`` 自然结束）。
+    """
+    from src.core.config import load_config
+
+    module = _harness_module()
+    config = load_config()
+    source = _NullFrameSource()
+    stop_file = tmp_path / "STOP_OBS"
+    harness = module.build_harness(
+        config,
+        source,
+        documents=module.task_documents("obs_yard_watch"),
+        trigger_state="yard",
+        trigger_task="obs_yard_watch",
+        interval_ms=1,
+        estop_path=tmp_path / "ESTOP",
+        stop_after_s=0.0,           # 第一轮即触发计划停止
+        exit_after_stop=False,      # 继续运行（等待收尾哨兵）
+        stop_file=stop_file,
+    )
+    stop_file.write_text("stop\n", encoding="utf-8")  # 哨兵与计划停止同时存在
+    module._start_source(source)
+    try:
+        report = harness.monitor.run(duration_s=30.0)
+    finally:
+        module._stop_source(source)
+
+    kinds = [item["kind"] for item in harness.observer.stop_actions]
+    assert "TaskScheduler.cancel" in kinds or "stop_file" in kinds
+    assert any(item["kind"] == "stop_file" for item in harness.observer.stop_actions), (
+        f"收尾哨兵未生效：stop_actions={harness.observer.stop_actions}"
+    )
+    assert any(item["kind"] == "StateMonitor.stop" for item in harness.observer.stop_actions)
+    assert str(getattr(report, "stop_reason", "")) == "stop_requested"
