@@ -296,6 +296,18 @@ def bounded_document(seconds: int = 45) -> dict[str, Any]:
     }
 
 
+def probe_document(task_id: str = "obs_yard_probe") -> dict[str, Any]:
+    """资源锁探测用的第二个观察任务（与 :func:`watch_document` 同构，仅换 name）。
+
+    用途（Scene D4）：主任务持有 ``GAME_WINDOW`` 时提交它，验证它只能排队、
+    不会启动、不会抢锁。
+    """
+    document = watch_document()
+    document["name"] = task_id
+    document["description"] = "Phase 12.1-B 资源锁探测用第二观察任务（wait-only，零动作请求）"
+    return document
+
+
 def task_documents(name: str, *, bounded_seconds: int = 45) -> dict[str, dict[str, Any]]:
     """按名称返回内联任务文档（``task_id → 文档``）。
 
@@ -357,6 +369,11 @@ class CycleObserver:
     progress_every: int = 0
     #: 手动停止哨兵文件：存在即调用 ``StateMonitor.stop()`` **正常收尾**（写出完整报告）
     stop_file: Path | None = None
+    #: 资源锁探测：在该秒数用**已有 API** 提交第二个观察任务（验证并发/锁不被非法占用）
+    probe_at_s: float | None = None
+    probe_task_id: str = ""
+    probe_records: list[dict[str, Any]] = field(default_factory=list)
+    _probe_done: bool = False
     #: 每个实例最后一次**非空**的生命周期快照（实例被收割后引擎上下文可能被清空，
     #: 这份累积快照因此是"生命周期确实发生过"的权威证据）
     lifecycle_seen: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -396,9 +413,11 @@ class CycleObserver:
         if self._started_at is None:
             self._started_at = now
         elapsed = now - self._started_at
+        cycle_id = getattr(schedule, "cycle_id", None)
 
         self._guard_action_requests()
-        self._maybe_stop(elapsed)
+        self._maybe_probe(elapsed, cycle_id)
+        self._maybe_stop(elapsed, cycle_id)
 
         rows = self.rows
         previous_instances = dict(self._instance_status)
@@ -411,7 +430,6 @@ class CycleObserver:
         context = self.bridge.context
         store_stats = self._store_stats()
         context_stats = self._context_stats()
-        cycle_id = getattr(schedule, "cycle_id", None)
 
         rows.append(
             {
@@ -481,13 +499,66 @@ class CycleObserver:
             if callable(stopper):
                 stopper()
 
-    def _maybe_stop(self, elapsed: float) -> None:
+    def _maybe_probe(self, elapsed: float, cycle_id: int | None) -> None:
+        """用**已有公开 API** 探测资源锁与并发上限（第二个观察任务）。
+
+        目的（Scene D4）：证明"同一资源不会被第二个任务非法占用"——
+        主任务持有 ``GAME_WINDOW`` 时提交第二个任务，它只能**排队**（QUEUED），
+        既不会启动，也不会抢锁；随后立即用 ``cancel`` 清理（不留残状态）。
+
+        全程只调用 ``TaskScheduler.submit/cancel`` 与只读视图，**不改动任何判定语义**。
+        """
+        if (
+            self.probe_at_s is None
+            or self._probe_done
+            or not self.probe_task_id
+            or elapsed < self.probe_at_s
+        ):
+            return
+        self._probe_done = True
+        record: dict[str, Any] = {
+            "kind": "TaskScheduler.submit(probe)",
+            "runtime_cycle": cycle_id,
+            "at_s": round(elapsed, 3),
+            "task_id": self.probe_task_id,
+            "locks_before_submit": dict(self.scheduler.locks.to_dict()),
+        }
+        try:
+            instance = self.scheduler.submit(self.probe_task_id, reason="phase121b-lock-probe")
+            record.update(
+                {
+                    "instance_id": instance.instance_id,
+                    "status_after_submit": instance.status.value,
+                    "is_active_after_submit": instance.is_active,
+                    "is_running_after_submit": instance.is_running,
+                    "queued_instances": [item.instance_id for item in self.scheduler.queue],
+                    "running_instances": [item.instance_id for item in self.scheduler.active_tasks],
+                    "locks_after_submit": dict(self.scheduler.locks.to_dict()),
+                    "lock_conflicts": self.scheduler.stats.lock_conflicts,
+                }
+            )
+            cancelled = self.scheduler.cancel(instance.instance_id, reason="phase121b-probe-cleanup")
+            record.update(
+                {
+                    "cancelled": bool(cancelled),
+                    "status_after_cancel": instance.status.value,
+                    "locks_after_cancel": dict(self.scheduler.locks.to_dict()),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - 探测失败不影响运行
+            self.observation_errors.append(f"lock_probe: {exc}")
+            record["error"] = str(exc)
+        self.probe_records.append(record)
+        logger.warning("资源锁探测完成: %s", record)
+
+    def _maybe_stop(self, elapsed: float, cycle_id: int | None) -> None:
         """到时执行**已有显式 API** 的停止动作（调度器取消 / E-STOP 哨兵）。
 
         ``exit_after_stop``（默认开启）：停止动作生效后立即结束本次监控运行
         （``StateMonitor.stop()``）——这是"人工停止 + 收尾"的自然语义，
         用于验证"停止后不再产生任务启动 / 动作意图"。
-        关闭该选项则继续运行，用于如实观察**既有契约**的"停止后允许重新触发"行为。
+        关闭该选项则继续运行（``--keep-running-after-stop``），用于如实观察
+        **既有契约**的"停止后允许重新触发"行为，以及 Metrics 相位延迟。
         """
         triggered = False
         if self.stop_file is not None and not self._stop_done and self.stop_file.exists():
@@ -497,6 +568,7 @@ class CycleObserver:
             self.stop_actions.append(
                 {
                     "kind": "stop_file",
+                    "runtime_cycle": cycle_id,
                     "at_s": round(elapsed, 3),
                     "path": str(self.stop_file),
                     "returned": True,
@@ -513,6 +585,7 @@ class CycleObserver:
             self.stop_actions.append(
                 {
                     "kind": "TaskScheduler.cancel",
+                    "runtime_cycle": cycle_id,
                     "at_s": round(elapsed, 3),
                     "handle": handle,
                     "returned": bool(returned),
@@ -553,6 +626,7 @@ class CycleObserver:
             self.stop_actions.append(
                 {
                     "kind": "EStop.create_sentinel",
+                    "runtime_cycle": cycle_id,
                     "at_s": round(elapsed, 3),
                     "path": str(path) if path is not None else None,
                     "returned": path is not None,
@@ -751,6 +825,8 @@ def build_harness(
     timeline_path: Path | None = None,
     progress_every: int = 0,
     stop_file: Path | None = None,
+    probe_at_s: float | None = None,
+    probe_task_id: str = "",
 ) -> Harness:
     """装配「真实 Runtime + 真 Task 层 + 隔离动作端口」的观察 harness。
 
@@ -831,6 +907,8 @@ def build_harness(
         timeline_path=timeline_path,
         progress_every=progress_every,
         stop_file=stop_file,
+        probe_at_s=probe_at_s,
+        probe_task_id=probe_task_id,
     )
     monitor = StateMonitor.from_config(
         active,
@@ -1140,6 +1218,10 @@ def build_report(harness: Harness, monitor_report: Any, *, meta: dict[str, Any])
             },
             "instance_task_state_seen": dict(observer.task_state_seen),
             "stop_actions": list(observer.stop_actions),
+            "lock_probe": list(observer.probe_records),
+            # Scene E4：各实例**私有**决策上下文的身份与快照（证明隔离：新实例拿新对象，
+            # 已结束实例的上下文只留在有界 closed_contexts 里，不被复用）
+            "instance_contexts": _instance_context_rows(harness),
             "exit_after_stop": bool(observer.exit_after_stop),
             # 停止动作之后是否**又**出现了实例启动 / 失败（如实记录既有契约：
             # 被取消的实例允许重新触发；E-STOP 是触发器，不自动复位）
@@ -1195,6 +1277,40 @@ def build_report(harness: Harness, monitor_report: Any, *, meta: dict[str, Any])
         },
         "cycles": rows,
     }
+
+
+def _instance_context_rows(harness: Harness) -> list[dict[str, Any]]:
+    """各实例**私有**决策上下文的身份与快照（Scene E4 隔离证据）。
+
+    只读取 :meth:`TaskScheduler.instance_context` 与 ``closed_contexts`` 的公开视图；
+    ``context_object_id`` 用 ``id()`` 标识对象身份——不同实例拿到不同对象即证明隔离。
+    """
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    handles: list[str] = [item.instance_id for item in harness.scheduler.instances]
+    handles += [item.instance_id for item in harness.scheduler.history]
+    handles += list(harness.scheduler.closed_contexts)
+    for instance_id in handles:
+        if instance_id in seen:
+            continue
+        seen.add(instance_id)
+        context = harness.scheduler.instance_context(instance_id)
+        if context is None:
+            rows.append({"instance_id": instance_id, "context": None})
+            continue
+        rows.append(
+            {
+                "instance_id": instance_id,
+                "context_object_id": id(context),
+                "task_id": getattr(context, "task_id", None),
+                "current_state": getattr(context, "current_state", None),
+                "cycle_id": getattr(context, "cycle_id", None),
+                "is_empty": getattr(context, "is_empty", None),
+                "last_error": getattr(context, "last_error", None),
+                "closed": instance_id in harness.scheduler.closed_contexts,
+            }
+        )
+    return rows
 
 
 def _events_after_stop(observer: CycleObserver) -> dict[str, Any]:
@@ -1275,6 +1391,8 @@ def run_observation(
     timeline_path: Path | None,
     progress_every: int,
     stop_file: Path | None,
+    probe_at_s: float | None,
+    probe_task_id: str,
     mode: str,
 ) -> dict[str, Any]:
     """装配 → 运行 → 汇总（完整的一次观察）。"""
@@ -1295,6 +1413,8 @@ def run_observation(
         timeline_path=timeline_path,
         progress_every=progress_every,
         stop_file=stop_file,
+        probe_at_s=probe_at_s,
+        probe_task_id=probe_task_id,
     )
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     # 显式启动帧来源：``StateMonitor.run()`` 只驱动循环，**不**自动启动 source
@@ -1509,6 +1629,13 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="停止哨兵文件：存在即正常结束本次观察（写出完整报告）",
     )
+    parser.add_argument(
+        "--probe-at-s",
+        type=float,
+        default=None,
+        help="在该秒数用已有 API 提交第二个观察任务以探测资源锁（随后立即取消）",
+    )
+    parser.add_argument("--probe-task", default="obs_yard_probe", help="探测用的第二任务 id")
     parser.add_argument("--indent", type=int, default=2)
     args = parser.parse_args(argv)
 
@@ -1522,6 +1649,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     documents = task_documents(args.task, bounded_seconds=args.bounded_seconds)
+    if args.probe_at_s is not None:
+        # 第二个观察任务：仅在显式要求做资源锁探测时注册（不进入生产任务目录）
+        documents = {**documents, args.probe_task: probe_document(args.probe_task)}
     trigger_task = args.task
     source, source_meta, source_status = _build_source(
         config, args.mode, wait_foreground_s=args.wait_foreground_s
@@ -1574,6 +1704,8 @@ def main(argv: list[str] | None = None) -> int:
             timeline_path=Path(args.timeline_jsonl) if args.timeline_jsonl else None,
             progress_every=args.progress_every,
             stop_file=Path(args.stop_file) if args.stop_file else None,
+            probe_at_s=args.probe_at_s,
+            probe_task_id=args.probe_task if args.probe_at_s is not None else "",
             mode=args.mode,
         )
     except Exception as exc:  # noqa: BLE001 - 致命错误也要留下证据文件（不静默失败）

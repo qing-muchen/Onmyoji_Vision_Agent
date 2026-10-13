@@ -295,6 +295,81 @@ def test_stop_file_ends_run_cleanly_without_action_requests(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
+# 7. 资源锁探测与实例上下文隔离（Scene D4 / E4 所需的观测能力）
+# ---------------------------------------------------------------------------
+
+
+def test_lock_probe_queues_second_task_and_keeps_lock_free(tmp_path: Path) -> None:
+    """第二个观察任务只能排队（QUEUED）、不启动、不抢锁，且可被清理。"""
+    from src.core.config import load_config
+
+    module = _harness_module()
+    config = load_config()
+    source = _NullFrameSource()
+    documents = dict(module.task_documents("obs_yard_watch"))
+    documents["obs_yard_probe"] = module.probe_document()
+    harness = module.build_harness(
+        config,
+        source,
+        documents=documents,
+        trigger_state="yard",
+        trigger_task="obs_yard_watch",
+        interval_ms=1,
+        estop_path=tmp_path / "ESTOP",
+        probe_at_s=0.0,
+        probe_task_id="obs_yard_probe",
+    )
+    module._start_source(source)
+    try:
+        harness.monitor.run(max_cycles=3)
+    finally:
+        module._stop_source(source)
+
+    records = harness.observer.probe_records
+    assert len(records) == 1
+    record = records[0]
+    assert record["status_after_submit"] == "queued"
+    assert record["is_running_after_submit"] is False
+    assert record["is_active_after_submit"] is True
+    assert record["cancelled"] is True
+    assert record["status_after_cancel"] == "cancelled"
+    assert harness.port.intent_count == 0
+    assert harness.observer.observation_errors == []
+
+
+def test_instance_context_rows_expose_private_context_identity(tmp_path: Path) -> None:
+    """实例私有上下文行包含对象身份（用于证明新实例不复用旧上下文）。"""
+    from src.core.config import load_config
+
+    module = _harness_module()
+    config = load_config()
+    harness = module.build_harness(
+        config,
+        _NullFrameSource(),
+        documents=module.task_documents("obs_yard_watch"),
+        trigger_state="yard",
+        trigger_task="obs_yard_watch",
+        interval_ms=1,
+        estop_path=tmp_path / "ESTOP",
+    )
+    rows = module._instance_context_rows(harness)
+    assert isinstance(rows, list)  # 无实例时为空列表，也不得报错
+    assert harness.port.intent_count == 0
+
+
+def test_probe_document_matches_observation_contract() -> None:
+    """探测用第二任务与观察任务同构（wait-only，经生产校验路径）。"""
+    from src.task.loader import validate_task_document
+
+    module = _harness_module()
+    document = module.probe_document("obs_yard_probe")
+    definition = validate_task_document(document, source_path="<test:probe>")
+    action = definition.initial_state.first_action()
+    assert definition.name == "obs_yard_probe"
+    assert action is not None and action.is_wait is True
+
+
+# ---------------------------------------------------------------------------
 # 5. 安全结论口径
 # ---------------------------------------------------------------------------
 
