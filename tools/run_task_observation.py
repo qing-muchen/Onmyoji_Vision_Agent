@@ -1308,10 +1308,26 @@ def _instance_context_rows(harness: Harness) -> list[dict[str, Any]]:
                 "cycle_id": getattr(context, "cycle_id", None),
                 "is_empty": getattr(context, "is_empty", None),
                 "last_error": getattr(context, "last_error", None),
+                # 实例私有字段（必须隔离；Observation 走共享视图，不在此列）
+                "last_action": _record_of(getattr(context, "last_action", None)),
+                "variables": dict(getattr(context, "task_variables", {}) or {}),
                 "closed": instance_id in harness.scheduler.closed_contexts,
             }
         )
     return rows
+
+
+def _record_of(value: Any) -> Any:
+    """把可选的记录对象转成可 JSON 序列化的字典（``None`` 原样保留）。"""
+    if value is None:
+        return None
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        try:
+            return dict(to_dict())
+        except Exception:  # noqa: BLE001 - 观测失败不影响报告
+            return str(value)
+    return str(value)
 
 
 def _events_after_stop(observer: CycleObserver) -> dict[str, Any]:
