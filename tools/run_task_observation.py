@@ -1556,16 +1556,28 @@ def _build_source(
 
         source = WindowFrameSource.from_config(config)
         binding = source.binding
-        window = binding.find(refresh=True)
-        if window is None:
-            return None, {"reason": "window_not_found", "waited_s": 0.0}, "window_unavailable"
+        # 只读轮询等待"可采集"状态：窗口存在 + 未最小化 + 在前台。
+        # 覆盖三种启动前状态（游戏未启动 / 已最小化 / 被其他窗口遮挡），
+        # 全程不激活、不抢占、不发送任何输入；超时后按**实际原因**如实返回。
         waited = 0.0
         remaining = max(0.0, float(wait_foreground_s))
-        step = 0.5
-        while remaining > 0 and not (binding.is_foreground() and not binding.is_minimized()):
-            time.sleep(min(step, remaining))
-            waited += min(step, remaining)
-            remaining -= min(step, remaining)
+        step = 1.0
+        while True:
+            window = binding.find(refresh=True)
+            if window is not None and binding.is_foreground() and not binding.is_minimized():
+                break
+            if remaining <= 0:
+                break
+            pause = min(step, remaining)
+            time.sleep(pause)
+            waited += pause
+            remaining -= pause
+        if window is None:
+            return (
+                None,
+                {"reason": "window_not_found", "waited_s": round(waited, 1)},
+                "window_unavailable",
+            )
         if binding.is_minimized():
             return (
                 None,
