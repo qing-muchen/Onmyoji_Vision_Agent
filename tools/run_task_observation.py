@@ -65,6 +65,7 @@ from src.runtime.state_monitor.metrics import RuntimeMetricsRecorder, percentile
 from src.runtime.state_monitor.monitor import StateMonitor  # noqa: E402
 from src.runtime.task_bridge import TaskRuntimeBridge  # noqa: E402
 from src.runtime.vision_bridge import VisionSnapshotBridge  # noqa: E402
+from src.task.control import TaskControlState  # noqa: E402 - Phase 12.1-C4（可选注入）
 from src.task.engine import TaskEngine  # noqa: E402
 from src.task.estop import EStop  # noqa: E402
 from src.task.registry import registry_from_mapping  # noqa: E402
@@ -813,6 +814,8 @@ class Harness:
     document: dict[str, Any]
     interval_ms: int
     notes: list[str] = field(default_factory=list)
+    #: Phase 12.1-C4：注入的统一控制状态（``None`` = 未注入，保持既有行为）
+    control: TaskControlState | None = None
 
 
 def build_harness(
@@ -837,6 +840,8 @@ def build_harness(
     stop_file: Path | None = None,
     probe_at_s: float | None = None,
     probe_task_id: str = "",
+    control: TaskControlState | None = None,
+    estop: EStop | None = None,
 ) -> Harness:
     """装配「真实 Runtime + 真 Task 层 + 隔离动作端口」的观察 harness。
 
@@ -854,34 +859,45 @@ def build_harness(
         stop_after_s: 运行到该秒数时用 ``TaskScheduler.cancel`` 显式停止任务。
         estop_after_s: 运行到该秒数时创建 E-STOP 哨兵文件（等价人工操作）。
         stop_reason: 停止原因（写入报告）。
+        control: Phase 12.1-C4：可选的**统一控制状态**
+            （:class:`~src.task.control.TaskControlState`）。传入时把它同时注入
+            ``TaskScheduler(admission_guard=...)`` 与 ``TaskRuntimeBridge(control=...)``
+            （同一权威对象）；省略时行为与本阶段之前**完全一致**。
 
     Returns:
         :class:`Harness`。
     """
     registry = registry_from_mapping(dict(documents))
     port = ObservationOnlyPort()
-    estop = EStop(path=estop_path or (DEFAULT_OUT_DIR / "ESTOP"))
-    if estop.path.exists():
+    # Phase 12.1-C4：允许注入既有 EStop（编排器需与实例引擎共享**同一对象**）；
+    # 省略时按路径新建（既有行为不变）
+    active_estop = (
+        estop if estop is not None else EStop(path=estop_path or (DEFAULT_OUT_DIR / "ESTOP"))
+    )
+    if active_estop.path.exists():
         # 上一次运行遗留的哨兵会让本轮一开始就 E-STOP ⇒ 先清理并如实记录
-        estop.clear_sentinel()
+        active_estop.clear_sentinel()
 
     scheduler = TaskScheduler(
         registry,
         # 每个实例引擎都注入隔离端口与 E-STOP（既有 API，不新增热键）
-        engine_factory=lambda: TaskEngine(action_port=port, estop=estop),
+        engine_factory=lambda: TaskEngine(action_port=port, estop=active_estop),
         action_port=port,
         allow_rerun_completed=allow_rerun,
         watchdog_timeout_s=watchdog_s,
         history_limit=20,
+        # Phase 12.1-C4：注入统一控制状态时才启用准入 guard（``None`` ⇒ 与既有行为一致）
+        admission_guard=control.admission_reason if control is not None else None,
     )
     bridge = TaskRuntimeBridge(
         # 调度模式下该引擎不参与推进（仅满足桥的构造契约）
-        task_engine=TaskEngine(action_port=port, estop=estop),
+        task_engine=TaskEngine(action_port=port, estop=active_estop),
         task_registry=registry,
         triggers=TaskTriggerRegistry({trigger_state: trigger_task}),
         scheduler=scheduler,
         context_bridge=ContextBridge(),
         allow_rerun_completed=allow_rerun,
+        control=control,
     )
 
     resolver = SnapshotSinkResolver()
@@ -907,7 +923,7 @@ def build_harness(
         scheduler=scheduler,
         recorder=recorder,
         resolver=resolver,
-        estop=estop,
+        estop=active_estop,
         stop_after_s=stop_after_s,
         estop_after_s=estop_after_s,
         stop_reason=stop_reason,
@@ -944,7 +960,7 @@ def build_harness(
         scheduler=scheduler,
         port=port,
         recorder=recorder,
-        estop=estop,
+        estop=active_estop,
         resolver=resolver,
         vision_bridge=vision_bridge,
         observer=observer,
@@ -952,6 +968,7 @@ def build_harness(
         document=dict(next(iter(documents.values()))),
         interval_ms=int(monitor_config.interval_ms),
         notes=notes,
+        control=control,
     )
 
 

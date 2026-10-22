@@ -1,0 +1,487 @@
+"""Phase 12.1-C4：真实 Runtime 下的**协调关闭**验证（observation-only；零真实输入）。
+
+复用 ``run_task_observation`` 的既有装配（``build_harness`` / ``_build_source`` 等），
+由 :class:`~src.runtime.orchestration.TaskRuntimeOrchestrator` 统一驱动：
+
+* **编排器启动** Monitor 运行线程 ⇒ 持有可 ``join`` 的句柄（退出确认是确定性的）；
+* **主线程 = 诊断控制线程**：到预定关闭点调用 ``orchestrator.shutdown()``
+  （**不**从 Monitor 自己的线程调用需要 join 自身的路径）；
+* 输出结构化审计：时间线、``ShutdownReport``、关闭后状态对照、安全计数。
+
+安全硬约束（本工具自带自检，违反即拒绝运行）：
+
+* 不 import ``src.action``、不构造任何输入 backend（复用 ``ObservationOnlyPort``）；
+* 不激活 / 不移动 / 不点击 / 不切换游戏窗口；
+* 生产 ``action.enabled`` 必须为 ``false`` 且 ``backend == "dry_run"``；
+* 只清理**本次诊断创建**的 E-STOP 哨兵文件。
+
+用法示例::
+
+    python tools/run_shutdown_verification.py --scene A --mode window \
+        --shutdown-after-s 45 --output %TEMP%/ova121c4/scene_a.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools"
+for _candidate in (str(ROOT), str(TOOLS)):
+    if _candidate not in sys.path:
+        sys.path.insert(0, _candidate)
+
+import run_task_observation as obs  # noqa: E402 - 同目录诊断工具复用
+
+from src.core.config import load_config  # noqa: E402
+from src.runtime.orchestration import (  # noqa: E402
+    OrchestrationError,
+    ShutdownReport,
+    TaskRuntimeOrchestrator,
+)
+from src.task.control import TaskControlState  # noqa: E402
+from src.task.estop import EStop  # noqa: E402
+from src.task.models import TaskAdmissionDenied  # noqa: E402
+
+PHASE = "12.1-c4"
+__all__ = ["main", "run_verification"]
+
+
+def _now() -> str:
+    """本地时间戳（与 Task / Runtime 模块同格式）。"""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _instance_rows(scheduler: Any) -> list[dict[str, Any]]:
+    """活跃实例快照（id / task / status / 持锁）。"""
+    rows: list[dict[str, Any]] = []
+    for instance in list(scheduler.instances):
+        rows.append(
+            {
+                "instance_id": instance.instance_id,
+                "task_id": instance.task_id,
+                "status": instance.status.value,
+                "cycles": instance.cycles,
+                "holds_lock": scheduler.locks.owner("GAME_WINDOW") == instance.instance_id,
+            }
+        )
+    return rows
+
+
+def _history_rows(scheduler: Any) -> list[dict[str, Any]]:
+    """历史实例终态快照（可追溯）。"""
+    return [
+        {
+            "instance_id": item.instance_id,
+            "task_id": item.task_id,
+            "status": item.status.value,
+            "reason": item.reason,
+        }
+        for item in scheduler.history
+    ]
+
+
+def _sample(harness: Any, *, t_s: float) -> dict[str, Any]:
+    """一次轻量状态采样（用于运行期时间线）。"""
+    scheduler = harness.scheduler
+    return {
+        "t_s": round(t_s, 3),
+        "at": _now(),
+        "instances": _instance_rows(scheduler),
+        "locks": dict(scheduler.locks.to_dict()),
+        "bridge_active_task_id": harness.bridge.active_task_id,
+        "events": harness.bridge.stats.events,
+        "submits": scheduler.stats.submits,
+        "failed": scheduler.stats.failed,
+        "admission_blocked": scheduler.stats.admission_blocked,
+        "intent_count": int(getattr(harness.port, "intent_count", 0)),
+    }
+
+
+def run_verification(args: argparse.Namespace) -> dict[str, Any]:
+    """执行一次 C4 关闭验证并返回审计 payload（不写文件、不打印）。"""
+    timeline: list[dict[str, Any]] = []
+
+    def stamp(event: str, **extra: Any) -> None:
+        entry: dict[str, Any] = {"at": _now(), "event": event}
+        entry.update(extra)
+        timeline.append(entry)
+
+    config = load_config()
+    # ---- 安全自检（拒绝运行不安全配置） --------------------------------------
+    if config.action.enabled or config.action.backend != "dry_run":
+        return {
+            "phase": PHASE,
+            "status": "refused",
+            "reason": (
+                f"生产 action 配置不是 enabled=false / backend=dry_run"
+                f"（enabled={config.action.enabled}, backend={config.action.backend}）"
+            ),
+        }
+    action_imports = obs.audit_action_imports()
+    if action_imports:
+        return {
+            "phase": PHASE,
+            "status": "refused",
+            "reason": f"本工具引入了 Action 层 import：{action_imports}",
+        }
+
+    estop_path = Path(args.estop_path) if args.estop_path else (obs.DEFAULT_OUT_DIR / "ESTOP")
+    estop = EStop(path=estop_path, now=_now)
+    leftover_cleared = False
+    if estop.path.exists():
+        # 上一次运行遗留的哨兵会让本轮一开始就 E-STOP ⇒ 先清理并如实记录
+        estop.clear_sentinel()
+        leftover_cleared = True
+    estop_created_by_us = False
+
+    control = TaskControlState(estop=estop)
+    documents = obs.task_documents(args.task, bounded_seconds=args.bounded_seconds)
+    source, source_meta, source_status = obs._build_source(
+        config, args.mode, wait_foreground_s=args.wait_foreground_s
+    )
+    if source is None:
+        return {
+            "phase": PHASE,
+            "scene": args.scene,
+            "status": "source_unavailable",
+            "source": {"status": source_status, "meta": source_meta},
+        }
+
+    harness = obs.build_harness(
+        config,
+        source,
+        documents=documents,
+        trigger_state=args.trigger_state,
+        trigger_task=args.task,
+        interval_ms=args.interval_ms,
+        allow_rerun=args.rerun,
+        watchdog_s=args.watchdog_s,
+        yard_metrics=True,
+        estop=estop,
+        control=control,
+    )
+    stamp("harness_built", task=args.task, trigger_state=args.trigger_state)
+
+    orchestrator = TaskRuntimeOrchestrator(
+        bridge=harness.bridge,
+        scheduler=harness.scheduler,
+        control=control,
+        monitor=harness.monitor,
+        estop=estop,
+        join_timeout_s=args.join_timeout_s,
+        now=_now,
+    )
+    try:
+        orchestrator.assert_safe_wiring()
+    except OrchestrationError as exc:
+        return {
+            "phase": PHASE,
+            "scene": args.scene,
+            "status": "unsafe_wiring",
+            "error": str(exc),
+            "safety": {"real_input": False, "action_backend": config.action.backend},
+        }
+    stamp(
+        "safe_wiring_verified",
+        guard_is_control=harness.scheduler.admission_guard == control.admission_reason,
+        control_is_bridge=harness.bridge.control is control,
+        estop_shared=all(
+            getattr(item.engine, "estop", None) is estop
+            for item in harness.scheduler.instances
+        ),
+    )
+
+    # ---- 启动（编排器拥有 Monitor 运行线程） ---------------------------------
+    obs._start_source(source)
+    duration = float(args.duration)
+    if duration <= 0:
+        duration = max(float(args.shutdown_after_s) + 30.0, 60.0)
+    thread = orchestrator.start(duration_s=duration, max_cycles=args.max_cycles)
+    monitor_thread_name = thread.name if thread is not None else None
+    stamp(
+        "monitor_thread_started",
+        thread=monitor_thread_name,
+        duration_s=duration,
+        join_timeout_s=args.join_timeout_s,
+    )
+
+    t0 = time.monotonic()
+    samples: list[dict[str, Any]] = []
+    estop_done = args.estop_after_s is None
+    shutdown_point = float(args.shutdown_after_s)
+    stopped_early = ""
+    while True:
+        elapsed = time.monotonic() - t0
+        samples.append(_sample(harness, t_s=elapsed))
+        if not estop_done and elapsed >= float(args.estop_after_s):
+            estop.create_sentinel("phase121c4-estop")
+            estop_created_by_us = True
+            estop_done = True
+            stamp("estop_sentinel_created", path=str(estop.path), at_s=round(elapsed, 3))
+        if elapsed >= shutdown_point:
+            break
+        if thread is not None and not thread.is_alive():
+            stopped_early = "monitor_exited_before_shutdown"
+            stamp("monitor_exited_before_shutdown", at_s=round(elapsed, 3))
+            break
+        time.sleep(max(0.05, float(args.sample_interval_s)))
+
+    events_before_shutdown = harness.bridge.stats.events
+    instances_before = len(harness.scheduler.instances)
+
+    # ---- 预定关闭点：由**诊断控制线程**（主线程）调用 shutdown ---------------
+    stamp(
+        "shutdown_requested",
+        reason=args.reason,
+        instances_before=instances_before,
+        monitor_thread_alive=bool(thread is not None and thread.is_alive()),
+    )
+    report: ShutdownReport = orchestrator.shutdown(reason=args.reason)
+    stamp("shutdown_returned", completed=report.shutdown_completed)
+    monitor_thread_alive_after = bool(thread is not None and thread.is_alive())
+    join_confirmed = (thread is None) or (not monitor_thread_alive_after)
+    stamp(
+        "monitor_join_confirmed",
+        monitor_thread_alive=monitor_thread_alive_after,
+        join_confirmed=join_confirmed,
+    )
+    post_instances = len(harness.scheduler.instances)
+    post_locks = dict(harness.scheduler.locks.to_dict())
+    post_active_task_id = harness.bridge.active_task_id
+    post_closed_contexts = len(harness.scheduler.closed_contexts)
+    stamp(
+        "scheduler_cleanup_observed",
+        instances=post_instances,
+        locks=list(post_locks),
+        closed_contexts=post_closed_contexts,
+        bridge_active_task_id=post_active_task_id,
+    )
+
+    # ---- Scene C：幂等 / latch 后不可重新开放 --------------------------------
+    scene_c: dict[str, Any] = {}
+    if args.scene == "C":
+        second = orchestrator.shutdown(reason=args.reason)
+        third = orchestrator.shutdown(reason=args.reason)
+        history_after_first = len(harness.scheduler.history)
+        enable_changed = control.enable(args.task)
+        bridge_enable_changed = harness.bridge.enable_task(args.task)
+        submit_blocked = False
+        submit_error = ""
+        try:
+            harness.scheduler.submit(args.task, reason="phase121c4-scene-c-probe")
+        except TaskAdmissionDenied as exc:
+            submit_blocked = True
+            submit_error = f"{exc.reason}"
+        except Exception as exc:  # noqa: BLE001 - 其它异常如实记录
+            submit_error = repr(exc)
+        scene_c = {
+            "second_is_first": second is report,
+            "third_is_first": third is report,
+            "repeated_calls": report.repeated_calls,
+            "history_length": history_after_first,
+            "enable_returned": enable_changed,
+            "bridge_enable_returned": bridge_enable_changed,
+            "submit_blocked_after_shutdown": submit_blocked,
+            "submit_blocked_reason": submit_error,
+            "admission_reason": orchestrator.admission_reason(args.task),
+            "is_shutdown": orchestrator.is_shutdown,
+        }
+        stamp("scene_c_idempotency_checked", **scene_c)
+
+    # ---- 关闭后观察窗口：确认无新事件 / 新实例 -------------------------------
+    time.sleep(max(0.0, float(args.post_observe_s)))
+    events_after = harness.bridge.stats.events
+    stamp(
+        "post_shutdown_observation_completed",
+        waited_s=float(args.post_observe_s),
+        new_events=events_after - events_before_shutdown,
+        instances=len(harness.scheduler.instances),
+    )
+
+    post_shutdown = {
+        "scheduler": {
+            "instances": len(harness.scheduler.instances),
+            "queue": len(harness.scheduler.queue),
+            "paused": len(harness.scheduler.paused),
+            "history": _history_rows(harness.scheduler),
+            "locks": dict(harness.scheduler.locks.to_dict()),
+            "game_window_free": harness.scheduler.locks.is_free("GAME_WINDOW"),
+            "closed_contexts": len(harness.scheduler.closed_contexts),
+            "stats": harness.scheduler.stats.to_dict(),
+        },
+        "bridge": {
+            "active_task_id": harness.bridge.active_task_id,
+            "records": {
+                task_id: record.status.value for task_id, record in harness.bridge.records.items()
+            },
+            "stats": harness.bridge.stats.to_dict(),
+        },
+        "events": {
+            "before_shutdown": events_before_shutdown,
+            "after_observation": events_after,
+            "new_events_after_shutdown": events_after - events_before_shutdown,
+        },
+        "monitor": {
+            "thread": monitor_thread_name,
+            "thread_alive": monitor_thread_alive_after,
+            "join_confirmed": join_confirmed,
+        },
+        "control": control.to_dict(),
+        "orchestrator_is_shutdown": orchestrator.is_shutdown,
+    }
+
+    status = "ok" if report.shutdown_completed else "incomplete"
+    if args.scene == "C" and not (
+        scene_c.get("second_is_first") and scene_c.get("submit_blocked_after_shutdown")
+    ):
+        status = "incomplete"
+
+    safety = {
+        "action_config_enabled": bool(config.action.enabled),
+        "action_backend": config.action.backend,
+        "action_modules_loaded": obs.loaded_action_modules(),
+        "real_input": False,
+        "intent_count": int(getattr(harness.port, "intent_count", 0)),
+        "executed_count": int(getattr(harness.port, "executed_count", 0)),
+    }
+
+    # ---- 清理：仅删除**本次诊断创建**的哨兵 ---------------------------------
+    sentinel_cleaned = False
+    if estop_created_by_us and estop.path.exists():
+        estop.clear_sentinel()
+        sentinel_cleaned = True
+    stamp("cleanup_done", sentinel_cleaned=sentinel_cleaned, leftover_cleared=leftover_cleared)
+
+    return {
+        "phase": PHASE,
+        "scene": args.scene,
+        "mode": args.mode,
+        "status": status,
+        "stopped_early": stopped_early,
+        "git_head": obs._git_head(),
+        "started_at": samples[0]["at"] if samples else "",
+        "finished_at": _now(),
+        "duration_s": duration,
+        "shutdown_after_s": shutdown_point,
+        "estop_after_s": args.estop_after_s,
+        "source": {"status": source_status, "meta": source_meta},
+        "wiring": {
+            "assert_safe_wiring": "ok",
+            "guard_is_control": harness.scheduler.admission_guard == control.admission_reason,
+            "control_is_bridge_control": harness.bridge.control is control,
+            "control_estop_is_harness_estop": control.estop is estop,
+            "monitor_thread": monitor_thread_name,
+        },
+        "timeline": timeline,
+        "samples": samples,
+        "shutdown_report": report.to_dict(),
+        "scene_c": scene_c,
+        "post_shutdown": post_shutdown,
+        "safety": safety,
+        "notes": harness.notes,
+    }
+
+
+def _print_summary(payload: dict[str, Any], *, out: Path) -> None:
+    print("=" * 88)
+    print(f"Phase 12.1-C4 关闭验证：scene={payload.get('scene')} mode={payload.get('mode')}")
+    print(
+        f"  status={payload.get('status')}"
+        f"（shutdown_completed={payload.get('shutdown_report', {}).get('shutdown_completed')}）"
+    )
+    report = payload.get("shutdown_report", {})
+    if report:
+        print(
+            "  shutdown: "
+            f"monitor_stop_requested={report.get('monitor_stop_requested')} "
+            f"monitor_exited={report.get('monitor_exited')}"
+            f"（{report.get('monitor_exit_note')}）"
+        )
+        print(
+            "  cancelled: "
+            f"total={report.get('task_instances_cancelled')} "
+            f"r={report.get('running_instances_cancelled')} "
+            f"q={report.get('queued_instances_cancelled')} "
+            f"p={report.get('paused_instances_cancelled')} "
+            f"locks_released={report.get('locks_released')} "
+            f"locks_remaining={report.get('locks_remaining')} "
+            f"contexts_closed={report.get('context_closed_count')}"
+        )
+        if report.get("shutdown_errors") or report.get("cancel_failures"):
+            print(
+                f"  errors={report.get('shutdown_errors')} failures={report.get('cancel_failures')}"
+            )
+    post = payload.get("post_shutdown", {})
+    if post:
+        print(
+            "  post: "
+            f"instances={post['scheduler']['instances']} "
+            f"locks={post['scheduler']['locks']} "
+            f"active_task_id={post['bridge']['active_task_id']} "
+            f"new_events={post['events']['new_events_after_shutdown']}"
+        )
+    safety = payload.get("safety", {})
+    if safety:
+        print(
+            "  safety: "
+            f"action_enabled={safety.get('action_config_enabled')} "
+            f"backend={safety.get('action_backend')} "
+            f"real_input={safety.get('real_input')} "
+            f"intent={safety.get('intent_count')} "
+            f"executed={safety.get('executed_count')} "
+            f"action_modules={safety.get('action_modules_loaded')}"
+        )
+    print(f"  output: {out}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI 入口。"""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Phase 12.1-C4：真实 Runtime 下的协调关闭验证（observation-only；零真实输入）"
+        )
+    )
+    parser.add_argument("--scene", choices=("A", "B", "C"), default="A")
+    parser.add_argument("--mode", choices=("window", "replay"), default="window")
+    parser.add_argument("--task", default="obs_yard_watch")
+    parser.add_argument("--trigger-state", default="yard")
+    parser.add_argument("--bounded-seconds", type=int, default=45)
+    parser.add_argument("--interval-ms", type=int, default=None)
+    parser.add_argument("--duration", type=float, default=0.0, help="Monitor 最长时长（<=0 = 关闭点+30s）")
+    parser.add_argument("--max-cycles", type=int, default=None)
+    parser.add_argument("--shutdown-after-s", type=float, default=45.0, help="预定关闭点（秒）")
+    parser.add_argument("--estop-after-s", type=float, default=None, help="该秒数创建 E-STOP 哨兵")
+    parser.add_argument("--sample-interval-s", type=float, default=1.0)
+    parser.add_argument("--post-observe-s", type=float, default=3.0, help="关闭后观察窗口（秒）")
+    parser.add_argument("--join-timeout-s", type=float, default=10.0)
+    parser.add_argument(
+        "--wait-foreground-s",
+        type=float,
+        default=60.0,
+        help="真实窗口模式下等待窗口进入前台的秒数（只读轮询；不激活、不抢占）",
+    )
+    parser.add_argument("--estop-path", default=None, help="E-STOP 哨兵路径（建议 TEMP 隔离路径）")
+    parser.add_argument("--reason", default="phase121c4-shutdown")
+    parser.add_argument("--rerun", action="store_true")
+    parser.add_argument("--watchdog-s", type=float, default=0.0)
+    parser.add_argument("--output", default=str(obs.DEFAULT_OUT_DIR / "shutdown_verification.json"))
+    parser.add_argument("--indent", type=int, default=2)
+    args = parser.parse_args(argv)
+
+    payload = run_verification(args)
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=args.indent), encoding="utf-8")
+    _print_summary(payload, out=out)
+    return 0 if payload.get("status") == "ok" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

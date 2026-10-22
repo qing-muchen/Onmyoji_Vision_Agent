@@ -2446,6 +2446,21 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   monitor/cancel/guard 异常路径安全、E-STOP + Shutdown 并存仍完成清理且**不清除 E-STOP**、
   Scheduler / Bridge 记录一致（`task_active=None`）；全程 `intent_count=0` / `real_input=False`。
   测试 **+26** ⇒ pytest **2060 passed, 1 skipped**。
+- Phase 12.1-C4（**已完成：Real Windows Coordinated Shutdown Verification**，observation-only、零真实输入，
+  **未改任何生产模块**）：新增诊断工具 `tools/run_shutdown_verification.py`（复用既有 harness 装配；
+  **编排器启动 Monitor 线程**并持有可 join 句柄；主线程作为**诊断控制线程**在预定关闭点调用
+  `orchestrator.shutdown()`），并给 `tools/run_task_observation.py::build_harness` 增加**可选**
+  `control` / `estop` 注入参数（省略时与本阶段之前**逐字节一致**）。
+  **真实窗口 Scene A 正式验证**（`'阴阳师-网易游戏'` hwnd `0x170c78`、客户区 1704×960、前台只读轮询 `waited_s=0`）：
+  观测 **180 s**（361 tick、`submits=1` 全程只创建一个实例、`obs_yard_watch#1 RUNNING` 全程持 `GAME_WINDOW`、
+  `events=360`、`failed=0`、`intent=0`）→ 22:16:01 `shutdown()`（latch → `monitor.stop()` → **join 确认退出**
+  `monitor_exited=True (joined)` → 取消 1 个 RUNNING 实例 → `locks_released=1 / remaining=[]` →
+  `context_closed_count=1` → Bridge `sync_records` → `shutdown_completed=True`）→ **关闭后 30 s** 观测：
+  `instances=0 / locks={} / active_task_id=None / new_events=1`（仅 1 次在途 callback，`submits` 仍为 1，
+  **无新实例、无新锁**）。安全全程：`action.enabled=false`、`backend=dry_run`、`action_modules=[]`、
+  `real_input=false`、`intent=0` / `executed=0`；未激活 / 移动 / 点击 / 切换窗口。新增离线闭环测试 **+5** ⇒
+  pytest **2065 passed, 1 skipped**。证据：`%TEMP%\ova121c4\sceneA_formal.json`
+  （时间线 / 181 采样 / `ShutdownReport` 全字段 / 关闭后状态对照）。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
