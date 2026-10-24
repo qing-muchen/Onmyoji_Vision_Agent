@@ -120,7 +120,7 @@ Phase 12.1 完成了 **observation-only 的 Runtime → Task 闭环**，并在**
 | `%TEMP%\ova121c4\sceneB_formal.json` | ✅ 存在（41,279 bytes） | E-STOP + Shutdown |
 | `%TEMP%\ova121c4\sceneC_formal.json` | ✅ 存在（43,998 bytes） | 幂等 / 终局锁存 |
 
-> 实际路径位于本机 TEMP 的会话目录（`…\Temp\reasonix-session-tmp-<id>\ova121c4\`）。
+> 实际路径位于本机 TEMP 下的 `<TEMP>\ova121c4\`（会话级临时目录；本报告不记录具体会话标识）。
 > 本报告**不**重新生成或伪造任何证据；上述数值均来自这些 JSON 与当时的内联读取。
 
 ---
