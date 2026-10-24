@@ -2488,6 +2488,17 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   「修改冻结架构必须满足的 8 条回归条件」见冻结文档。详见
   `docs/PHASE12_1F_FINAL_ACCEPTANCE_REPORT.md` 与
   `docs/PHASE12_1F_ARCHITECTURE_FREEZE_AND_RISK_REGISTER.md`。
+- Phase 12.2-A0（**已完成：R-1 PAUSED Resume Freshness 审计 + 离线复现**，**零生产代码改动**）：
+  审计暂停/恢复全链路（`scheduler.pause/resume` → `_pause_instance/_resume_instance` →
+  `engine.pause/resume` → Workflow / ActionPort）。**发现并复现高优先级缺陷 DEF-12.2-A0-01**：
+  手动 `scheduler.resume()` **绕过 admission guard** —— Disable / Shutdown latch 生效时仍返回 `True`、
+  实例转 `RUNNING` 并**重新持有 `GAME_WINDOW`**（自动（抢占）恢复路径有 `admission_reason` 检查，手动入口没有）；
+  E-STOP 下 resume 也短暂成功，但下一轮引擎检查点兜底 `FAILED` 且**无新动作**。**未复现**的子项（如实记录）：
+  旧 Snapshot 重放、旧 ActionRequest 重发、长暂停（60 s）+ retry 配置下的重复动作 —— 现有机制为
+  「快照每次覆盖 + 暂停不推进 + 请求同步无队列」。**建议最小修复（待 A1 批准）**：在 `_resume_instance`
+  入口复用 `admission_reason`，拒绝时保持 `PAUSED` 并返回 `False`（仅 `scheduler.py` 约 6–8 行，
+  无破坏性契约变更）。新增离线用例 **11** ⇒ 全量 **2078 passed, 1 skipped**（本轮实测）。详见
+  `docs/PHASE12_2A0_PAUSED_RESUME_FRESHNESS_AUDIT.md`。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
