@@ -2461,6 +2461,13 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   `real_input=false`、`intent=0` / `executed=0`；未激活 / 移动 / 点击 / 切换窗口。新增离线闭环测试 **+5** ⇒
   pytest **2065 passed, 1 skipped**。证据：`%TEMP%\ova121c4\sceneA_formal.json`
   （时间线 / 181 采样 / `ShutdownReport` 全字段 / 关闭后状态对照）。
+  **Scene B（真实窗口）已独立验收 PASS**：隔离临时哨兵在第 **30 s** 触发 E-STOP → 运行实例
+  `FAILED`（历史可追溯、锁已释放、上下文已关闭）→ 保持 E-STOP **60.016 s / 120 个调度周期**
+  （`submits_since=0`、`failed_since=1`、`admission_blocked=119`、`intent=0`，**无实例风暴**）→
+  `shutdown()`（`monitor_exited=True (joined)`、`locks_remaining=[]`、`shutdown_completed=True`；
+  E-STOP **不被 reset**）→ 关闭后 30 s：`instances=0 / locks={} / active_task_id=None`，
+  事件分段 **在途 callback 1 / Monitor 确认退出后 0**。临时哨兵已清理，生产 `logs/ESTOP` 未触碰。
+  详见 `docs/PHASE12_1C4B_ESTOP_SHUTDOWN_REAL_RUNTIME_REPORT.md`。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

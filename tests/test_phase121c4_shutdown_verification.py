@@ -51,6 +51,7 @@ def _namespace(tmp_path: Path, **overrides) -> argparse.Namespace:
         "max_cycles": None,
         "shutdown_after_s": 1.5,
         "estop_after_s": None,
+        "estop_hold_min_cycles": 30,
         "sample_interval_s": 0.3,
         "post_observe_s": 0.3,
         "join_timeout_s": 5.0,
@@ -130,23 +131,81 @@ def test_offline_scene_c_is_idempotent_and_cannot_reopen(
     assert payload["post_shutdown"]["scheduler"]["instances"] == 0
 
 
-def test_offline_scene_b_estop_then_shutdown(
+def test_offline_scene_b_structure_and_truthful_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """场景 B 的**离线结构**验证（fake 帧不产生 yard stable ⇒ 门控不满足）。
+
+    该路径必须**如实**返回 `incomplete`：关闭本身成功，但 E-STOP 门控无法证明
+    "无实例风暴"（没有真实 yard 观察 ⇒ 没有 submit 尝试 ⇒ 没有准入阻断计数）。
+    门控真正通过需要真实 yard 观察（见 `test_replay_scene_b_gating` 与真实窗口运行）。
+    """
     _patch_source(monkeypatch)
     payload = c4.run_verification(
-        _namespace(tmp_path, scene="B", estop_after_s=0.6, shutdown_after_s=1.5)
+        _namespace(tmp_path, scene="B", estop_after_s=0.6, shutdown_after_s=2.5)
     )
 
-    assert payload["status"] == "ok"
     report = payload["shutdown_report"]
-    assert report["shutdown_completed"] is True
+    assert report["shutdown_completed"] is True  # 关闭本身成功
     assert report["monitor_exited"] is True
-    # E-STOP 与 Shutdown 并存：资源仍被完整释放，且哨兵文件由本工具清理
     assert report["locks_remaining"] == []
     assert payload["post_shutdown"]["scheduler"]["locks"] == {}
     events = [entry["event"] for entry in payload["timeline"]]
     assert "estop_sentinel_created" in events
+    assert not (tmp_path / "ESTOP").exists()  # 本次创建的哨兵已清理
+
+    scene_b = payload["scene_b"]
+    assert scene_b["estop_sentinel_exists"] is True
+    assert scene_b["admission_reason"] == "estop_active"
+    assert scene_b["checks"]  # 门控检查项齐全
+    assert scene_b["passed"] is False  # 无法证明"无风暴"
+    assert payload["status"] == "incomplete"  # 不虚报通过
+
+
+def _replay_available() -> bool:
+    """离线 replay 帧数据是否可用（不可用时跳过门控测试）。"""
+    try:
+        _source, _meta, status = obs._build_source(obs.load_config(), "replay")
+        return status == "ok"
+    except Exception:  # pragma: no cover - 环境差异
+        return False
+
+
+@pytest.mark.skipif(not _replay_available(), reason="replay 帧数据不可用")
+def test_replay_scene_b_gating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """真实 replay 帧（可触发 yard）⇒ Scene B 门控**逻辑通路**全部通过。
+
+    注：离线 replay 帧仅约 24 帧（>30 调度周期需真实窗口），因此这里把门控阈值降到 5，
+    只验证"E-STOP → 实例 FAILED → 准入阻断 → 关闭"的逻辑通路；**30 周期**要求由真实窗口
+    Scene B 运行（`--estop-hold-min-cycles 30`）满足。
+    """
+    monkeypatch.setattr(obs, "audit_action_imports", lambda path=None: [])
+    payload = c4.run_verification(
+        _namespace(
+            tmp_path,
+            scene="B",
+            mode="replay",
+            interval_ms=50,
+            estop_after_s=2.0,
+            shutdown_after_s=6.0,
+            post_observe_s=0.5,
+            estop_hold_min_cycles=1,
+        )
+    )
+
+    scene_b = payload["scene_b"]
+    assert payload["status"] == "ok", scene_b.get("checks")
+    assert scene_b["passed"] is True
+    assert scene_b["checks"]["estop_hold_cycles_ok"] is True
+    assert scene_b["checks"]["no_new_instances_during_estop"] is True
+    assert scene_b["checks"]["no_failure_storm"] is True
+    assert scene_b["checks"]["original_instance_failed"] is True
+    assert scene_b["checks"]["locks_released_after_estop"] is True
+    assert scene_b["checks"]["context_closed_after_estop"] is True
+    assert scene_b["checks"]["admission_blocked_seen"] is True
+    assert scene_b["checks"]["estop_still_active"] is True
+    assert scene_b["checks"]["no_action_intent"] is True
+    assert payload["shutdown_report"]["shutdown_completed"] is True
     assert not (tmp_path / "ESTOP").exists()
 
 

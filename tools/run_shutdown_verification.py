@@ -215,15 +215,31 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
     t0 = time.monotonic()
     samples: list[dict[str, Any]] = []
     estop_done = args.estop_after_s is None
+    estop_baseline: dict[str, Any] | None = None
+    estop_triggered_at_s: float | None = None
     shutdown_point = float(args.shutdown_after_s)
     stopped_early = ""
     while True:
         elapsed = time.monotonic() - t0
         samples.append(_sample(harness, t_s=elapsed))
         if not estop_done and elapsed >= float(args.estop_after_s):
+            # Phase 12.1-C4 Scene B：记录 E-STOP 触发瞬间的基线（用于"无实例风暴"判定）
+            estop_baseline = {
+                "ticks": harness.scheduler.stats.ticks,
+                "submits": harness.scheduler.stats.submits,
+                "failed": harness.scheduler.stats.failed,
+                "admission_blocked_scheduler": harness.scheduler.stats.admission_blocked,
+                "admission_blocked_bridge": harness.bridge.stats.admission_blocked,
+                "history": len(harness.scheduler.history),
+                "events": harness.bridge.stats.events,
+                "bridge_cycles": harness.bridge.stats.cycles,
+                "intent_count": int(getattr(harness.port, "intent_count", 0)),
+                "instances": _instance_rows(harness.scheduler),
+            }
             estop.create_sentinel("phase121c4-estop")
             estop_created_by_us = True
             estop_done = True
+            estop_triggered_at_s = elapsed
             stamp("estop_sentinel_created", path=str(estop.path), at_s=round(elapsed, 3))
         if elapsed >= shutdown_point:
             break
@@ -236,6 +252,52 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
     events_before_shutdown = harness.bridge.stats.events
     instances_before = len(harness.scheduler.instances)
 
+    # ---- Scene B：E-STOP 持续期门控与"无实例风暴"证据 ----------------------
+    scene_b: dict[str, Any] = {}
+    if args.scene == "B" and estop_baseline is not None:
+        scheduler = harness.scheduler
+        history_statuses = [item.status.value for item in scheduler.history]
+        scene_b = {
+            "estop_triggered_at_s": round(float(estop_triggered_at_s or 0.0), 3),
+            "estop_hold_s": round(
+                float(samples[-1]["t_s"]) - float(estop_triggered_at_s or 0.0), 3
+            ),
+            # 注意：准入阻断路径在 `submit` 被拒后提前返回、**跳过** `scheduler.tick()`
+            # （既有 C1 行为）⇒ `ticks` 在 E-STOP 持续期几乎不增长。
+            # "调度周期"以 Monitor 每轮 `on_cycle` 次数（`bridge.stats.cycles`）为可靠度量。
+            "ticks_since_estop": scheduler.stats.ticks - int(estop_baseline["ticks"]),
+            "monitor_cycles_since_estop": (
+                harness.bridge.stats.cycles - int(estop_baseline["bridge_cycles"])
+            ),
+            "submits_since_estop": scheduler.stats.submits - int(estop_baseline["submits"]),
+            "failed_since_estop": scheduler.stats.failed - int(estop_baseline["failed"]),
+            "admission_blocked_since_estop": (
+                scheduler.stats.admission_blocked
+                - int(estop_baseline["admission_blocked_scheduler"])
+            ),
+            "bridge_admission_blocked_since_estop": (
+                harness.bridge.stats.admission_blocked
+                - int(estop_baseline["admission_blocked_bridge"])
+            ),
+            "instances_at_estop": estop_baseline["instances"],
+            "instances_now": _instance_rows(scheduler),
+            "history_length": len(scheduler.history),
+            "history_statuses": history_statuses,
+            "locks": dict(scheduler.locks.to_dict()),
+            "closed_contexts": len(scheduler.closed_contexts),
+            "estop_sentinel_exists": estop.path.exists(),
+            "admission_reason": orchestrator.admission_reason(args.task),
+            "intent_count": int(getattr(harness.port, "intent_count", 0)),
+            "events_since_estop": harness.bridge.stats.events - int(estop_baseline["events"]),
+        }
+        stamp(
+            "estop_observation_window",
+            ticks_since_estop=scene_b["ticks_since_estop"],
+            submits_since_estop=scene_b["submits_since_estop"],
+            failed_since_estop=scene_b["failed_since_estop"],
+            admission_blocked_since_estop=scene_b["admission_blocked_since_estop"],
+        )
+
     # ---- 预定关闭点：由**诊断控制线程**（主线程）调用 shutdown ---------------
     stamp(
         "shutdown_requested",
@@ -244,6 +306,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         monitor_thread_alive=bool(thread is not None and thread.is_alive()),
     )
     report: ShutdownReport = orchestrator.shutdown(reason=args.reason)
+    events_at_join = harness.bridge.stats.events
     stamp("shutdown_returned", completed=report.shutdown_completed)
     monitor_thread_alive_after = bool(thread is not None and thread.is_alive())
     join_confirmed = (thread is None) or (not monitor_thread_alive_after)
@@ -324,8 +387,11 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             "stats": harness.bridge.stats.to_dict(),
         },
         "events": {
-            "before_shutdown": events_before_shutdown,
+            "at_shutdown_request": events_before_shutdown,
+            "at_monitor_join": events_at_join,
             "after_observation": events_after,
+            "in_flight_during_shutdown": events_at_join - events_before_shutdown,
+            "after_monitor_exited": events_after - events_at_join,
             "new_events_after_shutdown": events_after - events_before_shutdown,
         },
         "monitor": {
@@ -337,7 +403,33 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         "orchestrator_is_shutdown": orchestrator.is_shutdown,
     }
 
+    if args.scene == "B" and scene_b:
+        min_cycles = max(1, int(args.estop_hold_min_cycles))
+        checks = {
+            "estop_hold_cycles_ok": max(
+                int(scene_b["ticks_since_estop"]),
+                int(scene_b["monitor_cycles_since_estop"]),
+            )
+            >= min_cycles,
+            "no_new_instances_during_estop": int(scene_b["submits_since_estop"]) == 0,
+            "no_failure_storm": int(scene_b["failed_since_estop"]) <= 1,
+            "original_instance_failed": "failed" in scene_b["history_statuses"],
+            "locks_released_after_estop": scene_b["locks"] == {},
+            "context_closed_after_estop": int(scene_b["closed_contexts"]) >= 1,
+            "admission_blocked_seen": (
+                int(scene_b["admission_blocked_since_estop"]) >= min_cycles
+            ),
+            "estop_still_active": scene_b["admission_reason"] == "estop_active",
+            "estop_sentinel_present": bool(scene_b["estop_sentinel_exists"]),
+            "no_action_intent": int(scene_b["intent_count"]) == 0,
+        }
+        scene_b["checks"] = checks
+        scene_b["passed"] = all(checks.values())
+        stamp("scene_b_checks", passed=scene_b["passed"], **checks)
+
     status = "ok" if report.shutdown_completed else "incomplete"
+    if args.scene == "B" and not scene_b.get("passed", False):
+        status = "incomplete"
     if args.scene == "C" and not (
         scene_c.get("second_is_first") and scene_c.get("submit_blocked_after_shutdown")
     ):
@@ -382,6 +474,7 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         "timeline": timeline,
         "samples": samples,
         "shutdown_report": report.to_dict(),
+        "scene_b": scene_b,
         "scene_c": scene_c,
         "post_shutdown": post_shutdown,
         "safety": safety,
@@ -418,6 +511,19 @@ def _print_summary(payload: dict[str, Any], *, out: Path) -> None:
             print(
                 f"  errors={report.get('shutdown_errors')} failures={report.get('cancel_failures')}"
             )
+    scene_b = payload.get("scene_b", {})
+    if scene_b:
+        print(
+            "  estop: "
+            f"hold={scene_b.get('estop_hold_s')}s "
+            f"cycles={scene_b.get('monitor_cycles_since_estop')}"
+            f"(ticks={scene_b.get('ticks_since_estop')}) "
+            f"submits_since={scene_b.get('submits_since_estop')} "
+            f"failed_since={scene_b.get('failed_since_estop')} "
+            f"blocked_since={scene_b.get('admission_blocked_since_estop')} "
+            f"locks={scene_b.get('locks')} contexts={scene_b.get('closed_contexts')} "
+            f"passed={scene_b.get('passed')}"
+        )
     post = payload.get("post_shutdown", {})
     if post:
         print(
@@ -458,6 +564,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-cycles", type=int, default=None)
     parser.add_argument("--shutdown-after-s", type=float, default=45.0, help="预定关闭点（秒）")
     parser.add_argument("--estop-after-s", type=float, default=None, help="该秒数创建 E-STOP 哨兵")
+    parser.add_argument(
+        "--estop-hold-min-cycles",
+        type=int,
+        default=30,
+        help="Scene B：E-STOP 后至少持续的调度周期数（门控阈值）",
+    )
     parser.add_argument("--sample-interval-s", type=float, default=1.0)
     parser.add_argument("--post-observe-s", type=float, default=3.0, help="关闭后观察窗口（秒）")
     parser.add_argument("--join-timeout-s", type=float, default=10.0)
