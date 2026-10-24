@@ -104,6 +104,44 @@ def _sample(harness: Any, *, t_s: float) -> dict[str, Any]:
     }
 
 
+def _snapshot_runtime(
+    harness: Any,
+    orchestrator: Any,
+    control: Any,
+    thread: Any,
+    monitor_thread_name: str | None,
+) -> dict[str, Any]:
+    """采集权威运行状态快照（Phase 12.1-C4 Scene C 的 C5 双快照用）。"""
+    return {
+        "at": _now(),
+        "scheduler": {
+            "instances": len(harness.scheduler.instances),
+            "queue": len(harness.scheduler.queue),
+            "paused": len(harness.scheduler.paused),
+            "history": _history_rows(harness.scheduler),
+            "locks": dict(harness.scheduler.locks.to_dict()),
+            "game_window_free": harness.scheduler.locks.is_free("GAME_WINDOW"),
+            "closed_contexts": len(harness.scheduler.closed_contexts),
+            "stats": harness.scheduler.stats.to_dict(),
+        },
+        "bridge": {
+            "active_task_id": harness.bridge.active_task_id,
+            "records": {
+                task_id: record.status.value
+                for task_id, record in harness.bridge.records.items()
+            },
+            "stats": harness.bridge.stats.to_dict(),
+        },
+        "events": {"value": harness.bridge.stats.events},
+        "monitor": {
+            "thread": monitor_thread_name,
+            "thread_alive": bool(thread is not None and thread.is_alive()),
+        },
+        "control": control.to_dict(),
+        "orchestrator_is_shutdown": orchestrator.is_shutdown,
+    }
+
+
 def run_verification(args: argparse.Namespace) -> dict[str, Any]:
     """执行一次 C4 关闭验证并返回审计 payload（不写文件、不打印）。"""
     timeline: list[dict[str, Any]] = []
@@ -327,12 +365,47 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         bridge_active_task_id=post_active_task_id,
     )
 
+    # ---- C2：第一次 Shutdown 的验收检查 ------------------------------------
+    c2_checks = {
+        "latch_first": report.admission_latched,
+        "monitor_stop_requested": report.monitor_stop_requested,
+        "monitor_exited": report.monitor_exited,
+        "running_instance_cancelled": report.running_instances_cancelled >= 1,
+        "locks_released": not report.locks_remaining,
+        "context_closed": report.context_closed_count >= 1,
+        "no_active_instances": len(harness.scheduler.instances) == 0,
+        "bridge_active_none": harness.bridge.active_task_id is None,
+        "report_completed": report.shutdown_completed,
+    }
+    stamp("c2_checks", passed=all(c2_checks.values()), **c2_checks)
+
+    # ---- C5 基线：Monitor join 成功后**立即**采集权威快照 -------------------
+    immediate = _snapshot_runtime(
+        harness, orchestrator, control, thread, monitor_thread_name
+    )
+
     # ---- Scene C：幂等 / latch 后不可重新开放 --------------------------------
     scene_c: dict[str, Any] = {}
     if args.scene == "C":
+        # C3：重复 Shutdown（记录每次调用后的状态增量，证明无重复副作用）
+        def _idempotency_probe() -> dict[str, Any]:
+            return {
+                "events": harness.bridge.stats.events,
+                "submits": harness.scheduler.stats.submits,
+                "history": len(harness.scheduler.history),
+                "closed_contexts": len(harness.scheduler.closed_contexts),
+                "locks": dict(harness.scheduler.locks.to_dict()),
+                "instances": len(harness.scheduler.instances),
+                "thread_alive": bool(thread is not None and thread.is_alive()),
+            }
+
+        before_repeat = _idempotency_probe()
         second = orchestrator.shutdown(reason=args.reason)
+        after_second = _idempotency_probe()
         third = orchestrator.shutdown(reason=args.reason)
-        history_after_first = len(harness.scheduler.history)
+        after_third = _idempotency_probe()
+
+        # C4：Shutdown latch 之后，Enable 不能重新开放运行会话
         enable_changed = control.enable(args.task)
         bridge_enable_changed = harness.bridge.enable_task(args.task)
         submit_blocked = False
@@ -344,48 +417,113 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             submit_error = f"{exc.reason}"
         except Exception as exc:  # noqa: BLE001 - 其它异常如实记录
             submit_error = repr(exc)
-        scene_c = {
-            "second_is_first": second is report,
-            "third_is_first": third is report,
-            "repeated_calls": report.repeated_calls,
-            "history_length": history_after_first,
-            "enable_returned": enable_changed,
-            "bridge_enable_returned": bridge_enable_changed,
-            "submit_blocked_after_shutdown": submit_blocked,
-            "submit_blocked_reason": submit_error,
-            "admission_reason": orchestrator.admission_reason(args.task),
-            "is_shutdown": orchestrator.is_shutdown,
+        after_probe = _idempotency_probe()
+        retired = harness.scheduler.instance(args.task)
+
+        c3_checks = {
+            "same_report_object": second is report and third is report,
+            "no_new_events": (
+                after_second["events"] == before_repeat["events"]
+                and after_third["events"] == before_repeat["events"]
+            ),
+            "no_new_submits": (
+                after_second["submits"] == before_repeat["submits"]
+                and after_third["submits"] == before_repeat["submits"]
+            ),
+            "no_new_history": (
+                after_second["history"] == before_repeat["history"]
+                and after_third["history"] == before_repeat["history"]
+            ),
+            "no_new_closed_contexts": (
+                after_second["closed_contexts"] == before_repeat["closed_contexts"]
+                and after_third["closed_contexts"] == before_repeat["closed_contexts"]
+            ),
+            "no_lock_reacquired": (
+                before_repeat["locks"] == {}
+                and after_second["locks"] == {}
+                and after_third["locks"] == {}
+            ),
+            "monitor_not_restarted": after_third["thread_alive"] is False,
+            "first_report_preserved": orchestrator.report is report,
         }
-        stamp("scene_c_idempotency_checked", **scene_c)
+        c4_checks = {
+            "control_enable_returned_false": enable_changed is False,
+            "bridge_enable_returned_false": bridge_enable_changed is False,
+            "admission_reason_is_shutdown": orchestrator.admission_reason(args.task)
+            == "shutdown_active",
+            "submit_rejected": submit_blocked,
+            "submit_rejected_reason": submit_error == "shutdown_active",
+            "no_new_instance_after_enable": after_probe["instances"] == 0,
+            "no_new_submit_after_enable": after_probe["submits"] == before_repeat["submits"],
+            "old_instance_not_revived": (
+                retired is not None and retired.status.value == "cancelled"
+            ),
+            "locks_still_free": after_probe["locks"] == {},
+        }
+        scene_c = {
+            "c2_checks": c2_checks,
+            "c2_passed": all(c2_checks.values()),
+            "c3_checks": c3_checks,
+            "c3_passed": all(c3_checks.values()),
+            "c4_checks": c4_checks,
+            "c4_passed": all(c4_checks.values()),
+            "repeated_calls": report.repeated_calls,
+            "probes": {
+                "before_repeat": before_repeat,
+                "after_second": after_second,
+                "after_third": after_third,
+                "after_enable_submit_probe": after_probe,
+            },
+            "retired_instance": {
+                "instance_id": retired.instance_id if retired is not None else "",
+                "status": retired.status.value if retired is not None else "",
+            },
+        }
+        stamp(
+            "scene_c_checks",
+            c2_passed=scene_c["c2_passed"],
+            c3_passed=scene_c["c3_passed"],
+            c4_passed=scene_c["c4_passed"],
+            repeated_calls=scene_c["repeated_calls"],
+        )
 
     # ---- 关闭后观察窗口：确认无新事件 / 新实例 -------------------------------
     time.sleep(max(0.0, float(args.post_observe_s)))
+    after = _snapshot_runtime(
+        harness, orchestrator, control, thread, monitor_thread_name
+    )
     events_after = harness.bridge.stats.events
+    delta = {
+        "events": after["events"]["value"] - immediate["events"]["value"],
+        "submits": after["scheduler"]["stats"]["submits"]
+        - immediate["scheduler"]["stats"]["submits"],
+        "instances": after["scheduler"]["instances"] - immediate["scheduler"]["instances"],
+        "history": len(after["scheduler"]["history"])
+        - len(immediate["scheduler"]["history"]),
+        "closed_contexts": after["scheduler"]["closed_contexts"]
+        - immediate["scheduler"]["closed_contexts"],
+    }
+    c5_checks = {
+        "no_new_events_after_monitor_exit": delta["events"] == 0,
+        "no_new_submits": delta["submits"] == 0,
+        "no_instances": after["scheduler"]["instances"] == 0,
+        "no_new_history": delta["history"] == 0,
+        "locks_free": after["scheduler"]["locks"] == {},
+        "bridge_active_none": after["bridge"]["active_task_id"] is None,
+        "monitor_thread_stopped": after["monitor"]["thread_alive"] is False,
+        "closed_contexts_unchanged": delta["closed_contexts"] == 0,
+    }
     stamp(
         "post_shutdown_observation_completed",
         waited_s=float(args.post_observe_s),
         new_events=events_after - events_before_shutdown,
         instances=len(harness.scheduler.instances),
+        c5_passed=all(c5_checks.values()),
     )
 
     post_shutdown = {
-        "scheduler": {
-            "instances": len(harness.scheduler.instances),
-            "queue": len(harness.scheduler.queue),
-            "paused": len(harness.scheduler.paused),
-            "history": _history_rows(harness.scheduler),
-            "locks": dict(harness.scheduler.locks.to_dict()),
-            "game_window_free": harness.scheduler.locks.is_free("GAME_WINDOW"),
-            "closed_contexts": len(harness.scheduler.closed_contexts),
-            "stats": harness.scheduler.stats.to_dict(),
-        },
-        "bridge": {
-            "active_task_id": harness.bridge.active_task_id,
-            "records": {
-                task_id: record.status.value for task_id, record in harness.bridge.records.items()
-            },
-            "stats": harness.bridge.stats.to_dict(),
-        },
+        "scheduler": after["scheduler"],
+        "bridge": after["bridge"],
         "events": {
             "at_shutdown_request": events_before_shutdown,
             "at_monitor_join": events_at_join,
@@ -394,13 +532,13 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
             "after_monitor_exited": events_after - events_at_join,
             "new_events_after_shutdown": events_after - events_before_shutdown,
         },
-        "monitor": {
-            "thread": monitor_thread_name,
-            "thread_alive": monitor_thread_alive_after,
-            "join_confirmed": join_confirmed,
-        },
-        "control": control.to_dict(),
-        "orchestrator_is_shutdown": orchestrator.is_shutdown,
+        "monitor": {**after["monitor"], "join_confirmed": join_confirmed},
+        "control": after["control"],
+        "orchestrator_is_shutdown": after["orchestrator_is_shutdown"],
+        "immediate": immediate,
+        "delta": delta,
+        "c5_checks": c5_checks,
+        "c5_passed": all(c5_checks.values()),
     }
 
     if args.scene == "B" and scene_b:
@@ -431,7 +569,10 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
     if args.scene == "B" and not scene_b.get("passed", False):
         status = "incomplete"
     if args.scene == "C" and not (
-        scene_c.get("second_is_first") and scene_c.get("submit_blocked_after_shutdown")
+        scene_c.get("c2_passed")
+        and scene_c.get("c3_passed")
+        and scene_c.get("c4_passed")
+        and post_shutdown.get("c5_passed")
     ):
         status = "incomplete"
 
@@ -450,6 +591,19 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         estop.clear_sentinel()
         sentinel_cleaned = True
     stamp("cleanup_done", sentinel_cleaned=sentinel_cleaned, leftover_cleared=leftover_cleared)
+
+    # ---- C1：真实稳定庭院触发 RUNNING 的时刻 -------------------------------
+    first_running_sample = next(
+        (
+            item
+            for item in samples
+            if any(instance["status"] == "running" for instance in item["instances"])
+        ),
+        None,
+    )
+    first_running_at_s = (
+        float(first_running_sample["t_s"]) if first_running_sample is not None else None
+    )
 
     return {
         "phase": PHASE,
@@ -474,6 +628,8 @@ def run_verification(args: argparse.Namespace) -> dict[str, Any]:
         "timeline": timeline,
         "samples": samples,
         "shutdown_report": report.to_dict(),
+        "first_running_at_s": first_running_at_s,
+        "c2_checks": c2_checks,
         "scene_b": scene_b,
         "scene_c": scene_c,
         "post_shutdown": post_shutdown,
@@ -523,6 +679,16 @@ def _print_summary(payload: dict[str, Any], *, out: Path) -> None:
             f"blocked_since={scene_b.get('admission_blocked_since_estop')} "
             f"locks={scene_b.get('locks')} contexts={scene_b.get('closed_contexts')} "
             f"passed={scene_b.get('passed')}"
+        )
+    scene_c = payload.get("scene_c", {})
+    if scene_c:
+        print(
+            "  scene_c: "
+            f"c2={scene_c.get('c2_passed')} c3={scene_c.get('c3_passed')} "
+            f"c4={scene_c.get('c4_passed')} "
+            f"c5={payload.get('post_shutdown', {}).get('c5_passed')} "
+            f"repeated_calls={scene_c.get('repeated_calls')} "
+            f"retired={scene_c.get('retired_instance')}"
         )
     post = payload.get("post_shutdown", {})
     if post:

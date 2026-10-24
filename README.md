@@ -2468,6 +2468,16 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   E-STOP **不被 reset**）→ 关闭后 30 s：`instances=0 / locks={} / active_task_id=None`，
   事件分段 **在途 callback 1 / Monitor 确认退出后 0**。临时哨兵已清理，生产 `logs/ESTOP` 未触碰。
   详见 `docs/PHASE12_1C4B_ESTOP_SHUTDOWN_REAL_RUNTIME_REPORT.md`。
+  **Scene C（真实窗口，幂等 / 终局锁存）已独立验收 PASS**：真实庭院 **2.0 s** 触发
+  `obs_yard_watch#1 RUNNING`（持 `GAME_WINDOW`）→ 60 s 观测（`submits=1`、`events=118`、`intent=0`）→
+  第一次 `shutdown()`（**C2 9/9**：latch → stop → **joined** → `cancelled=1 running` →
+  `locks_released=1 / remaining=[]` → `contexts_closed=1` → `completed=True`）→ **重复 shutdown ×2**
+  （**C3 8/8**：同一报告对象；探针 `events/submits/history/contexts/locks/instances` **完全不变**；
+  Monitor 未重启）→ **Enable 阻断**（**C4 9/9**：`enable` 返回 `False`、`admission_reason=shutdown_active`、
+  直接 `submit` 被拒、旧实例仍 `cancelled`、锁未重取）→ 关闭后 30 s（**C5 8/8**：Δ `events/submits/
+  instances/history/contexts` **全 0**；事件分段 **在途 1 / Monitor 退出后 0**）。
+  临时哨兵未创建、生产 `logs/ESTOP` 未触碰。详见
+  `docs/PHASE12_1C4C_SCENE_C_IDEMPOTENCY_REAL_RUNTIME_REPORT.md`。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

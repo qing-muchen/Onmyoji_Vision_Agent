@@ -67,6 +67,15 @@ def _namespace(tmp_path: Path, **overrides) -> argparse.Namespace:
     return argparse.Namespace(**values)
 
 
+def _replay_available() -> bool:
+    """离线 replay 帧数据是否可用（不可用时跳过 replay 门控测试）。"""
+    try:
+        _source, _meta, status = obs._build_source(obs.load_config(), "replay")
+        return status == "ok"
+    except Exception:  # pragma: no cover - 环境差异
+        return False
+
+
 def test_offline_shutdown_closes_runtime_and_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -114,21 +123,53 @@ def test_offline_shutdown_closes_runtime_and_reports(
     assert events.index("shutdown_returned") <= events.index("monitor_join_confirmed")
 
 
-def test_offline_scene_c_is_idempotent_and_cannot_reopen(
+def test_offline_scene_c_structure_and_truthful_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Scene C 的**离线结构**验证（fake 帧不触发任务 ⇒ 无 RUNNING 实例可取消）。
+
+    C3（幂等）与 C4（Enable 阻断）不依赖实例，必须通过；C2 的
+    `running_instance_cancelled` 因无实例而不成立 ⇒ 工具必须**如实**返回 `incomplete`。
+    真实 yard 观察下的完整通过见 `test_replay_scene_c_passes` 与真实窗口运行。
+    """
     _patch_source(monkeypatch)
     payload = c4.run_verification(_namespace(tmp_path, scene="C", shutdown_after_s=1.2))
 
-    assert payload["status"] == "ok"
     scene_c = payload["scene_c"]
-    assert scene_c["second_is_first"] is True
-    assert scene_c["third_is_first"] is True
-    assert scene_c["repeated_calls"] >= 2
-    assert scene_c["submit_blocked_after_shutdown"] is True
-    assert scene_c["submit_blocked_reason"] == "shutdown_active"
-    assert scene_c["is_shutdown"] is True
-    assert payload["post_shutdown"]["scheduler"]["instances"] == 0
+    assert scene_c["c3_passed"] is True
+    assert scene_c["c4_checks"]["control_enable_returned_false"] is True
+    assert scene_c["c4_checks"]["submit_rejected"] is True
+    assert scene_c["c4_checks"]["submit_rejected_reason"] is True
+    assert scene_c["c2_passed"] is False  # 无 RUNNING 实例可取消
+    assert scene_c["retired_instance"]["instance_id"] == ""
+    assert payload["post_shutdown"]["c5_passed"] is True
+    assert payload["status"] == "incomplete"  # 不虚报通过
+
+
+@pytest.mark.skipif(not _replay_available(), reason="replay 帧数据不可用")
+def test_replay_scene_c_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """真实 replay 帧 ⇒ Scene C 的 C2/C3/C4/C5 全部通过、状态 ok。"""
+    monkeypatch.setattr(obs, "audit_action_imports", lambda path=None: [])
+    payload = c4.run_verification(
+        _namespace(
+            tmp_path,
+            scene="C",
+            mode="replay",
+            interval_ms=50,
+            shutdown_after_s=3.0,
+            post_observe_s=0.5,
+        )
+    )
+
+    assert payload["status"] == "ok", payload.get("scene_c")
+    scene_c = payload["scene_c"]
+    assert scene_c["c2_passed"] is True
+    assert scene_c["c3_passed"] is True
+    assert scene_c["c4_passed"] is True
+    assert payload["post_shutdown"]["c5_passed"] is True
+    assert scene_c["retired_instance"]["status"] == "cancelled"
+    assert payload["shutdown_report"]["shutdown_completed"] is True
+    assert payload["first_running_at_s"] is not None
 
 
 def test_offline_scene_b_structure_and_truthful_incomplete(
@@ -160,15 +201,6 @@ def test_offline_scene_b_structure_and_truthful_incomplete(
     assert scene_b["checks"]  # 门控检查项齐全
     assert scene_b["passed"] is False  # 无法证明"无风暴"
     assert payload["status"] == "incomplete"  # 不虚报通过
-
-
-def _replay_available() -> bool:
-    """离线 replay 帧数据是否可用（不可用时跳过门控测试）。"""
-    try:
-        _source, _meta, status = obs._build_source(obs.load_config(), "replay")
-        return status == "ok"
-    except Exception:  # pragma: no cover - 环境差异
-        return False
 
 
 @pytest.mark.skipif(not _replay_available(), reason="replay 帧数据不可用")
