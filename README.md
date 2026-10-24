@@ -2478,6 +2478,16 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   instances/history/contexts` **全 0**；事件分段 **在途 1 / Monitor 退出后 0**）。
   临时哨兵未创建、生产 `logs/ESTOP` 未触碰。详见
   `docs/PHASE12_1C4C_SCENE_C_IDEMPOTENCY_REAL_RUNTIME_REPORT.md`。
+- Phase 12.1-F（**已完成：Final Acceptance & Architecture Freeze**，**仅文档与索引、零代码改动**）：
+  对 Phase 12.1 全阶段（A / A1 / B / C0 / C1 / C2 / C3 / C4-A / C4-B / C4-C）做正式验收并冻结架构契约。
+  **判定：PASS（范围限定：observation-only Runtime / Task 基础架构）**，可作为后续开发稳定基线。
+  `CONDITIONAL`：真实动作执行（dry-run 已验证、真实输入未启用）、PAUSED 恢复新鲜度（R-1）、
+  Monitor 线程所有权（R-2）、生产入口装配（R-3）；`NOT VERIFIED`：跨设备 / 跨分辨率、长期 RSS 趋势；
+  `NOT IMPLEMENTED`：生产 `src/main.py` 装配、真实游戏任务自动化。冻结基线 `9ba56a1`（= 远程 master），
+  全量 **2067 passed, 1 skipped**（本轮实测），Phase 12.1 专项用例 **146**。遗留风险 R-1~R-6 与
+  「修改冻结架构必须满足的 8 条回归条件」见冻结文档。详见
+  `docs/PHASE12_1F_FINAL_ACCEPTANCE_REPORT.md` 与
+  `docs/PHASE12_1F_ARCHITECTURE_FREEZE_AND_RISK_REGISTER.md`。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；
