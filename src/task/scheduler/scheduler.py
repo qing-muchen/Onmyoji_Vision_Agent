@@ -836,7 +836,9 @@ class TaskScheduler:
             if not self._resources_free(instance):
                 tick.lock_conflicts += 1
                 break
-            if self._resume_instance(instance, reason="resumed after preemption"):
+            if self._resume_instance(
+                instance, reason="resumed after preemption", check_admission=False
+            ):
                 tick.resumed += 1
 
     def _resources_free(self, instance: TaskInstance) -> bool:
@@ -915,10 +917,47 @@ class TaskScheduler:
         logger.info("实例已暂停: %s（%s）", instance.instance_id, reason)
         return True
 
-    def _resume_instance(self, instance: TaskInstance, *, reason: str) -> bool:
-        """恢复被暂停的实例（重新取得资源后继续）。"""
+    def _resume_instance(
+        self, instance: TaskInstance, *, reason: str, check_admission: bool = True
+    ) -> bool:
+        """恢复被暂停的实例（重新取得资源后继续）。
+
+        Phase 12.2-A1（缺陷 DEF-12.2-A0-01）：手动 :meth:`resume` 原先**绕过**
+        准入 guard —— 在 Disable / Shutdown latch / E-STOP 生效时仍能把 ``PAUSED``
+        实例恢复为 ``RUNNING`` 并重新持有 ``GAME_WINDOW``。现在复用既有
+        :meth:`admission_reason`（与 :meth:`submit` 和 ``_schedule`` 的自动恢复
+        **同一判定**），并在**获取资源锁之前**检查，因此：
+
+        * 拒绝时返回 ``False``、实例**保持 PAUSED**、不取锁、不调 ``engine.resume()``、
+          不改实例状态、不写终态历史、不动 Workflow / ``DecisionContext``；
+        * ``stats.admission_blocked`` 递增，``stats.last_reason`` 记录结构化原因；
+        * **不算**普通运行错误（``stats.errors`` 不增；guard 自身异常仍由
+          :meth:`admission_reason` 的 fail-closed 语义计入错误并返回 ``"guard_error"``）；
+        * 日志按 ``(task_id, reason)`` 去重（既有 ``_log_admission_blocked``）。
+
+        Args:
+            instance: 待恢复实例（必须处于 ``PAUSED``）。
+            reason: 恢复原因（写入统计与日志）。
+            check_admission: 是否在本方法内做准入检查。默认 ``True``（手动
+                :meth:`resume` 走此分支）；``_schedule`` 的自动恢复路径**已经**在
+                调用前检查过准入，故传 ``False`` 以避免重复调用 guard（尤其是
+                guard 抛异常时会重复累计 ``stats.errors``）。
+
+        Returns:
+            ``True`` 表示确实恢复了。
+        """
         if instance.status is not TaskInstanceStatus.PAUSED:
             return False
+        if check_admission:
+            blocked = self.admission_reason(instance.task_id)
+            if blocked is not None:
+                # 拒绝：保持 PAUSED；**不取锁**（避免被拒绝的恢复短暂占用资源）
+                self._stats.admission_blocked += 1
+                self._stats.last_instance_id = instance.instance_id
+                self._stats.last_reason = (
+                    f"admission blocked: {instance.task_id}（reason={blocked}）"
+                )
+                return False
         if not self._locks.acquire_all(instance.resources, instance.instance_id):
             self._stats.lock_conflicts += 1
             self._stats.last_reason = f"resource busy: {list(instance.resources)}"

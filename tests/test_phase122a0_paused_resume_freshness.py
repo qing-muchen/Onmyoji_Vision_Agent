@@ -19,7 +19,12 @@ from pathlib import Path
 
 import pytest
 
-from src.task.control import ADMISSION_ESTOP_ACTIVE, ADMISSION_SHUTDOWN_ACTIVE, TaskControlState
+from src.task.control import (
+    ADMISSION_ESTOP_ACTIVE,
+    ADMISSION_SHUTDOWN_ACTIVE,
+    ADMISSION_TASK_DISABLED,
+    TaskControlState,
+)
 from src.task.engine import TaskEngine
 from src.task.estop import EStop
 from src.task.models import TaskAdmissionDenied
@@ -199,12 +204,13 @@ def test_c_paused_instance_does_not_replay_previous_request() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_e_manual_resume_bypasses_disable() -> None:
-    """**缺陷复现**：`control.disable()` 之后手动 `scheduler.resume()` 仍然成功。
+def test_e_manual_resume_blocked_by_disable() -> None:
+    """**修复验证（DEF-12.2-A0-01）**：`control.disable()` 后手动 `resume()` **被拒绝**。
 
-    对照：`_schedule()` 的自动恢复路径会检查 `admission_reason` 并跳过。
+    Phase 12.2-A1：``_resume_instance`` 复用 ``admission_reason()``（与自动路径同一判定），
+    并在**获取资源锁之前**检查 ⇒ 拒绝时不取锁、不调 ``engine.resume()``、保持 ``PAUSED``。
     """
-    scheduler, control, _port, _clock = make_stack()
+    scheduler, control, port, _clock = make_stack()
     instance = scheduler.submit(TASK_ID)
     scheduler.tick(Stable())
     scheduler.pause(instance.instance_id, reason="e")
@@ -214,14 +220,33 @@ def test_e_manual_resume_bypasses_disable() -> None:
     scheduler.tick(Stable())
     assert instance.status is TaskInstanceStatus.PAUSED
 
-    # 手动恢复路径：**没有**准入检查 ⇒ 成功
-    resumed = scheduler.resume(instance.instance_id, reason="e-manual")
-    assert resumed is True
-    assert instance.status is TaskInstanceStatus.RUNNING
-    assert scheduler.locks.owner("GAME_WINDOW") == instance.instance_id
-    # 且实例继续按工作流推进（Disable 语义被绕过）
-    scheduler.tick(Stable())
-    assert instance.status is TaskInstanceStatus.RUNNING
+    baseline_requests = port.count
+    baseline_blocked = scheduler.stats.admission_blocked
+    baseline_errors = scheduler.stats.errors
+    resumes: list[str] = []
+    original_resume = instance.engine.resume
+
+    def spy_resume(*args: object, **kwargs: object) -> object:
+        resumes.append(str(kwargs.get("reason", "")))
+        return original_resume(*args, **kwargs)  # type: ignore[operator]
+
+    instance.engine.resume = spy_resume  # type: ignore[method-assign]
+    try:
+        # 手动恢复路径：**同样**被准入阻断
+        resumed = scheduler.resume(instance.instance_id, reason="e-manual")
+    finally:
+        instance.engine.resume = original_resume  # type: ignore[method-assign]
+
+    assert resumed is False, "Disable 生效时手动 resume 必须返回 False"
+    assert instance.status is TaskInstanceStatus.PAUSED, "实例必须保持 PAUSED"
+    assert scheduler.locks.to_dict() == {}, "被拒绝的恢复不得占用资源"
+    assert scheduler.locks.owner("GAME_WINDOW") is None
+    assert resumes == [], "不得调用 engine.resume()"
+    assert port.count == baseline_requests, "不得产生新的 ActionRequest"
+    assert scheduler.stats.admission_blocked == baseline_blocked + 1, "admission_blocked 必须 +1"
+    assert scheduler.stats.errors == baseline_errors, "准入拒绝不得计入 errors"
+    assert "task_disabled" in scheduler.stats.last_reason
+    assert control.admission_reason(TASK_ID) == ADMISSION_TASK_DISABLED
 
 
 def test_e2_enable_does_not_auto_resume_manual_pause() -> None:
@@ -327,9 +352,9 @@ def test_g2_long_pause_then_new_observation_may_retry() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_h_resume_bypasses_shutdown_latch() -> None:
-    """**缺陷复现**：Shutdown latch 已置位时手动 `resume()` 仍成功（绕过准入）。"""
-    scheduler, control, _port, _clock = make_stack()
+def test_h_manual_resume_blocked_by_shutdown_latch() -> None:
+    """**修复验证（DEF-12.2-A0-01）**：Shutdown latch 置位后手动 `resume()` **被拒绝**。"""
+    scheduler, control, port, _clock = make_stack()
     instance = scheduler.submit(TASK_ID)
     scheduler.tick(Stable())
     scheduler.pause(instance.instance_id, reason="h")
@@ -339,14 +364,37 @@ def test_h_resume_bypasses_shutdown_latch() -> None:
     scheduler.tick(Stable())
     assert instance.status is TaskInstanceStatus.PAUSED
 
-    # 手动路径：绕过
-    assert scheduler.resume(instance.instance_id, reason="h-manual") is True
-    assert instance.status is TaskInstanceStatus.RUNNING
+    # 手动路径：**同样**被拒绝（Phase 12.2-A1 修复）
+    baseline_requests = port.count
+    baseline_blocked = scheduler.stats.admission_blocked
+    baseline_errors = scheduler.stats.errors
+    instances_before = len(scheduler.instances)
+
+    assert scheduler.resume(instance.instance_id, reason="h-manual") is False
+    assert instance.status is TaskInstanceStatus.PAUSED
+    assert scheduler.locks.to_dict() == {}, "不得重新获取资源锁"
+    assert port.count == baseline_requests, "不得产生新的 ActionRequest"
+    assert len(scheduler.instances) == instances_before, "不得创建新实例"
+    assert scheduler.stats.admission_blocked == baseline_blocked + 1
+    assert scheduler.stats.errors == baseline_errors
+    assert scheduler.history == (), "不得写入终态历史"
+    assert "shutdown_active" in scheduler.stats.last_reason
+    # 拒绝原因与自动路径一致
     assert control.admission_reason(TASK_ID) == ADMISSION_SHUTDOWN_ACTIVE
 
+    # Enable 不能解除 Shutdown latch
+    control.enable(TASK_ID)
+    assert control.admission_reason(TASK_ID) == ADMISSION_SHUTDOWN_ACTIVE
+    assert scheduler.resume(instance.instance_id, reason="h-manual-2") is False
+    assert instance.status is TaskInstanceStatus.PAUSED
 
-def test_h2_resume_under_estop_is_stopped_by_engine_check(tmp_path: Path) -> None:
-    """E-STOP 下手动 resume 会短暂成功，但**引擎检查点**在下一轮终止实例（兜底）。"""
+
+def test_h2_manual_resume_blocked_by_estop_at_scheduler_entry(tmp_path: Path) -> None:
+    """**修复验证（DEF-12.2-A0-01）**：E-STOP 下手动 `resume()` 在 Scheduler 入口即被拒绝。
+
+    修复前：``resume`` 返回 ``True``、实例短暂进入 ``RUNNING``，依赖下一轮
+    ``TaskEngine._check_estop()`` 才 ``FAILED``。修复后：**不再**进入 ``RUNNING``。
+    """
     estop = EStop(path=tmp_path / "ESTOP", now=lambda: NOW)
     scheduler, control, port, _clock = make_stack(estop=estop)
     instance = scheduler.submit(TASK_ID)
@@ -356,20 +404,234 @@ def test_h2_resume_under_estop_is_stopped_by_engine_check(tmp_path: Path) -> Non
 
     estop.trigger("a0")
     assert control.admission_reason(TASK_ID) == ADMISSION_ESTOP_ACTIVE
-    # 手动恢复本身不过准入（返回 True）
-    assert scheduler.resume(instance.instance_id, reason="h2-manual") is True
-    assert instance.status is TaskInstanceStatus.RUNNING
+    baseline_blocked = scheduler.stats.admission_blocked
+    baseline_errors = scheduler.stats.errors
 
-    # 下一轮引擎检查点 ⇒ FAILED，且**不产生新动作**
-    scheduler.tick(Stable())
-    assert instance.status is TaskInstanceStatus.FAILED
-    assert port.count == baseline
+    # Scheduler 在恢复入口拒绝（**不依赖**引擎下一轮检查）
+    assert scheduler.resume(instance.instance_id, reason="h2-manual") is False
+    assert instance.status is TaskInstanceStatus.PAUSED, "不得出现短暂 RUNNING"
+    assert scheduler.locks.to_dict() == {}
+    assert port.count == baseline, "不得产生新的 ActionRequest"
+    assert scheduler.stats.admission_blocked == baseline_blocked + 1
+    assert scheduler.stats.errors == baseline_errors
+    assert "estop_active" in scheduler.stats.last_reason
+    # E-STOP 未被清除 / 重置 / 绕过
+    assert estop.check() is True
+    assert control.admission_reason(TASK_ID) == ADMISSION_ESTOP_ACTIVE
 
 
 def test_h3_submit_still_rejected_after_shutdown_latch() -> None:
-    """对照：同一 latch 下 `submit()` 仍被拒绝（说明仅 resume 路径缺检查）。"""
+    """对照：同一 latch 下 `submit()` 仍被拒绝（与 resume 拒绝语义一致）。"""
     scheduler, control, _port, _clock = make_stack()
     control.begin_shutdown(reason="a0")
     with pytest.raises(TaskAdmissionDenied):
         scheduler.submit(TASK_ID)
     assert scheduler.instances == ()
+
+
+# ---------------------------------------------------------------------------
+# I. Phase 12.2-A1：手动 Resume 准入回归矩阵
+# ---------------------------------------------------------------------------
+
+
+def _paused_instance(scheduler, *, reason: str = "i"):  # noqa: ANN001, ANN202
+    """提交 → 运行 → 暂停，返回处于 PAUSED 的实例。"""
+    instance = scheduler.submit(TASK_ID)
+    scheduler.tick(Stable())
+    assert scheduler.pause(instance.instance_id, reason=reason) is True
+    assert instance.status is TaskInstanceStatus.PAUSED
+    return instance
+
+
+def test_i1_all_three_rejection_reasons_block_manual_resume(tmp_path: Path) -> None:
+    """[I1] Disable / Shutdown / E-STOP 三种拒绝原因都能阻止手动 Resume。"""
+    # Disable
+    scheduler, control, _port, _clock = make_stack()
+    instance = _paused_instance(scheduler)
+    control.disable(TASK_ID)
+    assert scheduler.resume(instance.instance_id) is False
+    assert instance.status is TaskInstanceStatus.PAUSED
+    assert "task_disabled" in scheduler.stats.last_reason
+
+    # Shutdown latch
+    scheduler2, control2, _port2, _clock2 = make_stack()
+    instance2 = _paused_instance(scheduler2)
+    control2.begin_shutdown(reason="i1")
+    assert scheduler2.resume(instance2.instance_id) is False
+    assert instance2.status is TaskInstanceStatus.PAUSED
+    assert "shutdown_active" in scheduler2.stats.last_reason
+
+    # E-STOP
+    estop = EStop(path=tmp_path / "ESTOP", now=lambda: NOW)
+    scheduler3, _control3, _port3, _clock3 = make_stack(estop=estop)
+    instance3 = _paused_instance(scheduler3)
+    estop.trigger("i1")
+    assert scheduler3.resume(instance3.instance_id) is False
+    assert instance3.status is TaskInstanceStatus.PAUSED
+    assert "estop_active" in scheduler3.stats.last_reason
+
+
+def test_i2_estop_takes_priority_over_disable(tmp_path: Path) -> None:
+    """[I2] E-STOP 与 Disable 同时有效 ⇒ E-STOP 优先（优先级由 control 决定，未自行调整）。"""
+    estop = EStop(path=tmp_path / "ESTOP", now=lambda: NOW)
+    scheduler, control, _port, _clock = make_stack(estop=estop)
+    instance = _paused_instance(scheduler)
+    control.disable(TASK_ID)
+    estop.trigger("i2")
+    assert control.admission_reason(TASK_ID) == ADMISSION_ESTOP_ACTIVE
+    assert scheduler.resume(instance.instance_id) is False
+    assert "estop_active" in scheduler.stats.last_reason
+    assert instance.status is TaskInstanceStatus.PAUSED
+
+
+def test_i3_guard_exception_fails_closed_and_keeps_error(tmp_path: Path) -> None:
+    """[I3] Guard 抛异常 ⇒ fail-closed（不恢复）、保留原始错误信息、不吞异常。"""
+    scheduler, _control, port, _clock = make_stack()
+    instance = _paused_instance(scheduler)
+
+    def exploding_guard(_task_id: str) -> str | None:
+        raise RuntimeError("guard exploded (i3)")
+
+    scheduler.set_admission_guard(exploding_guard)
+    baseline_requests = port.count
+    baseline_errors = scheduler.stats.errors
+    baseline_blocked = scheduler.stats.admission_blocked
+
+    assert scheduler.resume(instance.instance_id) is False
+    assert instance.status is TaskInstanceStatus.PAUSED
+    assert scheduler.locks.to_dict() == {}
+    assert port.count == baseline_requests
+    assert "guard_error" in scheduler.stats.last_reason
+    # fail-closed：guard 异常按既有语义计入 errors，且保留原始异常文本
+    assert scheduler.stats.errors == baseline_errors + 1
+    assert "guard exploded (i3)" in scheduler.stats.last_error
+    assert scheduler.stats.admission_blocked == baseline_blocked + 1
+
+
+def test_i4_repeated_blocked_resume_has_no_storm() -> None:
+    """[I4] 连续重复被拒 Resume：不取锁、不建实例、计数线性增长（无风暴）。"""
+    scheduler, control, port, _clock = make_stack()
+    instance = _paused_instance(scheduler)
+    control.disable(TASK_ID)
+    baseline_blocked = scheduler.stats.admission_blocked
+    baseline_errors = scheduler.stats.errors
+    baseline_requests = port.count
+    instances_before = len(scheduler.instances)
+
+    for _ in range(5):
+        assert scheduler.resume(instance.instance_id) is False
+
+    assert instance.status is TaskInstanceStatus.PAUSED
+    assert scheduler.locks.to_dict() == {}
+    assert port.count == baseline_requests
+    assert len(scheduler.instances) == instances_before
+    assert scheduler.stats.admission_blocked == baseline_blocked + 5
+    assert scheduler.stats.errors == baseline_errors
+    # 日志按 (task_id, reason) 去重 ⇒ 只保留一个 key
+    assert scheduler._admission_log_key == f"{TASK_ID}|task_disabled"  # noqa: SLF001
+
+
+def test_i5_lock_conflict_keeps_original_failure_semantics() -> None:
+    """[I5] 准入通过但资源被他人占用 ⇒ 仍返回 False（原有 lock_conflicts 语义不变）。"""
+    scheduler, _control, _port, _clock = make_stack()
+    instance = _paused_instance(scheduler)
+    # 让另一个"实例"占住 GAME_WINDOW（直接操作锁，模拟并发占用）
+    assert scheduler.locks.acquire("GAME_WINDOW", "other#99") is True
+    baseline_conflicts = scheduler.stats.lock_conflicts
+    baseline_blocked = scheduler.stats.admission_blocked
+
+    assert scheduler.resume(instance.instance_id) is False
+    assert instance.status is TaskInstanceStatus.PAUSED
+    assert scheduler.stats.lock_conflicts == baseline_conflicts + 1
+    # 准入通过 ⇒ 不增加 admission_blocked
+    assert scheduler.stats.admission_blocked == baseline_blocked
+
+
+def test_i6_normal_admission_still_allows_explicit_resume() -> None:
+    """[I6] 正常准入下显式 Resume 仍然成功（未被过度限制）。"""
+    scheduler, _control, _port, _clock = make_stack()
+    instance = _paused_instance(scheduler)
+    assert scheduler.resume(instance.instance_id, reason="i6") is True
+    assert instance.status is TaskInstanceStatus.RUNNING
+    assert scheduler.locks.owner("GAME_WINDOW") == instance.instance_id
+    assert scheduler.stats.resumed >= 1
+
+
+def test_i7_no_guard_keeps_legacy_behaviour() -> None:
+    """[I7] `admission_guard=None` ⇒ 旧兼容行为保持不变（不强制注入 Guard）。"""
+    registry = registry_from_mapping({TASK_ID: click_document()})
+    clock = FakeClock()
+    port = CountingPort()
+    scheduler = TaskScheduler(
+        registry,
+        engine_factory=lambda: TaskEngine(
+            action_port=port, clock=clock, now=lambda: NOW
+        ),
+        action_port=port,
+        clock=clock,
+        now=lambda: NOW,
+        history_limit=20,
+    )
+    assert scheduler.admission_reason(TASK_ID) is None
+    instance = _paused_instance(scheduler)
+    assert scheduler.resume(instance.instance_id, reason="i7") is True
+    assert instance.status is TaskInstanceStatus.RUNNING
+
+
+def test_i8_auto_preemption_path_still_checks_admission() -> None:
+    """[I8] 自动（抢占）恢复仍遵守 `_schedule()` 的准入检查（本修复未改变该路径）。"""
+    documents = {TASK_ID: click_document(), "high": click_document("high")}
+    scheduler, control, port, _clock = make_stack(documents=documents)
+    low = scheduler.submit(TASK_ID, priority=10)
+    scheduler.tick(Stable())
+    baseline_requests = port.count
+    # 高优先级任务抢占低优先级 ⇒ 低优先级转 PAUSED（preempted_by 非空）
+    high = scheduler.submit("high", priority=99)
+    scheduler.tick(Stable())
+    assert high.status is TaskInstanceStatus.RUNNING
+    assert low.status is TaskInstanceStatus.PAUSED
+    assert low.preempted_by != ""
+
+    control.disable(TASK_ID)
+    blocked_before = scheduler.stats.admission_blocked
+    scheduler.tick(Stable())
+    # 自动路径拒绝恢复：low 仍 PAUSED 且不取锁
+    assert low.status is TaskInstanceStatus.PAUSED
+    assert scheduler.locks.owner("GAME_WINDOW") == high.instance_id
+    assert port.count >= baseline_requests
+    assert scheduler.stats.admission_blocked >= blocked_before
+
+
+def test_i9_disabling_one_task_does_not_affect_another() -> None:
+    """[I9] 同一任务被 Disable 不影响其他任务的 Resume。"""
+    documents = {TASK_ID: click_document(), "other": click_document("other")}
+    scheduler, control, _port, _clock = make_stack(documents=documents)
+    first = _paused_instance(scheduler)
+
+    other = scheduler.submit("other")
+    scheduler.tick(Stable())
+    scheduler.pause(other.instance_id, reason="i9")
+    assert other.status is TaskInstanceStatus.PAUSED
+
+    control.disable(TASK_ID)
+    assert scheduler.resume(first.instance_id) is False
+    assert first.status is TaskInstanceStatus.PAUSED
+    # 另一个任务不受影响
+    assert control.admission_reason("other") is None
+    assert scheduler.resume(other.instance_id, reason="i9-other") is True
+    assert other.status is TaskInstanceStatus.RUNNING
+
+
+def test_i10_duplicate_resume_does_not_double_start_or_lock() -> None:
+    """[I10] 重复 Resume 不得造成重复启动或重复资源获取。"""
+    scheduler, _control, port, _clock = make_stack()
+    instance = _paused_instance(scheduler)
+    requests_before = port.count
+    assert scheduler.resume(instance.instance_id, reason="i10-1") is True
+    assert instance.status is TaskInstanceStatus.RUNNING
+    # 第二次 Resume：实例已不是 PAUSED ⇒ 直接 False，不改状态、不重复取锁
+    assert scheduler.resume(instance.instance_id, reason="i10-2") is False
+    assert instance.status is TaskInstanceStatus.RUNNING
+    assert scheduler.locks.owner("GAME_WINDOW") == instance.instance_id
+    assert port.count == requests_before, "重复 Resume 不得重发动作"
+    assert len(scheduler.instances) == 1, "不得创建重复实例"

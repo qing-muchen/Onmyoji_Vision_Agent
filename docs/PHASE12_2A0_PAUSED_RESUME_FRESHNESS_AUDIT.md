@@ -165,3 +165,26 @@ TaskScheduler._schedule() 自动恢复路径      scheduler.py:831
 （与自动恢复路径一致），拒绝时保持 `PAUSED` 并返回 `False`；不改 Workflow / Action / 生命周期终态。
 
 > 本报告未把"未复现"写成"已证明安全"；也未把"Action 层 TTL"当作 Task 层已充分覆盖。
+
+---
+
+## 11. 后续修正记录（Phase 12.2-A1）
+
+> 本节为**追加**，A0 原有结论、证据与"未复现"表述**保持原样**，不作追溯修改。
+
+| 项 | 内容 |
+|---|---|
+| 缺陷 | `DEF-12.2-A0-01`：`TaskScheduler.resume()` 绕过 admission guard（Disable / Shutdown latch / E-STOP 下仍可把 `PAUSED` 恢复为 `RUNNING` 并重新持锁） |
+| 修复阶段 | **Phase 12.2-A1 — Enforce Admission Guard on Manual Resume** |
+| 修复文件 | `src/task/scheduler/scheduler.py`（**唯一生产改动**，+60/−2 量级） |
+| 修复方式 | `_resume_instance(instance, *, reason, check_admission: bool = True)`：在**获取资源锁之前**复用既有 `admission_reason()`；拒绝 ⇒ `return False`、保持 `PAUSED`、不取锁、不调 `engine.resume()`、不改实例状态/历史/Workflow/`DecisionContext`、`stats.admission_blocked += 1`、`last_reason` 记结构化原因、**不计** `stats.errors`；guard 异常沿用既有 fail-closed（`guard_error` 计入错误并保留原始文本） |
+| 与自动路径一致性 | `_schedule()` 的自动恢复**仍保留**其原有 `admission_reason` 检查；A1 以 `check_admission=False` 传入以避免**重复**调用 guard（否则 guard 异常会重复累计 `stats.errors`） |
+| 向后兼容 | `admission_guard=None` 时行为不变（`admission_reason` 直接返回 `None`）；准入允许时 Resume 行为与统计**完全不变** |
+| 测试证据 | A0 三个缺陷复现用例改写为"拒绝恢复"断言（`test_e_manual_resume_blocked_by_disable`、`test_h_manual_resume_blocked_by_shutdown_latch`、`test_h2_manual_resume_blocked_by_estop_at_scheduler_entry`）；新增 §I 回归矩阵 10 例（三种拒绝原因 / E-STOP 优先 / guard 异常 fail-closed / 重复拒绝无风暴 / 锁冲突语义 / 正常恢复 / `guard=None` 兼容 / 自动抢占路径 / 任务隔离 / 重复 Resume 不重复取资源） |
+| 结果 | `tests/test_phase122a0_paused_resume_freshness.py` **21 passed**；全量 pytest **2088 passed, 1 skipped** |
+| commit | `fix(task): enforce admission guard on paused resume`（见 A1 报告） |
+
+**R-1 剩余边界（仍为 CONDITIONAL，不因本次修复升级为 PASS）**：
+旧 Snapshot 在恢复后被用于动作、旧 `ActionRequest` 被重新分发、长暂停导致的 step-deadline retry
+语义**均未被穷举证明**；**真实 Action 执行仍未验证**（`real_input=false`）。
+详见 `docs/PHASE12_1F_ARCHITECTURE_FREEZE_AND_RISK_REGISTER.md` §9.1。

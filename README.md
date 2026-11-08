@@ -2499,6 +2499,17 @@ python examples/live_runtime_demo.py --lifecycle-demo --allow-background --recov
   入口复用 `admission_reason`，拒绝时保持 `PAUSED` 并返回 `False`（仅 `scheduler.py` 约 6–8 行，
   无破坏性契约变更）。新增离线用例 **11** ⇒ 全量 **2078 passed, 1 skipped**（本轮实测）。详见
   `docs/PHASE12_2A0_PAUSED_RESUME_FRESHNESS_AUDIT.md`。
+- Phase 12.2-A1（**已完成：Enforce Admission Guard on Manual Resume**，修复 `DEF-12.2-A0-01`）：`_resume_instance` 现在
+  在**获取资源锁之前**复用既有 `admission_reason()`（与 `submit` / `_schedule` 自动恢复**同一判定**）；
+  拒绝 ⇒ `resume()` 返回 `False`、实例**保持 `PAUSED`**、**不取锁**、不调 `engine.resume()`、不改实例状态/终态历史/
+  Workflow/`DecisionContext`、`admission_blocked+1`、`last_reason` 记结构化原因、**不计 `stats.errors`**；
+  guard 异常沿用既有 fail-closed（`guard_error` + 保留原始错误文本）。自动路径保持其原有检查（以
+  `check_admission=False` 避免重复调用 guard）；`admission_guard=None` 时行为不变。
+  三个缺陷复现用例改写为"拒绝恢复"验证 + 新增 §I 回归矩阵 **10 例**（三种拒绝原因 / E-STOP 优先 /
+  guard 异常 fail-closed / 重复拒绝无风暴 / 锁冲突语义 / 正常恢复 / `guard=None` 兼容 / 自动抢占路径 /
+  任务隔离 / 重复 Resume 不重复取资源）。生产改动**仅 `src/task/scheduler/scheduler.py`(+45/−9)**；
+  全量 pytest **2088 passed, 1 skipped**；`src/vision/`/`src/action/`/`configs/`/`dataset/` **零改动**。
+  R-1 准入绕过子项**已关闭**，其余子项仍为 **CONDITIONAL**。详见 `docs/PHASE12_2A1_MANUAL_RESUME_ADMISSION_REPORT.md`。
   pytest **1947 passed, 1 skipped**；`src/`/`configs/`/`dataset/` **零改动**。详见 `docs/PHASE12_1A_TASK_INTEGRATION_AUDIT_AND_DRY_RUN_REPORT.md`。
   30 分钟长跑 + `psutil` RSS 趋势；决定是否启用 template cache（11.6-A）；接 `TaskRuntimeBridge` 观测
   `task_active`；跨分辨率 / 多 DPI 真实数据验证（不用合成缩放冒充）；

@@ -172,12 +172,28 @@ Bridge 的 `disable_task()` 在"外部 guard 已接管"时给出一次性提示�
 
 | ID | 风险 | 严重程度 | 触发条件 | 现状与处理方向 |
 |---|---|---|---|---|
-| **R-1** | **PAUSED Resume Freshness**：Disable/Enable 与 PAUSED 恢复后，旧 `ActionRequest` / Snapshot 的新鲜度与继续执行条件未在 Task 层充分验证 | **高** | 启用真实动作 + 抢占/暂停恢复 | **真实动作启用前必须解决**：在恢复路径校验观察新鲜度（如 `cycle_id` 水位 / snapshot TTL），或由 Action 层提供等价强校验；需新增回归用例 |
+| **R-1** | **PAUSED Resume Freshness**：Disable/Enable 与 PAUSED 恢复后，旧 `ActionRequest` / Snapshot 的新鲜度与继续执行条件未在 Task 层充分验证 | **高 → 中（部分关闭）** | 启用真实动作 + 抢占/暂停恢复 | **准入绕过子项已修复**（Phase 12.2-A1 / `DEF-12.2-A0-01`：手动 `resume()` 现与 `_schedule()` 自动恢复**共用** `admission_reason` 契约）。**仍为 CONDITIONAL**：旧 Snapshot / 旧 `ActionRequest` 重放 / retry 语义**未被穷举证明**；真实 Action 执行**仍未验证**。详见 §9.1 |
 | **R-2** | **External Monitor Thread Ownership**：编排器无法确认**未登记**的外部 Monitor 线程退出 | 中 | Monitor 由外部线程驱动且未 `attach_monitor_thread()` | 生产装配必须经 `Orchestrator.start()` 或可靠 `attach`；否则 `shutdown()` 如实返回 `incomplete`（当前行为正确，但生产须避免该路径） |
 | **R-3** | **Production Entry Wiring**：`src/main.py` 尚未装配 `TaskRuntimeOrchestrator` | 中 | 生产运行 | 需确定编排 owner、进程退出调用点、以及 Monitor/Shutdown 的装配顺序；Phase 12.1 的真实证据来自诊断工具，**不代表**生产入口已接线 |
 | **R-4** | **GitHub Transport / Tracking Ref**：HTTPS 通道不稳定，本地 `origin/master` 可能滞后 | 低（运维） | 网络受限 | 以 SSH 权威查询判断推送状态；网络恢复后 `git fetch origin` 刷新；**不是 Runtime 架构缺陷** |
 | **R-5** | **Long-term RSS Trend**：短时 RSS 采样与统计逻辑已验证，长期前/中/后 10 分钟趋势未完成完整验收 | 中 | 长时间运行 | 需 ≥30 分钟分阶段采样（Phase 12.0-D-R 已标记 `insufficient_duration`） |
 | **R-6** | **Device / Resolution Coverage**：证据来自单一已知客户端与固定分辨率（1704×960） | 中 | 换设备 / 换分辨率 / 多 DPI | 需补跨设备、跨分辨率、多 DPI 的真实证据（不用合成缩放冒充） |
+
+### 9.1 R-1 子风险状态（Phase 12.2-A1 追加记录）
+
+> 本条为**追加记录**：不改写 §4/§5/§6 的历史验收结论，也不把任何原有 `CONDITIONAL` 改写为 `PASS`。
+
+| 子项 | 状态 |
+|---|---|
+| **手动 `TaskScheduler.resume()` 绕过 admission guard**（`DEF-12.2-A0-01`） | ✅ **已修复并验证**（Phase 12.2-A1）：`_resume_instance` 在**获取资源锁之前**复用 `admission_reason()`；拒绝 ⇒ 返回 `False`、保持 `PAUSED`、不取锁、不调 `engine.resume()`、不计 `errors`、`admission_blocked+1`；guard 异常沿用 fail-closed（`guard_error`） |
+| 手动 Resume 与自动恢复的**准入契约一致性** | ✅ 已一致（同一判定；自动路径已在 `_schedule()` 检查，A1 以 `check_admission=False` 避免重复调用 guard） |
+| 旧 **Snapshot** 在恢复后被用于动作 | **CONDITIONAL**（A0 未复现；workflow 形态未穷举） |
+| 旧 **ActionRequest** 被重新分发 | **CONDITIONAL**（A0 未复现；Task 层无请求队列） |
+| 长暂停 → step deadline → **retry 重发** | **CONDITIONAL**（该配置下未复现；未穷举所有 workflow 形态） |
+| **真实 Action 执行** | **未验证**（本阶段及此前全部为离线 / dry-run；`real_input=false`） |
+
+修复记录：`DEF-12.2-A0-01` 于 Phase 12.2-A1 修复，生产改动仅 `src/task/scheduler/scheduler.py`；
+详见 `docs/PHASE12_2A1_MANUAL_RESUME_ADMISSION_REPORT.md`。
 
 ---
 
